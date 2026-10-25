@@ -428,7 +428,13 @@ func _swing() -> void:
 
 @rpc("authority", "call_local", "unreliable")
 func net_swing() -> void:
-	if _dead or _rig == null:
+	if _dead:
+		return
+	# Local bots (soak clients) react to the telegraph like a player would.
+	for p in get_tree().get_nodes_in_group("players"):
+		if p.get("bot") and p.get("is_local") and p.global_position.distance_to(global_position) < size.z * 0.5 + 4.0:
+			p.bot_incoming(WINDUP_BOSS if is_boss else WINDUP)
+	if _rig == null:
 		return
 	var now := Time.get_ticks_msec() / 1000.0
 	var fx := VFX.get_for(self)

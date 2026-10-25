@@ -1845,6 +1845,7 @@ func show_death(seconds: float, where: String) -> void:
 		_death_sub = UITheme.label("", 17, UITheme.PARCH)
 		_death_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		v.add_child(_death_sub)
+		UITheme.death_screen(_death_overlay, _death_label, _death_sub)
 	_death_overlay.visible = true
 	_death_overlay.color.a = 0.0
 	_death_label.modulate.a = 0.0
@@ -1878,7 +1879,7 @@ func is_dead_screen() -> bool:
 ## Called by Net on every client through group "hud".
 func realm_announce(text: String) -> void:
 	Audio.play("realm_announce")
-	toast(text, "", "Realm announcement", UITheme.GOLD)
+	RealmBanner.show_on(_root, text)
 
 
 ## Centre-top notice. `sub` is a smaller second line, `kicker` a small

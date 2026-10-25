@@ -157,12 +157,15 @@ func _print_report() -> void:
 	for p in get_tree().get_nodes_in_group("players"):
 		ps.append("%s@(%.1f,%.1f,%.1f)" % [p.display_name, p.global_position.x, p.global_position.y, p.global_position.z])
 	var mobs := get_tree().get_nodes_in_group("enemies").size()
+	var parried := 0
+	for p in get_tree().get_nodes_in_group("players"):
+		parried += int(p.get("parries"))
 	var alive := 0
 	for e in get_tree().get_nodes_in_group("enemies"):
 		if e.visible:
 			alive += 1
-	print("[report %s] players=%s mobs=%d visible=%d me=Lv%d xp=%d col=%d hides=%d | objs=%d nodes=%d orphans=%d mem=%dKB" % [
-		who, ", ".join(ps), mobs, alive, GameState.level, GameState.xp, GameState.money, GameState.materials.get("beast_hide", 0),
+	print("[report %s] players=%s mobs=%d visible=%d me=Lv%d xp=%d col=%d hides=%d parries=%d | objs=%d nodes=%d orphans=%d mem=%dKB" % [
+		who, ", ".join(ps), mobs, alive, GameState.level, GameState.xp, GameState.money, GameState.materials.get("beast_hide", 0), parried,
 		Performance.get_monitor(Performance.OBJECT_COUNT), Performance.get_monitor(Performance.OBJECT_NODE_COUNT),
 		Performance.get_monitor(Performance.OBJECT_ORPHAN_NODE_COUNT), int(Performance.get_monitor(Performance.MEMORY_STATIC) / 1024)])
 

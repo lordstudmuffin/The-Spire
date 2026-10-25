@@ -113,6 +113,9 @@ var input_enabled := true
 var bot := false
 var cheat := false
 var _bot_t := 0.0
+## Bot defence against a telegraphed strike: press / release times (ms, 0 = none).
+var _bot_parry_at := 0
+var _bot_release_at := 0
 var _bot_target: Node3D
 var _bot_last_pos := Vector3.ZERO
 var _bot_stuck := 0
@@ -433,6 +436,7 @@ func _physics_process(delta: float) -> void:
 
 	var input_dir := Vector2.ZERO
 	if bot:
+		_bot_defend_tick()
 		input_dir = _bot_think(delta)
 	elif input_enabled and not _dying and _recovery == 0.0:
 		input_dir = Input.get_vector("move_left", "move_right", "move_forward", "move_back")
@@ -676,6 +680,33 @@ func net_correct_position(pos: Vector3) -> void:
 ## Test bot: walk to the nearest live mob and swing at it. Returns the move
 ## input. Honest bots obey physics (so they also exercise the server's
 ## movement check as a legitimate player); --cheat bots teleport instead.
+## A mob near this bot started a wind-up of `windup` seconds: mostly time a
+## parry just before the blow, sometimes hold guard, sometimes do nothing, so
+## soaks exercise all three server paths.
+func bot_incoming(windup: float) -> void:
+	if not bot or _dying or _bot_parry_at > 0 or blocking:
+		return
+	var now := Time.get_ticks_msec()
+	var r := randf()
+	if r < 0.55:
+		_bot_parry_at = now + int(maxf(windup - 0.12, 0.0) * 1000.0)
+		_bot_release_at = _bot_parry_at + 120
+	elif r < 0.75:
+		_bot_parry_at = now
+		_bot_release_at = now + int((windup + 0.3) * 1000.0)
+
+
+func _bot_defend_tick() -> void:
+	var now := Time.get_ticks_msec()
+	if _bot_parry_at > 0 and now >= _bot_parry_at:
+		_bot_parry_at = 0
+		press_parry()
+	elif _bot_release_at > 0 and now >= _bot_release_at and _bot_parry_at == 0:
+		_bot_release_at = 0
+		if blocking:
+			release_parry()
+
+
 func _bot_think(delta: float) -> Vector2:
 	_bot_t += delta
 	var now := Time.get_ticks_msec()
@@ -791,9 +822,6 @@ func _hit_cone(damage: float, range_: float, arc: float, kind := -1) -> int:
 	return hits
 
 
-## A unique Sword Art (UniqueSkills arts of GameState.unique_skill): a rapid
-## multi-slash combo. Offline the realm holder check runs here; online the
-## server re-checks every hit (Enemy.net_hit). Returns false if refused.
 ## Parry press: opens the window and starts guarding while held.
 func press_parry() -> void:
 	var now := Time.get_ticks_msec()
@@ -853,6 +881,8 @@ func defend(from_pos: Vector3) -> String:
 			guard = 0.0
 			blocking = false
 			_stun = GUARD_BREAK_STUN
+			if _vrm != null and _vrm.has_method("play_guard"):
+				_vrm.play_guard(false)
 			return "stunned"
 		return "block"
 	return ""
@@ -901,11 +931,16 @@ func net_defended(outcome: String, from_pos: Vector3, guard_left: float, stun: f
 	_stun = clampf(stun, 0.0, GUARD_BREAK_STUN)
 	if outcome == "stunned":
 		blocking = false
+		if _vrm != null and _vrm.has_method("play_guard"):
+			_vrm.play_guard(false)
 	if outcome == "parry":
 		parries += 1
 	defend_fx(outcome, from_pos)
 
 
+## A unique Sword Art (UniqueSkills arts of GameState.unique_skill): a rapid
+## multi-slash combo. Offline the realm holder check runs here; online the
+## server re-checks every hit (Enemy.net_hit). Returns false if refused.
 func use_unique(i: int) -> bool:
 	var id := GameState.unique_skill
 	var arts := UniqueSkills.arts(id)

@@ -319,6 +319,11 @@ func _ready() -> void:
 			scene._fishing._drop_bobber()
 			scene._fishing._bite()
 			Engine.time_scale = 0.05
+		# --open death | realm: the death grey-out / a realm announcement banner.
+		if open_ui == "death" and i == 30 and "hud" in scene and scene.hud:
+			scene.hud.show_death(8.0, "the Town of First Light")
+		if open_ui == "realm" and i == 28 and "hud" in scene and scene.hud:
+			scene.hud.realm_announce("A player has claimed the unique skill «Starfall Edge»")
 		if open_ui in ["hud", "boss"] and i == 36 and "player" in scene and scene.player:
 			scene.player.skill_cd[0] = 2.6
 			scene.player.skill_cd[1] = 7.1
