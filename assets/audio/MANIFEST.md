@@ -1,0 +1,46 @@
+# Audio manifest (for the Audio autoload)
+
+All paths are res://assets/audio/... Every file is Ogg Vorbis.
+
+## Combat
+- sword swing x3: impact_sounds/impactMetal_light_000.ogg (swap for rpg_audio/knifeSlice.ogg, rpg_audio/knifeSlice2.ogg, rpg_audio/drawKnife1.ogg for a sharper whoosh)
+- hit flesh x3: impact_sounds/impactPunch_medium_000.ogg, impactPunch_medium_001.ogg, impactPunch_heavy_000.ogg
+- hit metal x2: impact_sounds/impactMetal_medium_000.ogg, impactMetal_heavy_000.ogg
+- heavy hit / slam: impact_sounds/impactBell_heavy_000.ogg, impactPlate_heavy_000.ogg
+- boar grunt / wolf growl / boss roar: none in these packs (no creature voices in CC0 Kenney sets). Suggest pitching impact_sounds/impactSoft_heavy_00x.ogg down for grunts until a creature pack is found.
+
+## Movement
+- footstep grass x5: impact_sounds/footstep_grass_000..004.ogg
+- footstep stone x5: impact_sounds/footstep_concrete_000..004.ogg
+- footstep wood x5: impact_sounds/footstep_wood_000..004.ogg
+- jump: rpg_audio/cloth1.ogg   land: impact_sounds/impactSoft_medium_000.ogg
+- dash: rpg_audio/cloth3.ogg
+
+## Progression / crafting / loot
+- level up: music_jingles/jingles_STEEL00.ogg (or jingles_PIZZI00.ogg)
+- quest complete: music_jingles/jingles_STEEL02.ogg
+- quest accepted: interface_sounds/confirmation_001.ogg
+- craft success: rpg_audio/metalPot2.ogg then music_jingles/jingles_PIZZI10.ogg; hammer blows rpg_audio/metalClick.ogg
+- craft fail: interface_sounds/error_004.ogg
+- coin pickup: rpg_audio/handleCoins.ogg, handleCoins2.ogg
+- item pickup: rpg_audio/handleSmallLeather.ogg; equip: rpg_audio/clothBelt.ogg; drop: rpg_audio/dropLeather.ogg
+- mine ore: rpg_audio/chop.ogg; book/quest log: rpg_audio/bookFlip1..3.ogg, bookOpen.ogg, bookClose.ogg
+- door: rpg_audio/doorOpen_1.ogg, doorClose_1.ogg
+
+## UI
+- click: ui_audio/click1.ogg   hover: ui_audio/rollover2.ogg
+- open panel: interface_sounds/open_001.ogg   close panel: interface_sounds/close_001.ogg
+- back: interface_sounds/back_001.ogg   confirm: interface_sounds/confirmation_002.ogg   error: interface_sounds/error_001.ogg
+- toggle/switch: ui_audio/switch1.ogg   tick (sliders): interface_sounds/tick_001.ogg
+- chat message: interface_sounds/bong_001.ogg
+
+## Ambient loops (assets/audio/ambient)
+- wind_loop.ogg (6 s, loops), meadow_birds_loop.ogg (60 s), forest_birds_wind_loop.ogg (84 s), river_loop.ogg (60 s), campfire_loop.ogg (29 s)
+
+## Music (assets/audio/music)
+- town: town_a_new_town.ogg (62 s), town_rpg_town.ogg (67 s)
+- field / overworld: field_rpg_overworld.ogg (59 s)
+- boss arena: boss_battle_9_metal_loop.ogg (42 s, seamless loop)
+
+Set `loop = true` in each ambient/music file's .import (Godot's Ogg import defaults loop off).
+Licenses and credits: assets/LICENSES.md.
