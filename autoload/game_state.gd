@@ -83,6 +83,8 @@ var fishing_level := 1
 var fishing_xp := 0
 var cooking_level := 1
 var cooking_xp := 0
+var farming_level := 1
+var farming_xp := 0
 var fish_caught := 0
 var home_owned := false
 var home_storage: Array = []
@@ -139,6 +141,8 @@ func reset() -> void:
 	fishing_xp = 0
 	cooking_level = 1
 	cooking_xp = 0
+	farming_level = 1
+	farming_xp = 0
 	fish_caught = 0
 	home_owned = false
 	home_storage = []
@@ -326,6 +330,14 @@ func add_life_xp(skill: String, amount: int) -> bool:
 			leveled = true
 		if leveled:
 			life_skill_up.emit("cooking", cooking_level)
+	elif skill == "farming":
+		farming_xp += amount
+		while farming_xp >= life_xp_to_next(farming_level) and farming_level < 99:
+			farming_xp -= life_xp_to_next(farming_level)
+			farming_level += 1
+			leveled = true
+		if leveled:
+			life_skill_up.emit("farming", farming_level)
 	inventory_changed.emit()
 	return leveled
 
@@ -558,6 +570,8 @@ func to_dict() -> Dictionary:
 		"fishing_xp": fishing_xp,
 		"cooking_level": cooking_level,
 		"cooking_xp": cooking_xp,
+		"farming_level": farming_level,
+		"farming_xp": farming_xp,
 		"fish_caught": fish_caught,
 		"home_owned": home_owned,
 		"home_storage": home_storage,
@@ -578,6 +592,7 @@ func apply_patch(d: Dictionary) -> void:
 	var prev_class := hidden_class
 	var prev_fish := fishing_level
 	var prev_cook := cooking_level
+	var prev_farm := farming_level
 	var prev_hp := hp
 	level = clampi(int(d.get("level", level)), 1, 100)
 	xp = maxi(int(d.get("xp", xp)), 0)
@@ -629,6 +644,8 @@ func apply_patch(d: Dictionary) -> void:
 	fishing_xp = maxi(int(d.get("fishing_xp", fishing_xp)), 0)
 	cooking_level = clampi(int(d.get("cooking_level", cooking_level)), 1, 99)
 	cooking_xp = maxi(int(d.get("cooking_xp", cooking_xp)), 0)
+	farming_level = clampi(int(d.get("farming_level", farming_level)), 1, 99)
+	farming_xp = maxi(int(d.get("farming_xp", farming_xp)), 0)
 	fish_caught = maxi(int(d.get("fish_caught", fish_caught)), 0)
 	home_owned = bool(d.get("home_owned", home_owned))
 	if d.get("home_storage") is Array:
@@ -667,6 +684,8 @@ func apply_patch(d: Dictionary) -> void:
 		life_skill_up.emit("fishing", fishing_level)
 	if cooking_level > prev_cook:
 		life_skill_up.emit("cooking", cooking_level)
+	if farming_level > prev_farm:
+		life_skill_up.emit("farming", farming_level)
 	if hp != prev_hp or level != prev_level:
 		health_changed.emit(hp, max_hp())
 
@@ -769,6 +788,8 @@ func from_dict(d: Dictionary) -> void:
 	fishing_xp = maxi(int(d.get("fishing_xp", 0)), 0)
 	cooking_level = clampi(int(d.get("cooking_level", 1)), 1, 99)
 	cooking_xp = maxi(int(d.get("cooking_xp", 0)), 0)
+	farming_level = clampi(int(d.get("farming_level", 1)), 1, 99)
+	farming_xp = maxi(int(d.get("farming_xp", 0)), 0)
 	fish_caught = maxi(int(d.get("fish_caught", 0)), 0)
 	home_owned = bool(d.get("home_owned", false))
 	home_storage = []

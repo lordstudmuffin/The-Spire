@@ -395,6 +395,9 @@ static func _op_harvest(rdb, gs, holder: String, i: int, b: int) -> Dictionary:
 	var beds := _beds_of(meta)
 	var got := {}
 	var seeds_back := 0
+	var xp := 0
+	var flv_v = gs.get("farming_level")
+	var flv := int(flv_v) if flv_v != null else 1
 	for k in BEDS:
 		if b != -1 and k != b:
 			continue
@@ -404,20 +407,36 @@ static func _op_harvest(rdb, gs, holder: String, i: int, b: int) -> Dictionary:
 		var crop := str(st["crop"])
 		var y: Array = LifeData.CROPS[crop]["yield"]
 		var n := randi_range(int(y[0]), int(y[1]))
+		# Farming skill: a chance of one extra crop that grows with level.
+		if randf() < farm_bonus_chance(flv):
+			n += 1
 		gs.add_material(crop, n)
 		got[crop] = int(got.get(crop, 0)) + n
+		xp += crop_xp(crop)
 		# A ripe plant sometimes drops a seed of its own.
-		if randf() < 0.3:
+		if randf() < 0.3 + 0.01 * mini(flv - 1, 20):
 			gs.add_material(str(LifeData.CROPS[crop]["seed"]), 1)
 			seeds_back += 1
 		beds[k] = empty_bed()
 	if got.is_empty():
 		return _err("Nothing is ripe yet." if b == -1 else "That bed is not ripe yet.")
 	_set_meta(rdb, i, holder, meta)
+	var skill_up: bool = gs.add_life_xp("farming", xp)
 	var parts: Array = []
 	for c in got:
 		parts.append("%d %s" % [got[c], str(LifeData.CROPS[c]["name"])])
-	return {"harvested": got, "text": ", ".join(parts), "seeds_back": seeds_back}
+	return {"harvested": got, "text": ", ".join(parts), "seeds_back": seeds_back, "xp": xp, "skill_up": skill_up}
+
+
+## Farming xp for one harvested bed: longer crops teach more (turnip 6,
+## sunwheat 10, honeymelon 18).
+static func crop_xp(crop: String) -> int:
+	return 2 + int(round(float(LifeData.CROPS[crop]["grow"]) / 900.0 * 4.0)) if LifeData.CROPS.has(crop) else 0
+
+
+## Chance of one extra crop per bed at farming level `lv` (capped at 50%).
+static func farm_bonus_chance(lv: int) -> float:
+	return minf(0.04 * float(lv - 1), 0.5)
 
 
 static func _op_clear(rdb, holder: String, i: int, b: int) -> Dictionary:

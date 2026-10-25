@@ -92,17 +92,22 @@ const EVENTS := {
 	"block": ["crystal/block.ogg"],
 	"guard_break": ["crystal/guard_break.ogg"],
 	"stagger": ["crystal/stagger.ogg"],
+	# Floor Guardian (scripts/boss_brain.gd): the roar on engage / enrage, the
+	# charge rumble, and the crack of an HP bar breaking.
+	"boss_roar": ["crystal/boss_roar.ogg"],
+	"boss_charge": ["crystal/boss_charge.ogg"],
+	"boss_bar_break": ["crystal/shatter.ogg"],
 }
 
 ## Extra events that always play with an event (same position): the crisp
 ## "digital" tick on every hit, the low thud under a boss shatter.
 const LAYERS := {
 	"hit_flesh": ["hit_digital"], "hit_metal": ["hit_digital"], "hit_heavy": ["hit_digital"],
-	"crit": ["crit_digital"], "boss_death": ["slam"],
+	"crit": ["crit_digital"], "boss_death": ["slam"], "boss_bar_break": ["slam", "crit_digital"],
 }
 
 ## Per-event minimum gap in seconds (bursts of inventory_changed etc.).
-const MIN_GAP := {"heartbeat": 0.7, "hit_digital": 0.03, "menu_select": 0.04, "notify": 0.2, "pickup": 0.3, "coins": 0.25, "ui_hover": 0.05, "ui_click": 0.05, "chat": 0.2, "hit_flesh": 0.03, "hit_metal": 0.03, "crit": 0.08}
+const MIN_GAP := {"boss_roar": 0.5, "heartbeat": 0.7, "hit_digital": 0.03, "menu_select": 0.04, "notify": 0.2, "pickup": 0.3, "coins": 0.25, "ui_hover": 0.05, "ui_click": 0.05, "chat": 0.2, "hit_flesh": 0.03, "hit_metal": 0.03, "crit": 0.08}
 ## Per-event volume offsets in dB.
 const GAIN := {"ui_hover": -16.0, "ui_click": -8.0, "ui_tick": -10.0, "menu_select": -8.0, "hit_digital": -9.0, "crit_digital": -5.0,
 	"pickup": -6.0, "panel_slide": -6.0, "heartbeat": -2.0, "shatter": -2.0, "step_grass": -8.0, "step_stone": -10.0, "step_wood": -8.0,

@@ -419,7 +419,38 @@ def stagger():
 	return reverb(b, 0.2, 0.6)
 
 
+def boss_roar():
+	"""Floor Guardian roar (engage, enrage): a low growl with a throat sweep
+	over a stone rumble. Original synthesis, pitched for a four-metre body."""
+	dur = 1.6
+	t = t_axis(dur)
+	f0 = 70.0 * (1.0 + 0.35 * np.exp(-t * 3.0)) * (1.0 - 0.15 * t / dur)
+	vib = 1.0 + 0.03 * np.sin(2 * np.pi * 9.0 * t)
+	phase = 2 * np.pi * np.cumsum(f0 * vib) / SR
+	growl = np.zeros_like(t)
+	for k in range(1, 12):
+		growl += np.sin(phase * k + RNG.uniform(0, 6.28)) / k ** 0.8
+	growl *= env_adsr(dur, 0.06, 0.4, 0.55, 0.6)
+	breath = sweep_noise(dur, 900, 350, 0.6) * env_adsr(dur, 0.05, 0.3, 0.5, 0.6)
+	b = growl * 0.7 + breath * 0.5
+	place(b, band_noise(0.25, 40, 200) * env_exp(0.25, 0.002, 0.08), 0.0, 0.9)
+	return reverb(b, 0.35, 1.6, damp=3000.0)
+
+
+def boss_charge():
+	"""Charge telegraph: a rising rumble under a whoosh, claws scraping stone."""
+	dur = 0.9
+	t = t_axis(dur)
+	rumble = one_pole_lp(noise(dur), 220) * (0.3 + 0.7 * t / dur)
+	whoosh = sweep_noise(dur, 300, 2400, 0.5) * env_adsr(dur, 0.2, 0.2, 0.9, 0.25)
+	b = rumble * 1.2 + whoosh * 0.5
+	for k in range(6):
+		place(b, band_noise(0.06, 800, 5000) * env_exp(0.06, 0.001, 0.02), 0.1 + k * 0.13, 0.25)
+	return reverb(b, 0.25, 1.2, damp=4000.0)
+
+
 RECIPES = {
+	"boss_roar": boss_roar, "boss_charge": boss_charge,
 	"parry": parry, "block": block, "guard_break": guard_break, "stagger": stagger,
 	"menu_open": menu_open, "menu_close": menu_close, "menu_select": menu_select,
 	"menu_confirm": menu_confirm, "menu_back": menu_back, "menu_error": menu_error,

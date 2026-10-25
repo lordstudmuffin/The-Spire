@@ -36,6 +36,10 @@ var _summon_timer := 9.0
 ## Boss summon hook: the world sets Callable(enemy) that spawns adds. Only
 ## the authority ever calls it.
 var summon: Callable
+## Boss state machine (scripts/boss_brain.gd, child "BossBrain"): when set,
+## the brain owns movement and attacks on the authority (tick() replaces the
+## chase / strike / slam logic below) and reports bar breaks and telegraphs.
+var brain: Node
 
 var hp := 0.0
 var home := Vector3.ZERO
@@ -207,7 +211,12 @@ func _physics_process(delta: float) -> void:
 	var player := _nearest_player()
 	var target := _wander_target
 	var spd := speed * 0.4
-	if player and player.global_position.distance_to(global_position) < aggro_range \
+	var ctl: Dictionary = brain.tick(delta, player) if brain != null and brain.has_method("tick") else {}
+	if not ctl.is_empty():
+		# A boss brain decided this frame (leash, telegraphs, charge run).
+		target = ctl.get("target", global_position)
+		spd = float(ctl.get("spd", 0.0))
+	elif player and player.global_position.distance_to(global_position) < aggro_range \
 			and player.global_position.distance_to(home) < aggro_range * 2.5:
 		target = player.global_position
 		spd = speed
@@ -297,8 +306,10 @@ func _show_defence(t: Node3D, outcome: String) -> void:
 
 func _parried(t: Node3D) -> void:
 	_hit_cd = maxf(_hit_cd, 1.2)
-	_posture += 1
 	Net.note_hidden(t.peer_id, "parry")
+	if brain != null and brain.has_method("stagger_immune") and brain.stagger_immune():
+		return  # the parry deflected, but a roaring Guardian builds no posture
+	_posture += 1
 	if _posture >= (3 if is_boss else 1):
 		_posture = 0
 		_stagger = STAGGER_TIME_BOSS if is_boss else STAGGER_TIME
@@ -428,18 +439,26 @@ func _swing() -> void:
 
 @rpc("authority", "call_local", "unreliable")
 func net_swing() -> void:
+	_swing_local(WINDUP_BOSS if is_boss else WINDUP)
+
+
+## This peer's side of a telegraphed strike with a `windup` of its own (boss
+## brains send theirs with the move): bots time their parry on it when the
+## blow is parryable, the attack clip and glint play either way.
+func _swing_local(windup: float, parryable := true) -> void:
 	if _dead:
 		return
 	# Local bots (soak clients) react to the telegraph like a player would.
-	for p in get_tree().get_nodes_in_group("players"):
-		if p.get("bot") and p.get("is_local") and p.global_position.distance_to(global_position) < size.z * 0.5 + 4.0:
-			p.bot_incoming(WINDUP_BOSS if is_boss else WINDUP)
+	if parryable:
+		for p in get_tree().get_nodes_in_group("players"):
+			if p.get("bot") and p.get("is_local") and p.global_position.distance_to(global_position) < size.z * 0.5 + 4.0:
+				p.bot_incoming(windup)
 	if _rig == null:
 		return
 	var now := Time.get_ticks_msec() / 1000.0
 	var fx := VFX.get_for(self)
 	if fx and fx.has_method("windup_glint"):
-		fx.call("windup_glint", self, WINDUP_BOSS if is_boss else WINDUP)
+		fx.call("windup_glint", self, windup)
 	if _anim != null:
 		_anim.speed_scale = 1.0
 		var clip_len := _set_anim("attack", false)
@@ -540,6 +559,8 @@ func take_hit(amount: float, from_dir: Vector3, hitter := 1, kind := -1) -> void
 	if hp <= 0:
 		_die()
 	else:
+		if brain != null and brain.has_method("on_damaged"):
+			brain.on_damaged()  # HP bar breaks fire on the hit that caused them
 		var tw := create_tween()
 		tw.tween_property(_mesh, "scale", Vector3(1.2, 0.8, 1.2), 0.05)
 		tw.tween_property(_mesh, "scale", Vector3.ONE, 0.1)
@@ -770,6 +791,28 @@ func net_reward_split(xp: int, money: int, killer: bool) -> void:
 	if multiplayer.get_remote_sender_id() != 1:
 		return
 	_grant_share(clampi(xp, 0, 1000000), clampi(money, 0, 1000000), killer)
+
+
+## Authority: this mob is gone with no reward (boss adds when the Guardian
+## falls or resets). Clients see the shatter through the replicated `visible`.
+func vanish() -> void:
+	if _dead or not Net.is_authority():
+		return
+	_dead = true
+	_windup = 0.0
+	_windup_target = null
+	visible = false
+	_death_fx()
+	process_mode = Node.PROCESS_MODE_DISABLED
+	remove_from_group("enemies")
+	if Net.online:
+		# Let the synchronizer carry `visible` first so clients play the
+		# shatter; the spawner despawns the node when it is freed.
+		get_tree().create_timer(0.6, false).timeout.connect(func():
+			if is_instance_valid(self):
+				queue_free())
+	else:
+		queue_free()
 
 
 func _respawn() -> void:

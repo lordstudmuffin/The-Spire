@@ -75,7 +75,10 @@ Built and smoke-green (smoke ~420 checks, realm_test 88, 2-bot soak 0 errors, or
 - P8 done (23:05 UTC): 8 farm plots west of Hollowbrook (scripts/life/farms.gd, ui/farm_screen.gd; 60 Col/week, claim plot:hb<i>, crops in LifeData.CROPS, grow only while watered) and guilds (scripts/life/guilds.gd, ui/guild_screen.gd; notice board by the well, 1000 Col + Lv10, ranks Leader/Officer/Member, storage container guild:<gid>, tags on name labels, /g chat, /guild commands). Smoke has `_test_farms_guilds()`.
 - Pushing: this session can't reach the LFS host. Bundle commits to /mnt/project-files/anime-rpg-bundles/ and ask the "Finish pushing the game to GitHub" thread to push. Gameplay PR is #2 (branch claude/project-thread-i9qmlz).
 
-Next for the game thread: soak bots now parry/guard (report shows parries=N); still to do: PvP parry later, pad binds for unique arts skill_4-6, a market map marker, a keeper NPC figure at stalls, guild-owned stalls, a farming skill/XP, and a screenshot pass on crop scale (Nature Kit at ~1.5).
+- Gravelmaw boss (00:00 UTC 26 Oct): scripts/boss_brain.gd (class BossBrain, presets per boss, attached as child "BossBrain" when spawn data has "brain"). 4 HP bars, sentinel adds on each bar break, enrage + phase-2 moveset on the last bar, sweep (parryable) / charge (parryable on arrival) / slam (ring, not parryable), leash reset after 4 s with nobody in the arena. Clients get `net_event(kind, data)` and `signal boss_event`. VFX hooks: boss_engage, boss_sweep_warning/impact, boss_charge_warning/impact, boss_slam_warning/impact, boss_bar_break, boss_enrage, boss_reset. `SMOKE_ONLY=boss` runs just `_test_boss()`. Gotcha: calling a method on a freed typed node segfaults 4.3.
+- Farming skill: GameState/record farming_level/xp; harvest gives xp (Farms.crop_xp), bonus crop chance 4%/level (cap 50%), +1% seed return per level.
+
+Next for the game thread: soak bots now parry/guard (report shows parries=N); still to do: boss arena hazards + music stingers, a `--summit` bot flag so soaks fight the boss, PvP parry later, pad binds for unique arts skill_4-6, a market map marker, a keeper NPC figure at stalls, guild-owned stalls, a farming skill/XP, and a screenshot pass on crop scale (Nature Kit at ~1.5).
 
 ## Kyle's priority features (added 2026-10-25 20:40; rank ABOVE backlog items 3-12)
 Full design: docs/FLOOR1_PRIORITY_FEATURES.md. Kyle wants the menu and sounds as close as possible to the reference anime, built only from original or CC0 material (never ripped assets); sounds stay swappable in autoload/audio.gd EVENTS, menu look in scripts/ui/ring_menu_style.gd.
@@ -102,7 +105,16 @@ P8. **Farm plots and guilds**: 8 rentable farm plots with real-time crops; guild
 11. **Join race**: a client once dropped when another joined; 2×4-bot staggered tests could not reproduce it. Watch soaks. Fable-level only if it reappears (unexplained netcode bug).
 12. **GitHub**: Kyle must create an empty repo; then add_repo and push the tree (exclude .godot/). Opus.
 
+## Status of the visuals thread (2026-10-25 23:45 UTC)
+- GitHub: branch claude/project-thread-xxm6yq, rolling PR #1 into main (commits authored as lordstudmuffin, no Claude trailers). Shots: /mnt/project-files/anime-rpg-shots/visuals/.
+- Done: polygon-shatter death (VFX.shatter, shard/shatter_glow shaders); sky_spire sky (stars, moon, the floor-above "lid"); clean inverted-hull outlines (averaged normals); night window glow on KayKit houses; stone town wall, marble gate columns, Voronoi plaza cobbles, stone fountain; mob plates (MobPlate: threat cursor, slanted HP bar with chip); border-only hit vignette; presets fixed (MSAA off, High = FSR2 native).
+- Combat look: VFX.parry_flash (gold cross glint, sparks, shock ring; red with chips on guard break), VFX.stagger (circling star halo), VFX.windup_glint (called from Enemy.net_swing), VRMCharacter.play_guard (KayKit Melee_Blocking blended over locomotion).
+- UI look: ring menu (RingMenuStyle; connector notch, ruled rows; panel now shrinks to content), PlayerStatus (SAO-style top-left: name plate + stepped HP gauge; the old hud card stays hidden as data), death screen (UITheme.death_screen + death_screen.gdshader), realm announcements (RealmBanner + system_banner.gdshader), guard bar (UITheme.style_guard_bar).
+- Screenshot harness extras: --combat-demo parry|guard_break|stagger|windup|guard|shatter|shatter_player, --open death|realm|ring:<panel>.
+- Next: pad caps on unique slots, preset tuning Low..Ultra on Forward+, fields pass, party frames in the PlayerStatus style.
+
 ## Who owns what between threads
 - Main build thread: all gameplay, UI, world, shaders, tests.
+- Since 20:46 UTC two threads: gameplay (logic, net, hud.gd behaviour, audio) and visuals (shaders/, render_profile, sky/lighting, world_art/world_props, vfx.gd, ui_theme.gd, ring_menu_style.gd, mob_plate.gd, player_status.gd, realm_banner.gd). Shared files take additive patches only.
 - Asset thread (support only, network-enabled env): downloads packs into assets/, updates LICENSES.md/CREATURES.md, and patches AssetLib additively on request.
 - Project memory (/tmp/claude/memory/team/silo/): anime-game-decisions.md, anime-game-visuals.md, anime-game-assets.md hold the decisions and gotchas above in more detail.

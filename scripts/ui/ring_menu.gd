@@ -546,6 +546,7 @@ func _fill_skills() -> void:
 	_panel_body.add_child(_row_label("Smithing", "Lv %d" % GameState.smithing_level))
 	_panel_body.add_child(_row_label("Fishing", "Lv %d" % GameState.fishing_level))
 	_panel_body.add_child(_row_label("Cooking", "Lv %d" % GameState.cooking_level))
+	_panel_body.add_child(_row_label("Farming", "Lv %d" % GameState.farming_level))
 	var unique := GameState.unique_skill
 	_panel_body.add_child(_row_label("Unique skill", UniqueSkills.display_name(unique) if unique != "" else "None", S.PANEL_ACCENT if unique != "" else S.PANEL_SUBTLE))
 	if unique != "":

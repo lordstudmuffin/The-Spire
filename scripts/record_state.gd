@@ -16,7 +16,7 @@ const GATHER_QUESTS := [["ore_delivery", "iron_ore"], ["shrine_rite", "wisp_esse
 	["field_herbs", "wild_herb"], ["tavern_stew", "boar_stew"], ["lantern_below", "spirit_shard"], ["old_watch_whispers", "wolf_pelt"]]
 const FIELDS := ["character", "level", "xp", "stat_points", "stats", "money", "hp", "quests", "materials", "inventory", "equipped",
 	"smithing_level", "smithing_xp", "items_crafted", "hidden_class", "floors_cleared", "recipes_unlocked",
-	"fishing_level", "fishing_xp", "cooking_level", "cooking_xp", "fish_caught", "home_owned", "home_storage",
+	"fishing_level", "fishing_xp", "cooking_level", "cooking_xp", "farming_level", "farming_xp", "fish_caught", "home_owned", "home_storage",
 	"home_furniture", "decor_owned", "buffs", "title", "visited", "unique_skill", "hidden"]
 
 var rec: Dictionary

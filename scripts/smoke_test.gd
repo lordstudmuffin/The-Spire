@@ -15,6 +15,12 @@ func _check(cond: bool, what: String) -> void:
 
 
 func _ready() -> void:
+	if OS.get_environment("SMOKE_ONLY") == "boss":
+		# Fast loop while working on the Guardian: SMOKE_ONLY=boss godot ... smoke_test.tscn
+		await _test_boss()
+		print("== Done: %d failure(s)" % _fails)
+		get_tree().quit(1 if _fails > 0 else 0)
+		return
 	print("== GameState")
 	GameState.reset()
 	GameState.character["name"] = "Tester"
@@ -1050,6 +1056,8 @@ func _ready() -> void:
 
 	await _test_market()
 	await _test_farms_guilds()
+	_test_farming_skill()
+	await _test_boss()
 
 	print("== Done: %d failure(s)" % _fails)
 	get_tree().quit(1 if _fails > 0 else 0)
@@ -1543,3 +1551,203 @@ func _test_farms_guilds() -> void:
 
 func Stalls_find(items: Array, id: String) -> int:
 	return preload("res://scripts/life/stalls.gd")._find(items, id)
+
+
+## Floor 1 Guardian (scripts/boss_brain.gd): drives Gravelmaw's state machine
+## offline on a fresh Floor 1 world: stacked HP bars and bar breaks, adds that
+## come and go, the final-bar enrage, slam (never parried) versus charge and
+## sweep (parried), the leash reset, and the Last Attack bonus on the kill.
+func _test_farming_skill() -> void:
+	print("== Farming skill")
+	var F = load("res://scripts/life/farms.gd")
+	_check(F.crop_xp("turnip") < F.crop_xp("sunwheat") and F.crop_xp("sunwheat") < F.crop_xp("honeymelon"), "longer crops teach more farming xp")
+	_check(F.farm_bonus_chance(1) == 0.0 and F.farm_bonus_chance(11) > 0.3 and F.farm_bonus_chance(99) == 0.5, "bonus crop chance grows with level and caps at 50%")
+	var lv0 := GameState.farming_level
+	var xp0 := GameState.farming_xp
+	GameState.farming_level = 1
+	GameState.farming_xp = 0
+	var up := GameState.add_life_xp("farming", GameState.life_xp_to_next(1))
+	_check(up and GameState.farming_level == 2 and GameState.farming_xp == 0, "farming levels with xp")
+	var d := GameState.to_dict()
+	_check(int(d.get("farming_level", 0)) == 2, "farming level is saved")
+	var rs = Net.RecordState.new(Net.record_defaults())
+	_check(rs.add_life_xp("farming", 30) and int(rs.rec["farming_level"]) == 2, "server records level farming too")
+	GameState.farming_level = lv0
+	GameState.farming_xp = xp0
+
+
+func _test_boss() -> void:
+	print("== Floor Guardian: Gravelmaw (BossBrain)")
+	GameState.floor = 1
+	GameState.has_position = false
+	GameState.heal_full()
+	var w: Node3D = load("res://scenes/world.tscn").instantiate()
+	add_child(w)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var pl: Player = w.player
+	w._spawn_boss()
+	var boss: Enemy = w._boss
+	_check(boss != null and boss.brain is BossBrain and boss.get_node_or_null("BossBrain") == boss.brain, "Gravelmaw spawns with a BossBrain child")
+	var b: BossBrain = boss.brain
+	_check(b.bar_count() == 4 and b.current_bar() == 4 and is_equal_approx(b.bar_fraction(), 1.0) and b.phase == 1 and b.state_name() == "idle", "four full HP bars, phase 1, idle")
+	var P0: Dictionary = BossBrain.PRESETS["gravelmaw"]["phases"][0]
+	var P1: Dictionary = BossBrain.PRESETS["gravelmaw"]["phases"][1]
+	var events: Array = []
+	b.boss_event.connect(func(k, _d): events.append(k))
+	# Engage: a player stands on the summit.
+	pl.global_position = boss.global_position + Vector3(0, 0, 10)
+	pl.velocity = Vector3.ZERO
+	var ctl: Dictionary = b.tick(0.05, pl)
+	_check(b.state == BossBrain.State.ENGAGE and events.has("engage") and ctl.has("target") and ctl.has("spd"), "a player on the summit wakes the Guardian (engage event, brain drives movement)")
+	# Bar breaks fire on the hit that crosses the threshold.
+	var bar_hp: float = b.bar_hp()
+	var adds0: int = b.living_adds()
+	boss.take_hit(bar_hp * 0.5, Vector3.FORWARD, 1)
+	_check(b.current_bar() == 4 and b.living_adds() == adds0 and not events.has("bar_break"), "chipping inside a bar breaks nothing")
+	boss.take_hit(bar_hp * 0.6, Vector3.FORWARD, 1)
+	_check(b.current_bar() == 3 and events.has("bar_break") and b.state == BossBrain.State.BREAK and b.stagger_immune(), "crossing the threshold breaks the bar: event and a break beat")
+	var n_adds: int = b.living_adds()
+	_check(n_adds >= 2 and n_adds <= 3, "2-3 adds answer the bar break (%d)" % n_adds)
+	var add_names := {}
+	for a in b.adds:
+		add_names[a.display_name] = true
+	_check(add_names.has("Ruin Sentinel") and add_names.has("Kobold Scout"), "adds reuse the Floor 1 guard types (%s)" % ", ".join(add_names.keys()))
+	b._timer = 0.0
+	b.tick(0.05, pl)
+	_check(b.state == BossBrain.State.ENGAGE and not b.stagger_immune(), "the break beat ends and the fight resumes")
+	# Sweep: wide arc, parryable; parries build posture, three stagger.
+	boss.rotation.y = PI  # faces +Z
+	pl.global_position = boss.global_position + Vector3(0, 0, 3.0)
+	pl.model.look_at(Vector3(boss.global_position.x, pl.model.global_position.y, boss.global_position.z))
+	boss._posture = 0
+	boss._stagger = 0.0
+	b._slam_cd = 999.0
+	pl._parry_ready_ms = 0
+	pl.press_parry()
+	b._begin("sweep", pl)
+	_check(b.state == BossBrain.State.WINDUP and b.move == "sweep" and events[-1] == "telegraph" and is_equal_approx(b._timer, P0["windup"]["sweep"]), "sweep is telegraphed for the phase's wind-up")
+	var hp0: float = GameState.hp
+	var par0: int = pl.parries
+	b._resolve()
+	_check(GameState.hp == hp0 and boss._posture == 1 and pl.parries == par0 + 1 and b.state == BossBrain.State.RECOVER and events[-1] == "impact", "a timed parry deflects the sweep and builds posture")
+	pl.release_parry()
+	pl._parry_open_ms = -100000
+	b._begin("sweep", pl)
+	hp0 = GameState.hp
+	b._resolve()
+	_check(GameState.hp < hp0, "an unparried sweep lands")
+	pl.global_position = boss.global_position + Vector3(0, 0, -3.0)  # behind the Guardian
+	hp0 = GameState.hp
+	b._begin("sweep", pl)
+	b._resolve()
+	_check(GameState.hp == hp0, "the sweep is an arc: standing behind it is safe")
+	pl.global_position = boss.global_position + Vector3(0, 0, 3.0)
+	boss._posture = 2
+	pl._parry_ready_ms = 0
+	pl.press_parry()
+	b._begin("sweep", pl)
+	b._resolve()
+	_check(boss.is_staggered() and boss._posture == 0, "the third parry staggers the Guardian")
+	pl.release_parry()
+	boss._stagger = 1.0
+	b._begin("sweep", pl)
+	b.tick(0.05, pl)
+	_check(b.state != BossBrain.State.WINDUP and b.move == "", "a stagger cancels the wind-up")
+	boss._stagger = 0.0
+	GameState.heal_full()
+	# Slam: a ring; never parried (a guard only chips), stepping out dodges.
+	pl._parry_ready_ms = 0
+	pl.press_parry()
+	hp0 = GameState.hp
+	par0 = pl.parries
+	b._begin("slam", pl)
+	_check(b.move == "slam" and b._threatened.has(pl) and events[-1] == "telegraph", "slam telegraph marks the players inside the ring")
+	b._resolve()
+	_check(GameState.hp < hp0 and pl.parries == par0 and events[-1] == "impact" and b._slam_cd > 0.0, "the slam cannot be parried: inside the ring you take it")
+	pl.release_parry()
+	pl._parry_open_ms = -100000
+	GameState.hidden_stats = {}
+	b._begin("slam", pl)
+	pl.global_position = boss.global_position + Vector3(0, 0, P0["slam_radius"] + 1.5)
+	hp0 = GameState.hp
+	b._resolve()
+	_check(GameState.hp == hp0 and int(GameState.hidden_stats.get("dodges", 0)) == 1, "stepping out of the ring during the wind-up dodges the slam (reaction point)")
+	# Charge: a line toward the target, parried as the body arrives.
+	pl.global_position = boss.global_position + Vector3(0, 0, 10.0)
+	b._cooldown = 0.0
+	b._slam_cd = 999.0
+	_check(b._choose(10.0) == "charge" and b._choose(3.0) == "sweep", "move choice: charge at range, sweep up close")
+	b._begin("charge", pl)
+	_check(b.move == "charge" and b._charge_end.distance_to(pl.global_position) < 4.0 and events[-1] == "telegraph", "charge aims a line at the target")
+	b._resolve()
+	_check(b.state == BossBrain.State.CHARGE and events[-1] == "charge", "wind-up over: the Guardian runs the line")
+	ctl = b.tick(0.016, pl)
+	_check(float(ctl["spd"]) == float(P0["charge_speed"]) and (ctl["target"] as Vector3).distance_to(b._charge_end) < 0.01, "the run moves at charge speed toward the line's end")
+	boss.global_position = pl.global_position - Vector3(0, 0, 2.0)
+	boss.rotation.y = PI
+	pl.model.look_at(Vector3(boss.global_position.x, pl.model.global_position.y, boss.global_position.z))
+	pl._parry_ready_ms = 0
+	pl.press_parry()
+	hp0 = GameState.hp
+	par0 = pl.parries
+	b._charge_tick()
+	_check(GameState.hp == hp0 and pl.parries == par0 + 1, "the charge is parried the moment it arrives")
+	b._charge_tick()
+	_check(pl.parries == par0 + 1, "one charge strikes a player once")
+	pl.release_parry()
+	b._end_charge()
+	_check(b.state == BossBrain.State.RECOVER and events[-1] == "impact", "the charge ends with an impact event")
+	GameState.heal_full()
+	# Final bar: the enrage roar (stagger-immune), then the second moveset.
+	boss.hp = bar_hp * 1.05
+	boss.take_hit(bar_hp * 0.1, Vector3.FORWARD, 1)
+	_check(b.current_bar() == 1 and b.state == BossBrain.State.ENRAGE and events.has("enrage") and b.stagger_immune() and b.phase == 1, "breaking into the last bar starts the enrage roar (stagger-immune warning beat)")
+	boss._posture = 0
+	pl._parry_ready_ms = 0
+	pl.press_parry()
+	hp0 = GameState.hp
+	var out: String = b._strike(pl, 10.0, true)
+	_check(out == "parry" and GameState.hp == hp0 and boss._posture == 0 and not boss.is_staggered(), "a parry during the roar still deflects but builds no posture")
+	pl.release_parry()
+	b._timer = 0.0
+	b.tick(0.05, pl)
+	_check(b.phase == 2 and b.is_enraged() and events.has("phase") and b.state == BossBrain.State.ENGAGE, "the roar ends: phase 2")
+	_check(float(b._ph()["windup"]["sweep"]) < float(P0["windup"]["sweep"]) and float(b._ph()["slam_radius"]) > float(P0["slam_radius"]) and float(b._ph()["charge_speed"]) > float(P0["charge_speed"]) and b._ph() == P1, "phase 2 moveset: faster wind-ups, wider slam, faster charge")
+	# Leash: nobody alive on the summit -> full reset, adds gone.
+	_check(b.living_adds() >= 2, "adds alive before the reset (%d)" % b.living_adds())
+	pl.global_position = Vector3(0, 1, 0)
+	b.tick(5.0, pl)
+	_check(b.state == BossBrain.State.IDLE and boss.hp == boss.max_hp and b.current_bar() == 4 and b.phase == 1 and events[-1] == "reset", "nobody on the summit for the grace period: the Guardian resets to full, phase 1")
+	_check(b.living_adds() == 0 and boss.global_position.distance_to(boss.home) < 0.5, "the reset removes the adds and walks the Guardian home")
+	await get_tree().process_frame
+	_check(b.adds.is_empty() and boss.visible and boss.is_inside_tree(), "vanished adds are freed; the Guardian stays")
+	# Death: adds vanish; the Last Attack bonus still pays.
+	pl.global_position = boss.global_position + Vector3(0, 0, 8)
+	b.tick(0.05, pl)
+	boss.take_hit(bar_hp * 2.5, Vector3.FORWARD, 1)
+	_check(b.current_bar() == 2 and b.living_adds() >= 2, "a hit across two thresholds breaks straight into bar 2 and calls adds")
+	var rdb = Net.get_realm()
+	var me_key: String = Net.local_holder()
+	for hk in rdb.holders("la_floor1"):
+		rdb.release("la_floor1", hk)  # a crashed earlier run may still hold the slot
+	GameState.inventory = GameState.inventory.filter(func(it): return not LimitedContent.is_bound(it))
+	var fc0: int = GameState.floors_cleared
+	boss.take_hit(1.0e6, Vector3.FORWARD, 1)
+	# The Guardian does not respawn: the node (and its brain) frees this frame.
+	var adds_left: int = b.living_adds()
+	var died_event: bool = events.has("death")
+	await get_tree().process_frame
+	var mantles := 0
+	for it in GameState.inventory:
+		if it is Dictionary and it.get("name", "") == "Mantle of the First Floor":
+			mantles += 1
+	_check(died_event and adds_left == 0 and w._boss == null and not is_instance_valid(boss), "the Guardian's death removes the adds and frees the boss")
+	_check(mantles == 1 and rdb.is_holder("la_floor1", me_key) and GameState.floors_cleared >= 1, "Last Attack bonus and the floor clear still pay on the brain-driven kill")
+	GameState.floors_cleared = fc0
+	rdb.release("la_floor1", me_key)
+	GameState.inventory = GameState.inventory.filter(func(it): return not LimitedContent.is_bound(it))
+	GameState.hidden_stats = {}
+	GameState.heal_full()
+	w.queue_free()
+	await get_tree().process_frame

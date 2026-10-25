@@ -164,6 +164,8 @@ func _print_report() -> void:
 	for e in get_tree().get_nodes_in_group("enemies"):
 		if e.visible:
 			alive += 1
+	if _boss != null and is_instance_valid(_boss) and _boss.brain != null and _boss.brain.has_method("report"):
+		print("[report %s] boss %s" % [who, _boss.brain.report()])
 	print("[report %s] players=%s mobs=%d visible=%d me=Lv%d xp=%d col=%d hides=%d parries=%d | objs=%d nodes=%d orphans=%d mem=%dKB" % [
 		who, ", ".join(ps), mobs, alive, GameState.level, GameState.xp, GameState.money, GameState.materials.get("beast_hide", 0), parried,
 		Performance.get_monitor(Performance.OBJECT_COUNT), Performance.get_monitor(Performance.OBJECT_NODE_COUNT),
@@ -220,6 +222,18 @@ func _spawn_player_fn(data: Dictionary) -> Node:
 
 func _spawn_mob_fn(data: Dictionary) -> Node:
 	var e := Enemy.from_data(data)
+	if str(data.get("brain", "")) != "":
+		# Boss state machine (scripts/boss_brain.gd) on every peer: the same
+		# child path everywhere so its events arrive; only the authority ticks.
+		var brain := BossBrain.new()
+		brain.name = "BossBrain"
+		brain.preset = str(data["brain"])
+		brain.arena_center = ARENA_POS
+		brain.arena_radius = ARENA_RADIUS
+		if Net.is_authority():
+			brain.spawn_adds = _gravelmaw_adds
+		e.add_child(brain)
+		e.brain = brain
 	if data.get("boss", false) and Net.is_authority():
 		_boss = e
 		e.died.connect(_on_boss_died)
@@ -228,13 +242,16 @@ func _spawn_mob_fn(data: Dictionary) -> Node:
 	return e
 
 
-## Creates a mob on the server (replicated) or locally when offline.
-func _spawn_mob(data: Dictionary) -> void:
+## Creates a mob on the server (replicated) or locally when offline. Returns
+## the node on the authority (null on a client, which gets it replicated).
+func _spawn_mob(data: Dictionary) -> Node:
 	if Net.online:
 		if multiplayer.is_server():
-			_mob_spawner.spawn(data)
-	else:
-		_mobs.add_child(_spawn_mob_fn(data))
+			return _mob_spawner.spawn(data)
+		return null
+	var e := _spawn_mob_fn(data)
+	_mobs.add_child(e)
+	return e
 
 
 var _last_chat_ms := {}
@@ -2018,15 +2035,47 @@ func _spawn_boss() -> void:
 			"drops": {"spirit_shard": 1.0, "wisp_essence": 1.0, "stag_horn": 1.0}, "pos": [bp.x, bp.y, bp.z]})
 		_boss_summon(null)
 		return
+	# Gravelmaw: four stacked HP bars, adds on every bar break, a second
+	# moveset on the last bar (BossBrain.PRESETS["gravelmaw"]).
 	_spawn_mob({"name": "Floor Guardian: Gravelmaw", "level": 7, "hp": 650, "dmg": 18, "xp": 600, "money": 400,
 		"color": "806b8c", "size": [4.2, 4.0, 4.8], "speed": 2.6, "aggro": 40, "boss": true, "respawns": false,
-		"drops": {"spirit_shard": 1.0, "iron_ore": 1.0}, "pos": [bp.x, bp.y, bp.z]})
+		"brain": "gravelmaw", "drops": {"spirit_shard": 1.0, "iron_ore": 1.0}, "pos": [bp.x, bp.y, bp.z]})
 	# Two sentinels guard the Guardian; they do not respawn.
 	for side in [-1, 1]:
 		var sp := ARENA_POS + Vector3(6 * side, 1, -2)
-		_spawn_mob({"name": "Ruin Sentinel", "level": 5, "hp": 120, "dmg": 10, "xp": 90, "money": 30,
-			"color": "667380", "size": [1.0, 1.6, 1.0], "speed": 3.6, "aggro": 40, "respawns": false,
-			"drops": {"iron_ore": 0.8}, "pos": [sp.x, sp.y, sp.z]})
+		_spawn_mob(_sentinel_data(sp))
+
+
+func _sentinel_data(sp: Vector3) -> Dictionary:
+	return {"name": "Ruin Sentinel", "level": 5, "hp": 120, "dmg": 10, "xp": 90, "money": 30,
+		"color": "667380", "size": [1.0, 1.6, 1.0], "speed": 3.6, "aggro": 40, "respawns": false,
+		"drops": {"iron_ore": 0.8}, "pos": [sp.x, sp.y, sp.z]}
+
+
+## Gravelmaw's call (BossBrain.spawn_adds, authority only): `count` guards
+## rise in a ring around the Guardian when one of its HP bars breaks, Ruin
+## Sentinels and Kobold Scouts in turn. They vanish with the boss or on reset.
+func _gravelmaw_adds(brain: Node, count: int) -> Array:
+	var out: Array = []
+	var boss: Node3D = brain.get_parent() as Node3D
+	var at := boss.global_position if boss else ARENA_POS + Vector3(0, 1, -6)
+	for i in count:
+		var a := TAU * float(i) / float(maxi(count, 1)) + _rng.randf_range(0.0, 0.8)
+		var sp := at + Vector3(cos(a) * 5.5, 0, sin(a) * 5.5)
+		if sp.distance_to(ARENA_POS) > ARENA_RADIUS - 1.0:
+			sp = ARENA_POS + (sp - ARENA_POS).normalized() * (ARENA_RADIUS - 1.0)
+		sp.y = ARENA_POS.y + 1.0
+		var d: Dictionary
+		if i % 2 == 0:
+			d = _sentinel_data(sp)
+		else:
+			d = {"name": "Kobold Scout", "level": 6, "hp": 140, "dmg": 13, "xp": 90, "money": 20, "color": "6b7a3a",
+				"size": [0.9, 1.5, 0.9], "speed": 3.6, "aggro": 40, "respawns": false,
+				"drops": {"iron_ore": 0.6, "spirit_shard": 0.2}, "pos": [sp.x, sp.y, sp.z]}
+		var e := _spawn_mob(d)
+		if e != null:
+			out.append(e)
+	return out
 
 
 ## Mirelord's call: two Drowned Wisps rise beside him (at the start of the
