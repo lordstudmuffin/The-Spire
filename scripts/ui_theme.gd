@@ -702,3 +702,18 @@ static func ring(parent: Control, fill: Color, stroke: Color, width := 3.0) -> v
 		parent.draw_arc(c, r, 0.0, TAU, 64, stroke, width, true)
 		parent.draw_arc(c, r - width - 2.0, 0.0, TAU, 64, Color(stroke.r, stroke.g, stroke.b, 0.35), 1.0, true))
 	parent.resized.connect(parent.queue_redraw)
+
+
+## Look of HUD.show_death's overlay: grey-out shader on the ColorRect (its
+## colour alpha stays the fade strength) and a spaced system-font title.
+static func death_screen(overlay: ColorRect, title: Label, sub: Label) -> void:
+	var m := ShaderMaterial.new()
+	m.shader = load("res://shaders/death_screen.gdshader")
+	overlay.material = m
+	title.add_theme_font_override("font", spaced(ui_bold(), 10))
+	title.add_theme_font_size_override("font_size", 40)
+	title.add_theme_color_override("font_color", Color(1.0, 0.3, 0.26))
+	title.add_theme_color_override("font_outline_color", Color(0.2, 0.0, 0.0, 0.85))
+	title.add_theme_constant_override("outline_size", 6)
+	sub.add_theme_font_override("font", spaced(ui_font(), 2))
+	sub.add_theme_color_override("font_color", Color(0.88, 0.88, 0.92))
