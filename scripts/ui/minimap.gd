@@ -149,7 +149,7 @@ func _draw_canvas() -> void:
 				_hexagon(ci, p, 3.0 * px, UITheme.NAVY)
 			"gate":
 				ci.draw_arc(p, lr, 0.0, TAU, 24, col, 1.5 * px, true)
-			"smith":
+			"smith", "market", "farm", "board":
 				ci.draw_circle(p, 2.0 * px, col)
 	# Ore veins (visible = mineable).
 	for v in _veins:
@@ -199,7 +199,7 @@ func _draw_canvas() -> void:
 		_arrow(ci, sp, -yaw, 10.0, UITheme.GOLD)
 		# Labels.
 		for l in MapData.landmarks():
-			if l["kind"] in ["gate", "smith"]:
+			if l["kind"] in ["gate", "smith", "board"]:
 				continue
 			var lp := _xf * (l["pos"] as Vector2)
 			var col := MapData.kind_color(l["kind"])

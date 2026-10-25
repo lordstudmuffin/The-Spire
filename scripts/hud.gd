@@ -70,6 +70,9 @@ var _map: Minimap
 ## Party frames (scripts/ui/party_panel.gd) under the player card and the
 ## Nearby / social panel (scripts/ui/social.gd, key O).
 var _plate_card: PanelContainer
+## What the player sees top left (scripts/ui/player_status.gd). The old card
+## above is kept hidden: its labels and bars still hold the values.
+var _status: PlayerStatus
 var _party_panel: PartyPanel
 var _nearby_panel: PanelContainer
 var _social: Social
@@ -308,6 +311,10 @@ func _build_player_plate(root: Control) -> void:
 	_floor_label = UITheme.label("", 12, UITheme.CYAN, true)
 	pills.add_child(_pill(_floor_label, UITheme.CYAN))
 	v.add_child(pills)
+	_status = PlayerStatus.new()
+	_status.position = Vector2(24, 18)
+	root.add_child(_status)
+	card.visible = false
 
 
 func _pill(inner: Control, c: Color) -> PanelContainer:
@@ -825,7 +832,7 @@ func _build_party(root: Control) -> void:
 	_party_panel = PartyPanel.build()
 	root.add_child(_party_panel)
 	var place := func():
-		_party_panel.position = Vector2(24, _plate_card.position.y + _plate_card.size.y + 10)
+		_party_panel.position = Vector2(24, _status.position.y + _status.custom_minimum_size.y + 6)
 	_plate_card.resized.connect(place)
 	place.call()
 
@@ -1114,6 +1121,7 @@ func _process(delta: float) -> void:
 		if show_guard:
 			_guard_bar.value = player.guard
 			_guard_bar.modulate = Color(1, 0.45, 0.4) if player.is_stunned() else Color.WHITE
+		_status.set_guard(show_guard, player.guard, Player.GUARD_MAX, player.is_stunned())
 	_place_t -= delta
 	if _place_t <= 0.0:
 		_place_t = 0.5
@@ -1338,6 +1346,10 @@ func _refresh() -> void:
 	_xp_bar.max_value = GameState.xp_to_next()
 	_xp_bar.value = GameState.xp
 	_xp_text.text = "XP %d / %d" % [GameState.xp, GameState.xp_to_next()]
+	_status.set_identity(_info.text, _class_label.text, GameState.level)
+	_status.set_hp(GameState.hp, GameState.max_hp())
+	_status.set_xp(GameState.xp, GameState.xp_to_next())
+	_status.set_money_floor(GameState.money, GameState.floor)
 	_refresh_tracker()
 	if _inv_panel.visible:
 		_inventory.refresh()

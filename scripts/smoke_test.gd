@@ -697,6 +697,12 @@ func _ready() -> void:
 	var hud: HUD = world.hud
 	_check(MapData.landmarks().size() >= 7, "map data lists %d landmarks" % MapData.landmarks().size())
 	_check(MapData.place_name(Vector2(0, 15)) == "Town of First Light", "place name resolves the town")
+	var life_marks := {}
+	for l in MapData.landmarks():
+		life_marks[l["label"]] = l["pos"]
+	var mk3: Vector3 = load("res://scripts/life/stalls.gd").market_center(world.HOLLOWBROOK)
+	_check(life_marks.has("Market") and life_marks.has("Farm Plots") and life_marks.has("Guild Board") and (life_marks["Market"] as Vector2).distance_to(Vector2(mk3.x, mk3.z)) < 0.1, "map marks the Market, Farm Plots and Guild Board")
+	_check(MapData.place_name(life_marks["Market"]) == "Market" and MapData.place_name(life_marks["Farm Plots"]) == "Farm Plots", "standing at the market / farm names the place")
 	for id in hud.QUEST_NAMES:
 		_check(QuestData.QUESTS.has(id), "quest data covers %s" % id)
 	for a in ["inventory", "quest_log", "map", "map_zoom_in", "map_zoom_out"]:

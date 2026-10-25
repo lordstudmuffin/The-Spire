@@ -14,6 +14,7 @@ const SMITHY_POS := Vector2(16, 22)
 const FOUNTAIN_POS := Vector2(0, 27)
 
 ## kind: "town" | "village" | "camp" | "tower" | "water" | "gate" | "smith" | "npc"
+##       | "market" | "farm" | "board" (Hollowbrook life spots: stalls, plots, guild board)
 const KIND_COLORS := {
 	"town": Color("f0c060"),
 	"village": Color("7bdc8a"),
@@ -23,6 +24,9 @@ const KIND_COLORS := {
 	"gate": Color("4fc3ff"),
 	"smith": Color("ff9a3c"),
 	"npc": Color("f3eee4"),
+	"market": Color("ffd166"),
+	"farm": Color("a7d46f"),
+	"board": Color("b9a6ff"),
 }
 
 static var _landmarks := {}  # floor -> Array
@@ -99,6 +103,12 @@ static func landmarks() -> Array:
 			{"pos": tower_pos() + Vector2(0, 14), "kind": "gate", "label": "Sealed Gate", "radius": 2.0},
 			{"pos": pond_pos(), "kind": "water", "label": "Mill Pond", "radius": pond_radius()},
 		]
+		var mk: Vector3 = load("res://scripts/life/stalls.gd").market_center(hb)
+		var fm: Vector3 = load("res://scripts/life/farms.gd").field_center(hb)
+		var bd: Vector3 = hb + load("res://scripts/life/guilds.gd").BOARD_OFFSET
+		out.append({"pos": Vector2(mk.x, mk.z), "kind": "market", "label": "Market", "radius": 2.0, "area": 9.0})
+		out.append({"pos": Vector2(fm.x, fm.z), "kind": "farm", "label": "Farm Plots", "radius": 2.0, "area": 10.0})
+		out.append({"pos": Vector2(bd.x, bd.z), "kind": "board", "label": "Guild Board", "radius": 1.5})
 	_landmarks[f] = out
 	return out
 
@@ -112,9 +122,9 @@ static func place_name(p: Vector2) -> String:
 	var best := "The Fields"
 	var best_d := INF
 	for l in landmarks():
-		if l["kind"] in ["gate", "smith"]:
+		if l["kind"] in ["gate", "smith", "board"]:
 			continue
-		var d: float = p.distance_to(l["pos"]) - float(l["radius"])
+		var d: float = p.distance_to(l["pos"]) - float(l.get("area", l["radius"]))
 		if d < 0.0 and d < best_d:
 			best_d = d
 			best = l["label"]
