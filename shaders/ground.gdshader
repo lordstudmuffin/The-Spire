@@ -164,7 +164,7 @@ void fragment() {
 		vec3 detail = gd * w_grass + pd * w_path + cd * w_cob;
 		float dmean = grass_mean * w_grass + path_mean * w_path + cobble_mean * w_cob;
 		vec3 d_rel = detail / max(dmean, 0.05);          // ~1.0 on average
-		float rel = clamp(lum(d_rel), 0.45, 1.8);        // luminance variation
+		float rel = clamp(lum(d_rel), 0.6, 1.3);         // luminance variation (kept narrow: painted, not photographic)
 		vec3 d_hue = d_rel / max(lum(d_rel), 0.05);      // hue only
 		col *= mix(vec3(1.0), vec3(rel), detail_strength) * mix(vec3(1.0), d_hue, detail_tint * detail_strength);
 

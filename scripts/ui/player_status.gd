@@ -150,7 +150,9 @@ func _text(pos: Vector2, s: String, px: int, col: Color, bold := false, align :=
 	var f := _bold if bold else _font
 	if f == null:
 		f = get_theme_default_font()
-	draw_string(f, pos + Vector2(0, 1.5), s, align, w, px, TEXT_SHADOW)
+	# Outline + drop shadow: readable over a bright sky or a white plaza.
+	draw_string_outline(f, pos + Vector2(0, 1.5), s, align, w, px, 4, Color(TEXT_SHADOW, 0.5))
+	draw_string_outline(f, pos, s, align, w, px, 4, TEXT_SHADOW)
 	draw_string(f, pos, s, align, w, px, col)
 
 

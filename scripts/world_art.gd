@@ -466,6 +466,7 @@ static func bind_ground_detail(gm: ShaderMaterial, sets: Array = []) -> void:
 		bound += 1
 	if bound > 0:
 		gm.set_shader_parameter("detail_strength", 0.6)
+		gm.set_shader_parameter("detail_tint", 0.08)
 
 
 static func rock_mesh() -> ArrayMesh:
@@ -518,22 +519,49 @@ static func grass_mesh() -> ArrayMesh:
 static func flower_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	# Stem (thin tri) + head (two crossed quads).
+	# Stem (thin tri) + a five-petal head: a scalloped disc tilted toward the
+	# viewer's usual side, double-sided, with a darker eye in the middle.
 	var stem := [Vector3(-0.02, 0, 0), Vector3(0.02, 0, 0), Vector3(0, 0.5, 0)]
 	for k in 3:
 		st.set_color(Color(0.45, 0.75, 0.35))
 		st.set_normal(Vector3.UP)
 		st.add_vertex(stem[k])
-	for q in 2:
-		var a := PI * 0.5 * q
-		var u := Vector3(cos(a), 0, sin(a)) * 0.16
-		var c := Vector3(0, 0.55, 0)
-		var pts := [c - u - Vector3(0, 0.1, 0), c + u - Vector3(0, 0.1, 0), c + u + Vector3(0, 0.14, 0), c - u + Vector3(0, 0.14, 0)]
-		for t in [[0, 1, 2], [0, 2, 3], [0, 2, 1], [0, 3, 2]]:
-			for k in t:
-				st.set_color(Color.WHITE)
-				st.set_normal(Vector3.UP)
-				st.add_vertex(pts[k])
+	var c := Vector3(0, 0.52, 0)
+	var tilt := Basis(Vector3.RIGHT, 0.45)
+	var n := tilt * Vector3.UP
+	var petals := 5
+	var seg := 30
+	var ring: Array[Vector3] = []
+	for i in seg:
+		var a := TAU * i / seg
+		# Scalloped radius: five rounded lobes with notches between them.
+		var lobe := absf(sin(a * petals * 0.5))
+		var r := 0.05 + 0.13 * pow(lobe, 0.6)
+		ring.append(c + tilt * Vector3(cos(a) * r, 0, sin(a) * r))
+	var eye := c + n * 0.012
+	for i in seg:
+		var a := ring[i]
+		var b := ring[(i + 1) % seg]
+		for tri in [[eye, a, b], [eye, b, a]]:
+			for k in 3:
+				var v: Vector3 = tri[k]
+				var d := v.distance_to(c)
+				# Petals pale at the tips, deeper toward the eye.
+				st.set_color(Color(1, 1, 1).lerp(Color(0.82, 0.78, 0.75), clampf(1.0 - d / 0.18, 0.0, 1.0) * 0.5))
+				st.set_normal(n if tri[1] == a else -n)
+				st.add_vertex(v)
+	# Eye: small raised disc in warm yellow.
+	var eye_r := 0.035
+	for i in 8:
+		var a0 := TAU * i / 8.0
+		var a1 := TAU * (i + 1) / 8.0
+		var p0 := c + n * 0.02 + tilt * Vector3(cos(a0) * eye_r, 0, sin(a0) * eye_r)
+		var p1 := c + n * 0.02 + tilt * Vector3(cos(a1) * eye_r, 0, sin(a1) * eye_r)
+		for tri in [[c + n * 0.03, p0, p1], [c + n * 0.03, p1, p0]]:
+			for k in 3:
+				st.set_color(Color(1.0, 0.78, 0.25))
+				st.set_normal(n)
+				st.add_vertex(tri[k])
 	return st.commit()
 
 
@@ -749,7 +777,7 @@ static func build_vegetation(parent: Node3D, rng: RandomNumberGenerator, radius:
 	var fmm := multimesh(parent, flower_mesh(), fx, fc, "Flowers")
 	fmm.material_override = foliage_mat(Color.WHITE, 0.8)
 	fmm.material_override.set_shader_parameter("emission_color", Color.WHITE)
-	fmm.material_override.set_shader_parameter("emission_strength", 0.15)
+	fmm.material_override.set_shader_parameter("emission_strength", 0.05)
 	fmm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
@@ -2160,7 +2188,10 @@ static func build_environment(parent: Node3D) -> void:
 	e.background_mode = Environment.BG_SKY
 	e.sky = sky
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	e.ambient_light_sky_contribution = 0.7
+	# Mostly a fixed warm-neutral fill, only a little sky: on Forward+ the
+	# full sky radiance (blue above, lavender below) tinted the meadow mint.
+	e.ambient_light_color = Color(0.78, 0.8, 0.72)
+	e.ambient_light_sky_contribution = 0.3
 	e.ambient_light_energy = 0.45
 	e.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
@@ -2189,31 +2220,39 @@ static func build_environment(parent: Node3D) -> void:
 		e.sdfgi_cascades = 4
 		e.sdfgi_min_cell_size = 0.3
 		e.sdfgi_use_occlusion = true
-		e.sdfgi_bounce_feedback = 0.4
-		e.sdfgi_energy = 1.0
+		# GI kept gentle: full-strength sky bounce greys out the meadow and
+		# kills the saturated cel look (compare Low vs High shots).
+		e.sdfgi_bounce_feedback = 0.3
+		e.sdfgi_energy = 0.6
 		e.ssao_enabled = true
 		e.ssao_radius = 1.5
 		e.ssao_intensity = 1.6
 		e.ssao_power = 1.6
 		e.ssil_enabled = true
 		e.ssil_radius = 4.0
-		e.ssil_intensity = 0.9
+		e.ssil_intensity = 0.6
 		e.ssr_enabled = true
 		e.ssr_max_steps = 96
 		e.ssr_fade_in = 0.2
 		e.ssr_fade_out = 2.0
 		e.volumetric_fog_enabled = true
-		e.volumetric_fog_density = 0.012
+		# Thin: a clear, bright anime sky with light shafts, not a grey haze.
+		e.volumetric_fog_density = 0.0045
 		e.volumetric_fog_albedo = Color("fff1e0")
 		e.volumetric_fog_emission = Color("3a3020")
 		e.volumetric_fog_emission_energy = 0.08
 		e.volumetric_fog_anisotropy = 0.7
 		e.volumetric_fog_length = 160.0
 		e.volumetric_fog_detail_spread = 2.2
-		e.volumetric_fog_ambient_inject = 0.3
+		e.volumetric_fog_ambient_inject = 0.12
 		e.volumetric_fog_sky_affect = 0.0
 		e.glow_intensity = 0.45
-		e.glow_bloom = 0.08
+		e.glow_bloom = 0.0
+		e.adjustment_saturation = 1.18
+		# Filmic flattens the painted mid-tones toward grey-mint; a linear
+		# curve keeps the saturated cel palette the art is painted in.
+		e.tonemap_mode = Environment.TONE_MAPPER_LINEAR
+		e.tonemap_exposure = 0.86
 		# Runtime quality upgrades that would only cost or error elsewhere.
 		var vp := parent.get_viewport()
 		if vp:
