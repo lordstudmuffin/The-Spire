@@ -717,3 +717,16 @@ static func death_screen(overlay: ColorRect, title: Label, sub: Label) -> void:
 	title.add_theme_constant_override("outline_size", 6)
 	sub.add_theme_font_override("font", spaced(ui_font(), 2))
 	sub.add_theme_color_override("font_color", Color(0.88, 0.88, 0.92))
+
+
+## Look of the HUD guard bar (shown while guarding or recovering): a thin
+## steel-blue gauge in a dark sleeve, so it reads as separate from HP.
+static func style_guard_bar(bar: ProgressBar) -> void:
+	bar.custom_minimum_size.y = 6
+	var bg := box(Color(0.03, 0.05, 0.1, 0.7), Color(0.55, 0.75, 1.0, 0.35), 3, 1)
+	bg.content_margin_left = 0
+	bg.content_margin_right = 0
+	bg.content_margin_top = 0
+	bg.content_margin_bottom = 0
+	bar.add_theme_stylebox_override("background", bg)
+	bar.add_theme_stylebox_override("fill", gradient_fill_box([Color("3d7bd9"), Color("8cc4ff"), Color("e6f3ff")], 3))

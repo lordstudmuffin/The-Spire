@@ -35,6 +35,7 @@ const CLIPS := {
 	"attack1": ["Rig_Medium_CombatMelee.glb", "Melee_1H_Attack_Chop", false],
 	"attack2": ["Rig_Medium_CombatMelee.glb", "Melee_1H_Attack_Slice_Diagonal", false],
 	"attack3": ["Rig_Medium_CombatMelee.glb", "Melee_1H_Attack_Stab", false],
+	"guard": ["Rig_Medium_CombatMelee.glb", "Melee_Blocking", true],
 }
 const WALK_SPEED := 1.8   # m/s at which the walk clip plays unscaled
 const RUN_SPEED := 5.0    # m/s at which the run clip plays unscaled
@@ -435,7 +436,16 @@ func _setup_animation() -> void:
 	hit.fadein_time = 0.08
 	hit.fadeout_time = 0.15
 	root.add_node("hit", hit, Vector2(500, 0))
-	root.connect_node("hit", 0, "air")
+	# Guard stance (play_guard): blended over locomotion, under hits/attacks.
+	var guard_anim := AnimationNodeAnimation.new()
+	guard_anim.animation = "guard" if lib.has_animation("guard") else "idle"
+	root.add_node("guard_anim", guard_anim, Vector2(250, 400))
+	var guard := AnimationNodeBlend2.new()
+	guard.filter_enabled = false
+	root.add_node("guard", guard, Vector2(400, 0))
+	root.connect_node("guard", 0, "air")
+	root.connect_node("guard", 1, "guard_anim")
+	root.connect_node("hit", 0, "guard")
 	root.connect_node("hit", 1, "hit_anim")
 	var atk_anim := AnimationNodeAnimation.new()
 	atk_anim.animation = "attack0" if lib.has_animation("attack0") else "idle"
@@ -457,6 +467,7 @@ func _setup_animation() -> void:
 	anim_tree.active = true
 	anim_tree.set("parameters/loco/blend_position", 0.0)
 	anim_tree.set("parameters/air/blend_amount", 0.0)
+	anim_tree.set("parameters/guard/blend_amount", 0.0)
 
 
 ## Drive locomotion. speed is horizontal m/s: 0 idle, < 4 walk, else run.
@@ -485,6 +496,18 @@ func play_attack(kind: int) -> void:
 	if n and anim_player.has_animation(role):
 		n.animation = role
 	anim_tree.set("parameters/attack/request", AnimationNodeOneShot.ONE_SHOT_REQUEST_FIRE)
+
+
+## Raise or lower the guard (sword held across the body). Eased over
+## ~0.1 s; locomotion keeps playing underneath at reduced weight.
+var _guard_tw: Tween
+func play_guard(on: bool) -> void:
+	if anim_tree == null or not is_inside_tree():
+		return
+	if _guard_tw:
+		_guard_tw.kill()
+	_guard_tw = create_tween()
+	_guard_tw.tween_property(anim_tree, "parameters/guard/blend_amount", 0.85 if on else 0.0, 0.1 if on else 0.18)
 
 
 func play_hit() -> void:
