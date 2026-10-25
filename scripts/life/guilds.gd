@@ -361,6 +361,25 @@ static func _op_leave(rdb, holder: String) -> Dictionary:
 	return {"left": str(g["name"]), "notify": [{"holders": members.keys(), "text": text}]}
 
 
+## A character was deleted: take it off its guild's roster (handing on the
+## lead like a leave). If it was the last member the guild goes too, with
+## whatever is left in its storage, since no one remains to claim it.
+static func forget_holder(rdb, holder: String) -> void:
+	invites.erase(holder)
+	var gid := guild_of(rdb, holder)
+	if gid == "":
+		return
+	if (get_guild(rdb, gid)["members"] as Dictionary).size() > 1:
+		_op_leave(rdb, holder)
+		return
+	_remove(rdb, gid)
+	if not rdb.container(storage_id(gid)).is_empty():
+		rdb.remove_container(storage_id(gid))
+	for h in invites.keys():
+		if str(invites[h].get("gid", "")) == gid:
+			invites.erase(h)
+
+
 static func _find_member(g: Dictionary, name: String) -> String:
 	for h in g.get("members", {}):
 		if str(g["members"][h].get("name", "")).to_lower() == name.strip_edges().to_lower():

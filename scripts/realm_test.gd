@@ -292,10 +292,21 @@ func _ready() -> void:
 	Net.save_record(drec)
 	_check(FileAccess.file_exists(Net.record_path("Doomed")) and not FileAccess.file_exists(Net.record_path("Doomed") + ".tmp"), "atomic record save leaves no temp file")
 	Net.get_realm().claim("doom_relic", 1, Net.RealmDBScript.holder_of_record(drec))
+	var GuildsScript = load("res://scripts/life/guilds.gd")
+	var dh: String = Net.RealmDBScript.holder_of_record(drec)
+	Net.get_realm().commit("guild", {"id": "g_doom", "g": {"name": "Doom Club", "tag": "DOOM", "created": 0.0, "members": {
+		dh: {"name": "Doomed", "rank": "leader", "since": 0.0}, "x:Mate": {"name": "Mate", "rank": "officer", "since": 1.0}}}})
+	Net.get_realm().commit("guild", {"id": "g_solo", "g": {"name": "Solo Club", "tag": "SOLO", "created": 0.0, "members": {
+		"x:Alone": {"name": "Alone", "rank": "leader", "since": 0.0}}}})
 	var del: Dictionary = Net.srv_delete_character("Doomed", "wrong")
 	_check(not del["ok"], "delete with the wrong token refused")
 	del = Net.srv_delete_character("Doomed", TOKEN_B)
 	_check(del["ok"] and del["released"].size() == 1 and not FileAccess.file_exists(Net.record_path("Doomed")) and Net.get_realm().holders("doom_relic").is_empty(), "delete frees the claim and removes the record")
+	var dg: Dictionary = GuildsScript.get_guild(Net.get_realm(), "g_doom")
+	_check(not (dg["members"] as Dictionary).has(dh) and str(dg["members"]["x:Mate"]["rank"]) == "leader", "delete removes the character from its guild and hands on the lead")
+	GuildsScript.forget_holder(Net.get_realm(), "x:Alone")
+	_check(GuildsScript.get_guild(Net.get_realm(), "g_solo").is_empty(), "the last member's removal disbands the guild")
+	GuildsScript.forget_holder(Net.get_realm(), "x:Mate")
 	# Record load path: a stale record with a pending trade and a dupe gets fixed in _realm_check_record.
 	var lrec := Net._new_record(Net.sanitize_character({"name": "Loader"}), TOKEN_A, {})
 	var lh: String = Net.RealmDBScript.holder_of_record(lrec)

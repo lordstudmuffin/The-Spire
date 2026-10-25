@@ -75,7 +75,7 @@ Built and smoke-green (smoke ~420 checks, realm_test 88, 2-bot soak 0 errors, or
 - P8 done (23:05 UTC): 8 farm plots west of Hollowbrook (scripts/life/farms.gd, ui/farm_screen.gd; 60 Col/week, claim plot:hb<i>, crops in LifeData.CROPS, grow only while watered) and guilds (scripts/life/guilds.gd, ui/guild_screen.gd; notice board by the well, 1000 Col + Lv10, ranks Leader/Officer/Member, storage container guild:<gid>, tags on name labels, /g chat, /guild commands). Smoke has `_test_farms_guilds()`.
 - Pushing: this session can't reach the LFS host. Bundle commits to /mnt/project-files/anime-rpg-bundles/ and ask the "Finish pushing the game to GitHub" thread to push. Gameplay PR is #2 (branch claude/project-thread-i9qmlz).
 
-Next for the game thread: parry polish (bots that parry, VRMCharacter.play_guard hook, PvP later), pad binds for skill_5/6, a market map marker, a keeper NPC figure at stalls, removing a deleted character from its guild, guild-owned stalls, a farming skill/XP, and a screenshot pass on crop scale (Nature Kit at ~1.5).
+Next for the game thread: soak bots now parry/guard (report shows parries=N); still to do: PvP parry later, pad binds for unique arts skill_4-6, a market map marker, a keeper NPC figure at stalls, guild-owned stalls, a farming skill/XP, and a screenshot pass on crop scale (Nature Kit at ~1.5).
 
 ## Kyle's priority features (added 2026-10-25 20:40; rank ABOVE backlog items 3-12)
 Full design: docs/FLOOR1_PRIORITY_FEATURES.md. Kyle wants the menu and sounds as close as possible to the reference anime, built only from original or CC0 material (never ripped assets); sounds stay swappable in autoload/audio.gd EVENTS, menu look in scripts/ui/ring_menu_style.gd.

@@ -607,7 +607,9 @@ func srv_delete_character(name: String, token: String) -> Dictionary:
 	var released: Array = []
 	var rdb = get_realm()
 	if rdb != null:
-		released = rdb.release_all(RealmDBScript.holder_of_record(rec))
+		var holder: String = RealmDBScript.holder_of_record(rec)
+		load("res://scripts/life/guilds.gd").forget_holder(rdb, holder)
+		released = rdb.release_all(holder)
 	DirAccess.remove_absolute(record_path(name))
 	print("[db] deleted character '%s' (%d realm claim(s) freed)" % [name, released.size()])
 	return {"ok": true, "released": released}
