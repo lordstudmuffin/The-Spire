@@ -162,9 +162,25 @@ static func fountain(parent: Node3D, pos: Vector3) -> void:
 	if not has("town", "fountain-round-detail"):
 		WorldArt.fountain(parent, pos)
 		return
-	var f := AssetLib.prop(parent, "town", "fountain-round-detail", pos, 0.0, 3.0, "trimesh")
+	var f := AssetLib.prop(parent, "town", "fountain-round-detail", pos, 0.0, 3.0, "trimesh", true, Color.WHITE, false)
 	f.name = "Fountain"
 	if not WorldArt.headless():
+		# Carved pale stone and live water instead of the kit's flat white.
+		var stone := WorldArt.stone_mat(Color("d9d6cf"), Color("b3aea4"), "castle_brick_07", 0.6, {
+			"band_period": 0.45, "brick_length": 0.8, "band_width": 0.06, "band_dark": 0.78, "detail_strength": 0.35,
+			"polar": 1.0, "center": Vector2(pos.x, pos.z), "polar_radius": 2.0})
+		var water := WorldArt.water_mat(Vector2(1, 0.4), 0.18)
+		for mi in f.find_children("*", "MeshInstance3D", true, false):
+			var m3 := mi as MeshInstance3D
+			if m3.mesh == null:
+				continue
+			for si in m3.mesh.get_surface_count():
+				var src := m3.get_active_material(si)
+				var c := Color.WHITE
+				if src is BaseMaterial3D:
+					c = (src as BaseMaterial3D).albedo_color
+				var watery := c.b > c.r + 0.12
+				m3.set_surface_override_material(si, water if watery else stone)
 		var spray := WorldArt._particles(Vector3(0, 0.5, 0), 90, 1.6, Vector3(0.15, 0.1, 0.15), Color(0.85, 0.97, 1.0, 0.8), 0.12, -9.0)
 		spray.process_material.direction = Vector3(0, 1, 0)
 		spray.process_material.spread = 25.0
