@@ -233,7 +233,7 @@ func _ready() -> void:
 	# combat moment a few frames before the shot. Time is slowed right before
 	# the trigger so the effect is caught mid-flight regardless of frame rate.
 	# MODE: basic | skill0 | skill1 | skill2 | hit | death | slam | dash | shatter | shatter_player
-	#       | parry | guard_break | stagger | windup
+	#       | parry | guard_break | stagger | windup | guard
 	var demo := ""
 	var demo_boar: Node3D = null
 	for i in args.size():
@@ -324,6 +324,12 @@ func _ready() -> void:
 			scene.hud.show_death(8.0, "the Town of First Light")
 		if open_ui == "realm" and i == 28 and "hud" in scene and scene.hud:
 			scene.hud.realm_announce("A player has claimed the unique skill «Starfall Edge»")
+		if demo == "guard" and i == 30 and "player" in scene and scene.player:
+			scene.player.press_parry()
+			scene.player.guard = Player.GUARD_MAX * 0.55
+		if demo == "guard" and i == 36 and "player" in scene and scene.player:
+			# Input polling drops the press under the harness; hold the pose.
+			scene.player._vrm.play_guard(true)
 		if open_ui in ["hud", "boss"] and i == 36 and "player" in scene and scene.player:
 			scene.player.skill_cd[0] = 2.6
 			scene.player.skill_cd[1] = 7.1

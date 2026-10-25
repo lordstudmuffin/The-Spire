@@ -477,9 +477,16 @@ func _physics_process(delta: float) -> void:
 	if input_enabled and not _dying and _stun == 0.0 and not blocking and Input.is_action_just_pressed("attack") and _attack_cd == 0.0 and _recovery == 0.0:
 		_attack()
 	if input_enabled and not _dying and _stun == 0.0 and not blocking and _recovery == 0.0:
+		# Gamepad: hold the target trigger (LT) and press a Sword Art button
+		# for the matching unique art (keys 4-6 on keyboard).
+		var chord := GameState.unique_skill != "" and Input.is_action_pressed("target")
 		for i in SKILLS.size():
-			if Input.is_action_just_pressed("skill_%d" % (i + 1)) and skill_cd[i] == 0.0:
-				_use_skill(i)
+			if Input.is_action_just_pressed("skill_%d" % (i + 1)):
+				if chord and i < unique_cd.size():
+					if unique_cd[i] == 0.0:
+						use_unique(i)
+				elif skill_cd[i] == 0.0:
+					_use_skill(i)
 		if GameState.unique_skill != "":
 			for i in unique_cd.size():
 				if Input.is_action_just_pressed("skill_%d" % (i + 4)) and unique_cd[i] == 0.0:

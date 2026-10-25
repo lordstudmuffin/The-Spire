@@ -280,7 +280,7 @@ func _build_player_plate(root: Control) -> void:
 	_guard_bar.show_percentage = false
 	_guard_bar.custom_minimum_size = Vector2(320, 5)
 	_guard_bar.max_value = Player.GUARD_MAX
-	_guard_bar.add_theme_stylebox_override("fill", UITheme.gradient_fill_box([Color("6aa8ff"), Color("bfe0ff")], 2))
+	UITheme.style_guard_bar(_guard_bar)
 	_guard_bar.visible = false
 	v.add_child(_guard_bar)
 	# Thin XP bar.

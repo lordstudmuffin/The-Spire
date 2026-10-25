@@ -31,7 +31,8 @@ const DEFAULTS := {
 	"skill_1": {"kb": [KEY_1], "pad": [JOY_BUTTON_RIGHT_SHOULDER]},
 	"skill_2": {"kb": [KEY_2], "pad": [JOY_BUTTON_LEFT_SHOULDER]},
 	"skill_3": {"kb": [KEY_3], "pad": [[JOY_AXIS_TRIGGER_RIGHT, 1]]},
-	# Unique Sword Arts (only usable by a unique skill holder).
+	# Unique Sword Arts (only usable by a unique skill holder). On a gamepad
+	# they are LT (target) held + RB / LB / RT, handled in Player.
 	"skill_4": {"kb": [KEY_4], "pad": []},
 	# Tap as a strike lands to parry; hold to guard.
 	"parry": {"kb": [KEY_F, ["mouse", MOUSE_BUTTON_RIGHT]], "pad": [JOY_BUTTON_RIGHT_STICK]},

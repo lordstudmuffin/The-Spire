@@ -753,6 +753,17 @@ func _ready() -> void:
 	_check(pl_u.use_unique(0) and pl_u.unique_cd[0] > 0.0, "holder casts a unique Sword Art")
 	_check(not pl_u.use_unique(0), "unique art respects its cooldown")
 	await get_tree().create_timer(1.2, true, false, true).timeout
+	# Gamepad chord: target (LT) held + the third Sword Art button = third unique art.
+	pl_u.unique_cd[2] = 0.0
+	pl_u.skill_cd[2] = 0.0
+	Input.action_press("target")
+	Input.action_press("skill_3")
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	Input.action_release("skill_3")
+	Input.action_release("target")
+	_check(pl_u.unique_cd[2] > 0.0 and pl_u.skill_cd[2] == 0.0, "target + Sword Art button casts the unique art instead (gamepad chord)")
+	await get_tree().create_timer(1.4, true, false, true).timeout
 	pl_u.unique_cd[1] = 0.0
 	rdb.release(UniqueSkills.TWIN_FANG, me_key)
 	_check(not pl_u.use_unique(1) and GameState.unique_skill == "", "losing the registry slot revokes the skill")
