@@ -127,6 +127,9 @@ func _make_panel(width: float) -> Array:
 	var pc := PanelContainer.new()
 	pc.add_theme_stylebox_override("panel", S.panel_box())
 	pc.custom_minimum_size = Vector2(width, 0)
+	# Content is measured a frame late (wrapped labels report a huge height
+	# first), so shrink back whenever the real minimum arrives.
+	pc.minimum_size_changed.connect(func(): pc.size = Vector2(pc.size.x, 0.0))
 	pc.visible = false
 	add_child(pc)
 	var v := VBoxContainer.new()
@@ -143,6 +146,20 @@ func _make_panel(width: float) -> Array:
 	body.add_theme_constant_override("separation", 4)
 	v.add_child(body)
 	return [pc, t, body]
+
+
+## Connector from the selected button to the open panel (look in RingMenuStyle).
+func _draw() -> void:
+	if _panel and _panel.visible and selected < _buttons.size():
+		var b := _buttons[selected]
+		var c := b.get_global_rect().get_center() - get_global_rect().position
+		var pr := Rect2(_panel.get_global_rect().position - get_global_rect().position, _panel.size)
+		S.draw_connector(self, c, S.BTN_SIZE * 0.5, pr, _panel.modulate.a)
+
+
+func _process(_dt: float) -> void:
+	if is_open:
+		queue_redraw()
 
 
 func _layout() -> void:

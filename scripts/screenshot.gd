@@ -213,6 +213,7 @@ func _ready() -> void:
 		if parts.size() > 1:
 			for i in RingMenu.ENTRIES.size():
 				if RingMenu.ENTRIES[i][0] == parts[1]:
+					scene.hud._ring._select(i, false)
 					scene.hud._ring.activate(i)
 					if parts[1] == "logout":
 						scene.hud._ring._confirm_logout()
@@ -232,6 +233,7 @@ func _ready() -> void:
 	# combat moment a few frames before the shot. Time is slowed right before
 	# the trigger so the effect is caught mid-flight regardless of frame rate.
 	# MODE: basic | skill0 | skill1 | skill2 | hit | death | slam | dash | shatter | shatter_player
+	#       | parry | guard_break | stagger | windup
 	var demo := ""
 	var demo_boar: Node3D = null
 	for i in args.size():
@@ -288,6 +290,18 @@ func _ready() -> void:
 					var pfx := VFX.get_for(pl)
 					if pfx:
 						pfx.shatter(null, pl.model, [], VFX.SHATTER_COLOR, false, 0.0)
+				"parry", "guard_break":
+					var qfx := VFX.get_for(pl)
+					if qfx:
+						var at: Vector3 = pl.global_position + Vector3(0, 1.2, 0) - pl.model.global_transform.basis.z * 0.7
+						qfx.parry_flash(at, demo == "guard_break")
+				"stagger":
+					if demo_boar:
+						demo_boar.net_staggered(2.0)
+				"windup":
+					var wfx := VFX.get_for(pl)
+					if demo_boar and wfx:
+						wfx.windup_glint(demo_boar, 0.42)
 				"slam":
 					if demo_boar:
 						demo_boar._slam_fx()
@@ -297,7 +311,7 @@ func _ready() -> void:
 					var fx := VFX.get_for(pl)
 					if fx:
 						fx.dash(pl.global_position, -pl.model.global_transform.basis.z)
-			Engine.time_scale = 0.3 if demo in ["death", "slam", "shatter_player"] else (0.12 if demo == "shatter" else 0.08)
+			Engine.time_scale = 0.3 if demo in ["death", "slam", "shatter_player", "stagger"] else (0.12 if demo == "shatter" else 0.08)
 		# HUD states that decay in real time are set three frames before the shot.
 		if open_ui == "fishing" and i == 36 and "player" in scene and scene.player:
 			scene._fishing.start(0)

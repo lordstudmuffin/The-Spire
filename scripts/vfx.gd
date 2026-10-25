@@ -22,6 +22,9 @@ const SLASH_SEGMENTS := 28
 const PARTICLE_AABB := AABB(Vector3(-8, -8, -8), Vector3(16, 16, 16))
 ## Polygon-shatter death: pale crystal cyan by default (players, most mobs).
 const SHATTER_COLOR := Color(0.62, 0.9, 1.0)
+const PARRY_COLOR := Color(1.0, 0.86, 0.45)
+const STAGGER_COLOR := Color(1.0, 0.86, 0.3)
+const WINDUP_COLOR := Color(0.95, 0.1, 0.08)
 const MAX_SHATTERS := 6     # concurrent shard bursts (MultiMesh pool)
 ## Shards per burst by preset; `big` (bosses) doubles it.
 const SHARDS := {"Low": 36, "Medium": 60, "High": 90, "Ultra": 140}
@@ -420,6 +423,166 @@ func dash(pos: Vector3, dir: Vector3, color := Color(0.75, 0.9, 1.0, 0.9)) -> vo
 	back = back.normalized() if back.length_squared() > 0.001 else Vector3.BACK
 	_fire(pos + Vector3(0, 0.9, 0), "trace_01", true, color, 0.7, 0.28, 6.0, 11.0, back, 18.0, 0.0, 0.5, 1.1, 0.0, true)
 	puff(pos, 1.2)
+
+
+## Parry: the two blades meet. A hard white-gold flare with a cross glint,
+## a fan of sparks thrown both ways and a quick shock ring. `broke` is the
+## other case (the defender's guard was broken): the flare goes red-orange
+## and a few glass chips fly, as if the guard itself cracked.
+func parry_flash(pos: Vector3, broke := false) -> void:
+	var col := Color(1.0, 0.42, 0.22) if broke else PARRY_COLOR
+	var cam := get_viewport().get_camera_3d()
+	var side := cam.global_transform.basis.x if cam else Vector3.RIGHT
+	for s in [-1.0, 1.0]:
+		var d: Vector3 = (side * s + Vector3.UP * 0.35).normalized()
+		_fire(pos, "spark_04", true, col.lightened(0.3), 0.9, 0.3, 6.0, 12.0, d, 28.0, -14.0, 0.08, 0.2, 0.0, true)
+	flash(pos, col, 0.9)
+	# The cross glint is alpha-blended (not added) so it keeps its shape and
+	# colour against bright daylight ground, where additive light washes out.
+	_glint(pos, col.darkened(0.15), 2.6, 0.3, true)
+	_glint(pos, Color(1, 1, 1), 0.8, 0.18)
+	_shock_ring(pos, col, 1.9 if not broke else 2.4, 0.24)
+	flash_light(pos, col, 6.0)
+	if broke:
+		burst_at(AABB(pos - Vector3(0.25, 0.25, 0.25), Vector3(0.5, 0.5, 0.5)), Color(1.0, 0.55, 0.35), false)
+
+
+## Stagger: the mob reels. A burst at the head, then a halo of small gold
+## stars circling above it for `seconds` (follows the mob; freed after).
+func stagger(enemy: Node3D, seconds: float) -> void:
+	if enemy == null or not is_instance_valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var h := box.size.y if box.size.y > 0.1 else 1.6
+	var r := clampf(maxf(box.size.x, box.size.z) * 0.35, 0.35, 1.6)
+	var top := Vector3(0, h + 0.15, 0)
+	if box.size.y > 0.1:
+		top = enemy.to_local(box.position + Vector3(box.size.x * 0.5, box.size.y + 0.15, box.size.z * 0.5))
+	var pivot := Node3D.new()
+	pivot.name = "StaggerHalo"
+	enemy.add_child(pivot)
+	pivot.position = top
+	var n := 5
+	for i in n:
+		var q := _make_quad(true)
+		var m := q.material_override as StandardMaterial3D
+		m.albedo_texture = AssetLib.vfx_texture("star_06")
+		m.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+		m.albedo_color = STAGGER_COLOR.darkened(0.12)
+		q.visible = true
+		var heart := _make_quad(true)
+		(heart.material_override as StandardMaterial3D).albedo_texture = AssetLib.vfx_texture("star_06")
+		heart.visible = true
+		heart.scale = Vector3.ONE * 0.5
+		q.add_child(heart)
+		q.scale = Vector3.ONE * clampf(r * 0.55, 0.25, 0.7)
+		var a := TAU * i / n
+		q.position = Vector3(cos(a), 0.0, sin(a)) * r
+		pivot.add_child(q)
+	_fire(pivot.global_position, "star_05", true, STAGGER_COLOR, 0.8, 0.6, 1.5, 3.5, Vector3.UP, 70.0, -4.0, 0.1, 0.22, 0.0, false)
+	_shock_ring(pivot.global_position, STAGGER_COLOR.darkened(0.5), r * 3.0, 0.3)
+	var dur := clampf(seconds, 0.3, 3.0)
+	var tw := pivot.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(pivot, "rotation:y", TAU * dur * 0.9, dur)
+	tw.tween_property(pivot, "position:y", top.y + 0.12, dur * 0.5).set_trans(Tween.TRANS_SINE)
+	tw.chain().tween_property(pivot, "scale", Vector3.ZERO, 0.15)
+	tw.chain().tween_callback(pivot.queue_free)
+
+
+## Mob wind-up telegraph: a red glint gathers at the striking side of the
+## mob for the wind-up and pops just before the blow lands, so a player who
+## watches the glint can step out or parry on the pop.
+func windup_glint(enemy: Node3D, seconds: float) -> void:
+	if enemy == null or not is_instance_valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var at := enemy.global_position + Vector3(0, 1.2, 0)
+	if box.size.y > 0.1:
+		var fwd := -enemy.global_transform.basis.z
+		fwd.y = 0.0
+		fwd = fwd.normalized() if fwd.length_squared() > 0.001 else Vector3.FORWARD
+		var c := box.get_center()
+		at = Vector3(c.x, box.position.y + box.size.y * 0.72, c.z) + fwd * maxf(box.size.x, box.size.z) * 0.45
+	var q := _make_quad(true)
+	var m := q.material_override as StandardMaterial3D
+	m.albedo_texture = AssetLib.vfx_texture("star_07")
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	m.albedo_color = Color(WINDUP_COLOR, 0.0)
+	m.render_priority = 2
+	m.no_depth_test = true
+	var core := _make_quad(true)
+	var cm := core.material_override as StandardMaterial3D
+	cm.albedo_texture = AssetLib.vfx_texture("star_07")
+	cm.albedo_color = Color(1.0, 0.85, 0.7, 1.0)
+	cm.no_depth_test = true
+	cm.render_priority = 3
+	core.visible = true
+	core.scale = Vector3.ONE * 0.3
+	q.add_child(core)
+	enemy.add_child(q)
+	q.global_position = at
+	q.visible = true
+	var s := clampf(maxf(box.size.y, 1.0) * 0.6, 0.9, 2.6)
+	q.scale = Vector3.ONE * s * 0.2
+	var dur := maxf(seconds - 0.06, 0.12)
+	var tw := q.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(m, "albedo_color:a", 1.0, dur * 0.35)
+	tw.tween_property(q, "scale", Vector3.ONE * s, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_property(q, "rotation:z", PI * 0.5, dur)
+	tw.chain().tween_callback(func():
+		if is_instance_valid(q):
+			flash(q.global_position, WINDUP_COLOR, s * 0.9))
+	tw.chain().tween_property(q, "scale", Vector3.ONE * s * 1.6, 0.06)
+	tw.parallel().tween_property(m, "albedo_color:a", 0.0, 0.06)
+	tw.chain().tween_callback(q.queue_free)
+
+
+## Bounds of a mob's body only (its rig), so name plates and labels
+## floating above it don't count.
+func _body_bounds(enemy: Node3D) -> AABB:
+	var rig = enemy.get("_rig")
+	if rig is Node3D and is_instance_valid(rig):
+		return visual_bounds(rig)
+	return visual_bounds(enemy)
+
+
+## Four-point cross glint (two crossed streaks), billboarded.
+func _glint(pos: Vector3, color: Color, size: float, dur: float, mix := false) -> void:
+	var q := _make_quad(true)
+	var m := q.material_override as StandardMaterial3D
+	if mix:
+		m.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	m.albedo_texture = AssetLib.vfx_texture("star_07")
+	m.albedo_color = Color(color if mix else color.lightened(0.4), 1.0)
+	add_child(q)
+	q.global_position = pos
+	q.visible = true
+	q.scale = Vector3.ONE * size * 0.7
+	q.rotation.z = randf() * 0.5
+	var tw := q.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(q, "scale", Vector3.ONE * size, dur * 0.4).set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
+	tw.tween_property(m, "albedo_color:a", 0.0, dur * 0.6).set_delay(dur * 0.4)
+	tw.chain().tween_callback(q.queue_free)
+
+
+## Camera-facing shock ring (unlike ring(), which lies on the ground).
+func _shock_ring(pos: Vector3, color: Color, size: float, dur: float) -> void:
+	var q := _make_quad(true)
+	var m := q.material_override as StandardMaterial3D
+	m.albedo_texture = AssetLib.vfx_texture("circle_02")
+	m.albedo_color = Color(color, 1.0)
+	add_child(q)
+	q.global_position = pos
+	q.visible = true
+	q.scale = Vector3.ONE * size * 0.2
+	var tw := q.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(q, "scale", Vector3.ONE * size, dur).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(m, "albedo_color:a", 0.0, dur * 0.7).set_delay(dur * 0.3)
+	tw.chain().tween_callback(q.queue_free)
 
 
 ## Death dissolve: `rig` is lifted out of the (now hidden) mob into this node

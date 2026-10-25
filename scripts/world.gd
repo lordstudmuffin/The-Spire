@@ -39,6 +39,10 @@ var _herbs: HerbField
 var _home: PlayerHome
 ## Hollowbrook market stalls (P7, scripts/life/stalls.gd); null off Floor 1.
 var _stalls: Node3D = null
+## Hollowbrook farm field and the guild notice board (P8, scripts/life/farms.gd,
+## scripts/life/guilds.gd); null off Floor 1.
+var _farms: Node3D = null
+var _guilds: Node3D = null
 var _campfires: Array = []  # {"pos", "range", "label", "where"}
 ## Floor 1 waystones around the Talven fields (Scout Fen's visit quest):
 ## {"pos", "beacon": i, "lit": bool, "fx": Node3D}. Lit state mirrors
@@ -323,6 +327,10 @@ func _on_interact() -> void:
 		# Pads, the cottage ("kind") and camp fires ("where") are plain dicts.
 		if near[0].has("stall"):
 			_stalls.open(int(near[0]["stall"]), hud)
+		elif near[0].has("plot"):
+			_farms.open(int(near[0]["plot"]), hud)
+		elif near[0].has("guild_board"):
+			_guilds.open(hud)
 		elif near[0].has("beacon"):
 			_light_beacon(int(near[0]["beacon"]))
 		elif near[0].has("kind"):
@@ -467,6 +475,14 @@ func _life_interactable() -> Array:
 		var st: Dictionary = _stalls.nearest(p)
 		if not st.is_empty():
 			return [st, st["label"]]
+	if _guilds:
+		var gb: Dictionary = _guilds.nearest(p)
+		if not gb.is_empty():
+			return [gb, gb["label"]]
+	if _farms:
+		var fp: Dictionary = _farms.nearest(p)
+		if not fp.is_empty():
+			return [fp, fp["label"]]
 	if _home:
 		var hit := _home.nearest(p)
 		if not hit.is_empty():
@@ -731,6 +747,8 @@ func _build_life_floor1() -> void:
 ## Hollowbrook market: six rentable player stalls (scripts/life/stalls.gd).
 func _build_market_floor1() -> void:
 	_stalls = preload("res://scripts/life/stalls.gd").build(self, HOLLOWBROOK)
+	_farms = preload("res://scripts/life/farms.gd").build(self, HOLLOWBROOK)
+	_guilds = preload("res://scripts/life/guilds.gd").build(self, HOLLOWBROOK)
 
 
 func _build_life_floor2(village: Dictionary) -> void:
@@ -906,6 +924,14 @@ func srv_action(peer: int, rs, kind: String, payload: Dictionary, pos: Vector3) 
 			if _stalls == null:
 				return {"error": "There is no market on this floor."}
 			return _stalls.srv(peer, rs, kind, payload, pos)
+		"farm", "farm_signs":
+			if _farms == null:
+				return {"error": "There are no farm plots on this floor."}
+			return _farms.srv(peer, rs, kind, payload, pos)
+		"guild":
+			if _guilds == null:
+				return {"error": "There is no guild office on this floor."}
+			return _guilds.srv(peer, rs, kind, payload, pos)
 		"enter_labyrinth":
 			if not _srv_near(pos, TOWER_POS + Vector3(0, 0, 14), 5.0):
 				return {"error": "You are not at the Labyrinth gate."}
@@ -979,6 +1005,15 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 	if kind in ["stall", "stall_signs"]:
 		if _stalls:
 			_stalls.on_net(kind, res)
+		return
+	if kind in ["farm", "farm_signs"]:
+		if _farms:
+			_farms.on_net(kind, res)
+		return
+	if kind in ["guild", "guild_invite"]:
+		if _guilds:
+			_guilds.hud = hud
+			_guilds.on_net(kind, res)
 		return
 	if kind in ["cast", "land"]:
 		if _fishing:

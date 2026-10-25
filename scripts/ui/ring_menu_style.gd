@@ -14,12 +14,16 @@ const ICON := Color(0.36, 0.38, 0.44)
 const ICON_SEL := Color(1, 1, 1)
 const GLOW_SEL := Color(1.0, 0.7, 0.25, 0.35)
 
-const PANEL_BG := Color(0.96, 0.96, 0.97, 0.9)
+const PANEL_BG := Color(0.96, 0.96, 0.97, 0.95)
 const PANEL_HEADER := Color(0.88, 0.89, 0.91, 0.96)
 const PANEL_ACCENT := Color(1.0, 0.62, 0.14)
 const PANEL_TEXT := Color(0.22, 0.24, 0.29)
 const PANEL_SUBTLE := Color(0.45, 0.47, 0.53)
 const PANEL_ROW_SEL := Color(1.0, 0.62, 0.14, 0.22)
+const ROW_RULE := Color(0.2, 0.22, 0.28, 0.08)
+const BTN_SHADOW := Color(0.05, 0.07, 0.12, 0.22)
+## Pointer from the selected button to the open panel.
+const NOTCH := 9.0
 const BAR_BG := Color(0.78, 0.8, 0.84)
 const HP_GREEN := Color(0.45, 0.85, 0.3)
 const HP_YELLOW := Color(0.95, 0.8, 0.2)
@@ -32,9 +36,9 @@ const BTN_GAP := 12.0
 ## Column sits right of screen centre, where the player's right hand is.
 const COLUMN_OFFSET := Vector2(110, 0)
 const PANEL_W := 330.0
-const PANEL_GAP := 22.0
+const PANEL_GAP := 44.0
 const SUB_PANEL_W := 250.0
-const PANEL_RADIUS := 6
+const PANEL_RADIUS := 3
 const LABEL_SIZE := 15
 
 # --- Timing (seconds) -----------------------------------------------------
@@ -93,7 +97,11 @@ static func header_box() -> StyleBoxFlat:
 static func row_box(selected: bool) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = PANEL_ROW_SEL if selected else Color(0, 0, 0, 0)
-	sb.set_corner_radius_all(3)
+	# Rows read as a ruled list: a hairline under each, and the selected row
+	# gets an amber tab on its left edge.
+	sb.border_color = PANEL_ACCENT if selected else ROW_RULE
+	sb.border_width_bottom = 0 if selected else 1
+	sb.border_width_left = 3 if selected else 0
 	sb.content_margin_left = 16
 	sb.content_margin_right = 16
 	sb.content_margin_top = 6
@@ -103,13 +111,36 @@ static func row_box(selected: bool) -> StyleBoxFlat:
 
 ## Draws one round menu button on `ci` centred at `c`.
 static func draw_button(ci: CanvasItem, c: Vector2, r: float, selected: bool, glyph: String) -> void:
+	# Soft contact shadow so the white glass reads against bright skies.
+	ci.draw_circle(c + Vector2(0, 2.5), r + 1.5, BTN_SHADOW)
 	if selected:
 		ci.draw_circle(c, r + 7.0, GLOW_SEL)
+		ci.draw_arc(c, r + 4.0, 0, TAU, 48, Color(BTN_RIM_SEL, 0.8), 1.5, true)
 	ci.draw_circle(c, r, BTN_FILL_SEL if selected else BTN_FILL)
 	# Soft top highlight for the glassy look.
 	ci.draw_circle(c + Vector2(0, -r * 0.35), r * 0.62, Color(1, 1, 1, 0.18 if selected else 0.35))
 	ci.draw_arc(c, r, 0, TAU, 48, BTN_RIM_SEL if selected else BTN_RIM, 2.0, true)
 	draw_glyph(ci, glyph, c, r * 0.48, ICON_SEL if selected else ICON)
+
+
+## Pointer from the selected button (centre `from`, radius `r`) to the open
+## panel `panel` (a rect in the same space): an amber hairline that ends in
+## a notch cut into the panel's left edge. `a` is the panel's fade.
+static func draw_connector(ci: CanvasItem, from: Vector2, r: float, panel: Rect2, a: float) -> void:
+	if a <= 0.01:
+		return
+	var y := clampf(from.y, panel.position.y + PANEL_RADIUS + NOTCH + 6.0, panel.end.y - NOTCH - 6.0)
+	var tip := Vector2(panel.position.x - NOTCH, y)
+	var start := from + Vector2(r + 5.0, 0)
+	var acc := Color(PANEL_ACCENT, 0.9 * a)
+	if absf(y - from.y) < 1.0:
+		ci.draw_line(start, tip, acc, 1.5, true)
+	else:
+		var knee := Vector2(lerpf(start.x, tip.x, 0.5), from.y)
+		ci.draw_polyline(PackedVector2Array([start, knee, Vector2(knee.x, y), tip]), acc, 1.5, true)
+	var tri := PackedVector2Array([tip, Vector2(panel.position.x + 1.0, y - NOTCH), Vector2(panel.position.x + 1.0, y + NOTCH)])
+	ci.draw_colored_polygon(tri, Color(PANEL_BG, PANEL_BG.a * a))
+	ci.draw_circle(start, 2.5, acc)
 
 
 ## Simple line icons drawn in code (original art, no textures).

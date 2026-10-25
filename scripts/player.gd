@@ -397,8 +397,9 @@ func _physics_process(delta: float) -> void:
 		if appearance != _applied_appearance:
 			model.apply(appearance)
 			_applied_appearance = appearance.duplicate()
-		if _name_label.text != display_name:
-			_name_label.text = display_name
+		var shown_name: String = Net.guild_label(display_name)  # "Name  [TAG]" for guild members (P8)
+		if _name_label.text != shown_name:
+			_name_label.text = shown_name
 		_party_check_t -= delta
 		if _party_check_t <= 0.0:
 			_party_check_t = 0.5

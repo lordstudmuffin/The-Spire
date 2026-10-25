@@ -1032,6 +1032,7 @@ func _ready() -> void:
 	_check(Net.get_realm() != null and Net.get_realm().claim("smoke_probe", 1, "local:tester", "item")["ok"] and Net.get_realm().release("smoke_probe", "local:tester"), "realm DB (P4) opens offline, grants and releases a claim; full suite: scenes/realm_test.tscn")
 
 	await _test_market()
+	await _test_farms_guilds()
 
 	print("== Done: %d failure(s)" % _fails)
 	get_tree().quit(1 if _fails > 0 else 0)
@@ -1195,3 +1196,333 @@ func _test_market() -> void:
 	S.sweep(lr)
 	lr.clock = real_clock
 	_check(str(lr.container(S.stock_id(free_i)).get("owner", "")) == "", "test stall released again")
+
+
+## P8 farm plots (scripts/life/farms.gd) and guilds (scripts/life/guilds.gd)
+## on a throwaway realm with an injected clock, then the offline path and the
+## Floor 1 world (range checks, layout, prompts, screens, chat command).
+func _test_farms_guilds() -> void:
+	print("== Farm plots and guilds (P8)")
+	var F = preload("res://scripts/life/farms.gd")
+	var G = preload("res://scripts/life/guilds.gd")
+	const FDIR := "user://realm_test_farms"
+	var wipe := func():
+		var d := DirAccess.open(FDIR)
+		if d != null:
+			for f in d.get_files():
+				DirAccess.remove_absolute(FDIR + "/" + f)
+	wipe.call()
+	var rdb = Net.RealmDBScript.open("farms", FDIR)
+	var now := [1_800_000_000.0]
+	rdb.clock = func() -> float: return now[0]
+	var keep := func(_r) -> bool: return true
+	var mk := func(n: String, ch: String) -> Dictionary:
+		return Net._new_record(Net.sanitize_character({"name": n}), ch.repeat(32), {})
+	var ann = mk.call("Anna", "a")
+	var ben = mk.call("Benno", "b")
+	var cid = mk.call("Cid", "c")
+	var dot = mk.call("Dora", "d")
+	var ars = Net.RecordState.new(ann)
+	var brs = Net.RecordState.new(ben)
+	var crs = Net.RecordState.new(cid)
+	var drs = Net.RecordState.new(dot)
+	ann["money"] = 300
+	ben["money"] = 30
+	# --- Farms -----------------------------------------------------------------
+	var r: Dictionary = F.run(rdb, brs, ben, 0, {"op": "rent"}, keep)
+	_check(r.has("error") and ben["money"] == 30 and rdb.holders(F.claim_id(0)).is_empty(), "farm: renting refused without the week's Col")
+	r = F.run(rdb, ars, ann, 2, {"op": "rent"}, keep)
+	var ah: String = Net.RealmDBScript.holder_of_record(ann)
+	_check(not r.has("error") and ann["money"] == 300 - F.RENT and rdb.is_holder(F.claim_id(2), ah) and r["view"]["mine"] and r["view"]["beds"].size() == F.BEDS,
+		"farm: rent plot 3 for %d Col: realm claim, four beds" % F.RENT)
+	_check(int(rdb.container(F.SINK).get("col", 0)) == F.RENT and rdb.pending_count() == 0, "farm: rent goes to the field sink through the escrow")
+	_check(F.run(rdb, ars, ann, 5, {"op": "rent"}, keep).has("error") and not rdb.is_holder(F.claim_id(5), ah), "farm: one plot per character")
+	ben["money"] = 300
+	_check(F.run(rdb, brs, ben, 2, {"op": "rent"}, keep).has("error") and ben["money"] == 300, "farm: someone else's plot cannot be rented")
+	_check(F.run(rdb, brs, ben, 2, {"op": "plant", "bed": 0, "crop": "turnip"}, keep).has("error"), "farm: a stranger cannot plant on your plot")
+	_check(F.run(rdb, ars, ann, 2, {"op": "plant", "bed": 0, "crop": "turnip"}, keep).has("error"), "farm: planting without seeds is refused")
+	var m0: int = ann["money"]
+	r = F.run(rdb, ars, ann, -1, {"op": "seeds", "crop": "turnip", "count": 3}, keep)
+	var tprice: int = LifeData.CROPS["turnip"]["seed_price"]
+	_check(not r.has("error") and ann["money"] == m0 - 3 * tprice and int(ann["materials"].get("turnip_seeds", 0)) == 3, "farm: buy 3 turnip seeds at the cart (%d Col)" % (3 * tprice))
+	_check(F.run(rdb, ars, ann, -1, {"op": "seeds", "crop": "turnip", "count": 999}, keep).has("error"), "farm: absurd seed orders refused")
+	_check(F.run(rdb, ars, ann, -1, {"op": "plant", "bed": 0, "crop": "turnip"}, keep).has("error"), "farm: the cart cannot plant")
+	r = F.run(rdb, ars, ann, 2, {"op": "plant", "bed": 0, "crop": "turnip"}, keep)
+	_check(not r.has("error") and int(ann["materials"]["turnip_seeds"]) == 2 and r["view"]["beds"][0]["stage"] == "seeded" and r["view"]["beds"][0]["dry"], "farm: sow a turnip (seed spent, dry soil)")
+	_check(F.run(rdb, ars, ann, 2, {"op": "plant", "bed": 0, "crop": "turnip"}, keep).has("error"), "farm: a sown bed refuses a second seed")
+	var td: Dictionary = LifeData.CROPS["turnip"]
+	now[0] += 300.0
+	_check(F.bed_state(F.meta_of(rdb, 2)["beds"][0], now[0])["progress"] == 0.0, "farm: dry seed does not grow")
+	r = F.run(rdb, ars, ann, 2, {"op": "water", "bed": 0}, keep)
+	_check(not r.has("error") and int(r["watered"]) == 1 and not r["view"]["beds"][0]["dry"], "farm: watering wets the bed")
+	now[0] += float(td["dry"]) * 0.5
+	var st: Dictionary = F.bed_state(F.meta_of(rdb, 2)["beds"][0], now[0])
+	_check(absf(float(st["progress"]) - float(td["dry"]) * 0.5 / float(td["grow"])) < 0.001 and st["stage"] in ["sprout", "growing"], "farm: growth follows the injected clock (%.2f)" % float(st["progress"]))
+	now[0] += float(td["dry"]) * 2.0
+	var st2: Dictionary = F.bed_state(F.meta_of(rdb, 2)["beds"][0], now[0])
+	_check(st2["dry"] and absf(float(st2["progress"]) - float(td["dry"]) / float(td["grow"])) < 0.001, "farm: growth pauses once the soil dries")
+	_check(F.run(rdb, ars, ann, 2, {"op": "harvest", "bed": 0}, keep).has("error"), "farm: an unripe bed cannot be harvested")
+	# Keep it watered until ripe.
+	var guard := 0
+	while F.bed_state(F.meta_of(rdb, 2)["beds"][0], now[0])["stage"] != "ripe" and guard < 20:
+		guard += 1
+		F.run(rdb, ars, ann, 2, {"op": "water", "bed": 0}, keep)
+		now[0] += float(td["dry"]) - 1.0
+	_check(F.bed_state(F.meta_of(rdb, 2)["beds"][0], now[0])["stage"] == "ripe", "farm: a watered turnip ripens (%d waterings)" % guard)
+	now[0] += float(td["wither"]) * 3.0
+	_check(F.bed_state(F.meta_of(rdb, 2)["beds"][0], now[0])["stage"] == "ripe", "farm: a ripe crop waits for its farmer")
+	r = F.run(rdb, ars, ann, 2, {"op": "harvest", "bed": 0}, keep)
+	var got := int(ann["materials"].get("turnip", 0))
+	_check(not r.has("error") and got >= int(td["yield"][0]) and got <= int(td["yield"][1]) and r["view"]["beds"][0]["stage"] == "empty", "farm: harvest %d turnips into provisions" % got)
+	ars.add_material("wild_herb", 1)
+	ars.add_material("turnip", 2)
+	_check(LifeData.can_cook("turnip_soup", ars) and not LifeData.cook("turnip_soup", ars).has("error") and int(ann["materials"].get("turnip_soup", 0)) == 1, "farm: turnips cook into Turnip Soup")
+	# Wither: sow, water once, walk away.
+	F.run(rdb, ars, ann, 2, {"op": "plant", "bed": 1, "crop": "turnip"}, keep)
+	F.run(rdb, ars, ann, 2, {"op": "water", "bed": 1}, keep)
+	now[0] += float(td["wither"]) + 10.0
+	_check(F.bed_state(F.meta_of(rdb, 2)["beds"][1], now[0])["stage"] == "withered", "farm: an unwatered crop withers")
+	_check(F.run(rdb, ars, ann, 2, {"op": "water", "bed": 1}, keep).has("error") and F.run(rdb, ars, ann, 2, {"op": "harvest", "bed": 1}, keep).has("error"), "farm: a withered bed cannot be watered or harvested")
+	r = F.run(rdb, ars, ann, 2, {"op": "clear", "bed": 1}, keep)
+	_check(not r.has("error") and r["was"] == "withered" and r["view"]["beds"][1]["stage"] == "empty", "farm: clear a withered bed")
+	_check(F.sign_state(rdb)[2]["owner"] == "Anna" and F.sign_state(rdb)[0]["owner"] == "", "farm: plot signs name the renter")
+	# Persistence: reopen the realm from disk.
+	F.run(rdb, ars, ann, 2, {"op": "plant", "bed": 3, "crop": "turnip"}, keep)
+	rdb.close()
+	rdb = Net.RealmDBScript.open("farms", FDIR)
+	rdb.clock = func() -> float: return now[0]
+	_check(str(F.meta_of(rdb, 2)["beds"][3]["crop"]) == "turnip" and rdb.is_holder(F.claim_id(2), ah), "farm: plot and beds survive a realm reload")
+	now[0] += F.RENT_SECS * 5.0
+	_check(F.sweep(rdb) == [2] and F.plot_of(rdb, ah) < 0 and str(F.meta_of(rdb, 2)["beds"][3]["crop"]) == "", "farm: rent expiry frees the plot and turns the beds over")
+	_check(not F.run(rdb, ars, ann, 6, {"op": "rent"}, keep).has("error") and F.plot_of(rdb, ah) == 6, "farm: after expiry another plot can be rented")
+	# --- Guilds ----------------------------------------------------------------
+	var board := {"at_board": true, "online": func(_h): return true}
+	ann["money"] = 5000
+	ann["level"] = 9
+	r = G.run(rdb, ars, ann, {"op": "found", "name": "Lantern Wardens", "tag": "LW"}, keep, board)
+	_check(r.has("error") and ann["money"] == 5000 and G.guild_of(rdb, ah) == "", "guild: founding refused below Lv %d" % G.MIN_LEVEL)
+	ann["level"] = 12
+	_check(G.run(rdb, ars, ann, {"op": "found", "name": "Lantern Wardens", "tag": "LW"}, keep, {"at_board": false}).has("error"), "guild: founding needs the notice board")
+	_check(G.run(rdb, ars, ann, {"op": "found", "name": "Lo", "tag": "LW"}, keep, board).has("error"), "guild: a 2-letter name is refused")
+	_check(G.run(rdb, ars, ann, {"op": "found", "name": "Lantern Wardens", "tag": "L"}, keep, board).has("error"), "guild: a 1-letter tag is refused")
+	r = G.run(rdb, ars, ann, {"op": "found", "name": "  Lantern [b]Wardens ", "tag": "lw1"}, keep, board)
+	var gid: String = G.guild_of(rdb, ah)
+	_check(not r.has("error") and gid != "" and ann["money"] == 5000 - G.FEE and G.get_guild(rdb, gid)["name"] == "Lantern bWardens" and G.get_guild(rdb, gid)["tag"] == "LW",
+		"guild: founded for %d Col; name and tag sanitized (%s [%s])" % [G.FEE, str(G.get_guild(rdb, gid).get("name", "")), str(G.get_guild(rdb, gid).get("tag", ""))])
+	_check(G.rank_of(rdb, ah) == "leader" and r["view"]["in_guild"] and r["view"]["my_rank"] == "leader", "guild: the founder leads")
+	_check(G.run(rdb, ars, ann, {"op": "found", "name": "Second Guild", "tag": "SG"}, keep, board).has("error"), "guild: one guild per character (founder)")
+	ben["money"] = 2000
+	ben["level"] = 15
+	_check(G.run(rdb, brs, ben, {"op": "found", "name": "lantern bwardens", "tag": "ZZ"}, keep, board).has("error"), "guild: names are unique (case-insensitive)")
+	_check(G.run(rdb, brs, ben, {"op": "found", "name": "Night Owls", "tag": "LW"}, keep, board).has("error") and ben["money"] == 2000, "guild: tags are unique")
+	var bh: String = Net.RealmDBScript.holder_of_record(ben)
+	var ch: String = Net.RealmDBScript.holder_of_record(cid)
+	var dh: String = Net.RealmDBScript.holder_of_record(dot)
+	_check(G.run(rdb, ars, ann, {"op": "invite"}, keep, {"target": {"holder": "", "name": "Ghost"}}).has("error"), "guild: inviting someone offline is refused")
+	r = G.run(rdb, ars, ann, {"op": "invite"}, keep, {"target": {"holder": bh, "name": "Benno"}})
+	_check(not r.has("error") and G.invites.has(bh), "guild: the leader invites Benno")
+	_check(G.run(rdb, crs, cid, {"op": "accept"}, keep).has("error") and G.guild_of(rdb, ch) == "", "guild: accepting without an invitation is refused")
+	r = G.run(rdb, brs, ben, {"op": "view"}, keep)
+	_check(r["view"]["invite"].get("guild", "") == "Lantern bWardens", "guild: the invitee sees the invitation")
+	r = G.run(rdb, brs, ben, {"op": "accept"}, keep)
+	_check(not r.has("error") and G.guild_of(rdb, bh) == gid and G.rank_of(rdb, bh) == "member" and r["notify"][0]["holders"].has(ah), "guild: Benno accepts and joins as Member")
+	_check(G.run(rdb, brs, ben, {"op": "found", "name": "Night Owls", "tag": "NO"}, keep, board).has("error"), "guild: one guild per character (member)")
+	_check(G.run(rdb, brs, ben, {"op": "invite"}, keep, {"target": {"holder": ch, "name": "Cid"}}).has("error"), "guild: a Member cannot invite")
+	_check(G.run(rdb, brs, ben, {"op": "promote", "name": "Anna"}, keep).has("error"), "guild: a Member cannot promote")
+	G.run(rdb, ars, ann, {"op": "invite"}, keep, {"target": {"holder": ch, "name": "Cid"}})
+	G.run(rdb, crs, cid, {"op": "accept"}, keep)
+	_check(G.run(rdb, brs, ben, {"op": "kick", "name": "Cid"}, keep).has("error") and G.guild_of(rdb, ch) == gid, "guild: a Member cannot remove anyone")
+	r = G.run(rdb, ars, ann, {"op": "promote", "name": "benno"}, keep)
+	_check(not r.has("error") and G.rank_of(rdb, bh) == "officer", "guild: the Leader promotes Benno to Officer")
+	_check(G.run(rdb, brs, ben, {"op": "kick", "name": "Anna"}, keep).has("error") and G.rank_of(rdb, ah) == "leader", "guild: an Officer cannot remove the Leader")
+	_check(G.run(rdb, brs, ben, {"op": "demote", "name": "Cid"}, keep).has("error"), "guild: only the Leader demotes")
+	r = G.run(rdb, brs, ben, {"op": "invite"}, keep, {"target": {"holder": dh, "name": "Dora"}})
+	_check(not r.has("error"), "guild: an Officer may invite")
+	now[0] += G.INVITE_SECS + 5.0
+	_check(G.run(rdb, drs, dot, {"op": "accept"}, keep).has("error") and G.guild_of(rdb, dh) == "", "guild: invitations expire")
+	r = G.run(rdb, brs, ben, {"op": "kick", "name": "Cid"}, keep)
+	_check(not r.has("error") and G.guild_of(rdb, ch) == "" and r["notify"][0]["holders"].has(ch), "guild: an Officer removes a Member (who is told)")
+	# Storage.
+	var sid: String = G.storage_id(gid)
+	var gsword := {"id": "gd_sword", "name": "Guild Blade", "kind": "weapon", "rank": 1, "atk": 9, "def": 0}
+	var gbound := {"id": "gd_bound", "name": "Oathbound", "kind": "weapon", "rank": 3, "atk": 30, "def": 0, "bound": true}
+	ann["inventory"].append(gsword)
+	ann["inventory"].append(gbound)
+	ars.add_material("sunwheat", 6)
+	_check(G.run(rdb, ars, ann, {"op": "deposit", "item": "gd_sword"}, keep, {"at_board": false}).has("error"), "guild: storage only at the notice board")
+	r = G.run(rdb, ars, ann, {"op": "deposit", "item": "gd_sword"}, keep, board)
+	_check(not r.has("error") and Stalls_find(ann["inventory"], "gd_sword") < 0 and r["view"]["storage"]["items"].size() == 1, "guild: deposit a sword (record -> guild storage)")
+	r = G.run(rdb, ars, ann, {"op": "deposit", "item": "gd_bound"}, keep, board)
+	_check(r.has("error") and Stalls_find(ann["inventory"], "gd_bound") >= 0, "guild: a bound item is refused and stays")
+	r = G.run(rdb, ars, ann, {"op": "deposit", "mat": "sunwheat", "count": 4}, keep, board)
+	_check(not r.has("error") and int(ann["materials"]["sunwheat"]) == 2 and rdb.container(sid)["items"].size() == 2, "guild: deposit 4 sunwheat as a stack")
+	var bm: int = ben["money"]
+	r = G.run(rdb, brs, ben, {"op": "deposit", "col": 150}, keep, board)
+	_check(not r.has("error") and ben["money"] == bm - 150 and int(rdb.container(sid)["col"]) == 150, "guild: an Officer deposits 150 Col")
+	_check(G.run(rdb, brs, ben, {"op": "deposit", "col": 999999}, keep, board).has("error"), "guild: depositing more Col than carried is refused")
+	G.run(rdb, ars, ann, {"op": "invite"}, keep, {"target": {"holder": dh, "name": "Dora"}})
+	G.run(rdb, drs, dot, {"op": "accept"}, keep)
+	dot["money"] = 40
+	r = G.run(rdb, drs, dot, {"op": "deposit", "col": 40}, keep, board)
+	_check(not r.has("error") and dot["money"] == 0 and int(rdb.container(sid)["col"]) == 190, "guild: a Member deposits too")
+	_check(G.run(rdb, drs, dot, {"op": "withdraw", "item": "gd_sword"}, keep, board).has("error") and G.run(rdb, drs, dot, {"op": "withdraw", "col": 10}, keep, board).has("error") and dot["money"] == 0,
+		"guild: a Member cannot take from storage")
+	var stack_id := ""
+	for it in rdb.container(sid)["items"]:
+		if str(it.get("kind", "")) == "stack":
+			stack_id = str(it["id"])
+	r = G.run(rdb, brs, ben, {"op": "withdraw", "item": stack_id}, keep, board)
+	_check(not r.has("error") and int(ben["materials"].get("sunwheat", 0)) == 4 and Stalls_find(ben["inventory"], stack_id) < 0, "guild: an Officer takes the sunwheat (unpacked into materials)")
+	bm = ben["money"]
+	r = G.run(rdb, brs, ben, {"op": "withdraw", "col": 90}, keep, board)
+	_check(not r.has("error") and ben["money"] == bm + 90 and int(rdb.container(sid)["col"]) == 100 and rdb.pending_count() == 0, "guild: an Officer takes 90 Col; escrow settled")
+	_check(G.run(rdb, ars, ann, {"op": "disband"}, keep).has("error") and G.guild_of(rdb, ah) == gid, "guild: disband refused while the storage holds goods")
+	_check(G.run(rdb, brs, ben, {"op": "disband"}, keep).has("error"), "guild: only the Leader disbands")
+	# Leaving and leadership.
+	r = G.run(rdb, drs, dot, {"op": "leave"}, keep)
+	_check(not r.has("error") and G.guild_of(rdb, dh) == "", "guild: a Member leaves")
+	r = G.run(rdb, ars, ann, {"op": "leave"}, keep)
+	_check(not r.has("error") and G.guild_of(rdb, ah) == "" and G.rank_of(rdb, bh) == "leader", "guild: the Leader leaves; the Officer inherits the guild")
+	# Reload: membership is durable realm data.
+	rdb.close()
+	rdb = Net.RealmDBScript.open("farms", FDIR)
+	rdb.clock = func() -> float: return now[0]
+	_check(G.guild_of(rdb, bh) == gid and G.rank_of(rdb, bh) == "leader" and G.get_guild(rdb, gid)["members"].size() == 1, "guild: membership survives a realm reload (journal op)")
+	G.run(rdb, brs, ben, {"op": "withdraw", "item": "gd_sword"}, keep, board)
+	G.run(rdb, brs, ben, {"op": "withdraw", "col": 100}, keep, board)
+	r = G.run(rdb, brs, ben, {"op": "leave"}, keep)
+	_check(not r.has("error") and G.guild_of(rdb, bh) == "" and G.get_guild(rdb, gid).is_empty() and rdb.container(sid).is_empty(), "guild: the last member's leave disbands an emptied guild")
+	r = G.run(rdb, crs, cid, {"op": "found", "name": "Lantern bWardens", "tag": "LW"}, keep, board)
+	_check(r.has("error"), "guild: Cid (Lv 1) still cannot found")
+	cid["level"] = 10
+	cid["money"] = 1000
+	r = G.run(rdb, crs, cid, {"op": "found", "name": "Lantern bWardens", "tag": "LW"}, keep, board)
+	_check(not r.has("error") and cid["money"] == 0, "guild: a disbanded name and tag are free again")
+	var gid2: String = G.guild_of(rdb, ch)
+	r = G.run(rdb, crs, cid, {"op": "disband"}, keep)
+	_check(not r.has("error") and G.get_guild(rdb, gid2).is_empty(), "guild: the Leader disbands an empty guild")
+	_check(G.clean_tag("a-b c") == "ABC" and G.name_error(G.clean_name("  ")) != "" and G.name_error("Twenty One Characters") != "", "guild: tag/name sanitizers")
+	rdb.close()
+	wipe.call()
+	G.invites.clear()
+	# --- Offline: the same cores on GameState and the local realm ---------------
+	F.autosave_offline = false
+	G.autosave_offline = false
+	var lr = Net.get_realm()
+	var real_clock: Callable = lr.clock
+	var lnow := [Time.get_unix_time_from_system()]
+	lr.clock = func() -> float: return lnow[0]
+	var lh := Net.local_holder()
+	var free_plot := -1
+	for i in F.COUNT:
+		if F.plot_of(lr, lh) < 0 and str(lr.container(F.claim_id(i)).get("owner", "")) == "":
+			free_plot = i
+			break
+	GameState.money = 2000
+	r = F.run_local(free_plot, {"op": "rent"})
+	_check(not r.has("error") and GameState.money == 2000 - F.RENT and F.plot_of(lr, lh) == free_plot, "offline: rent a plot on the local realm")
+	r = F.run_local(-1, {"op": "seeds", "crop": "sunwheat", "count": 2})
+	_check(not r.has("error") and GameState.money == 2000 - F.RENT - 2 * int(LifeData.CROPS["sunwheat"]["seed_price"]) and int(GameState.materials.get("sunwheat_seeds", 0)) >= 2, "offline: buy seeds; Col comes off GameState")
+	r = F.run_local(free_plot, {"op": "plant", "bed": 2, "crop": "sunwheat"})
+	F.run_local(free_plot, {"op": "water", "bed": -1})
+	lnow[0] += float(LifeData.CROPS["sunwheat"]["grow"]) * 0.5
+	F.run_local(free_plot, {"op": "water", "bed": -1})
+	lnow[0] += float(LifeData.CROPS["sunwheat"]["dry"])
+	var sw0 := int(GameState.materials.get("sunwheat", 0))
+	r = F.run_local(free_plot, {"op": "harvest", "bed": -1})
+	_check(not r.has("error") and int(GameState.materials.get("sunwheat", 0)) > sw0, "offline: grow and harvest sunwheat into GameState")
+	var lvl0 := GameState.level
+	GameState.level = 10
+	GameState.money = 1500
+	var gname := "Smoke Guild %d" % (randi() % 9000 + 1000)
+	r = G.run_local({"op": "found", "name": gname, "tag": "SMK"}, true)
+	if r.has("error") and "tag" in str(r["error"]):
+		r = G.run_local({"op": "found", "name": gname, "tag": "SMQ"}, true)
+	_check(not r.has("error") and GameState.money == 500 and G.guild_of(lr, lh) != "", "offline: found a guild at the board (%s)" % str(r.get("error", "ok")))
+	_check(G.run_local({"op": "invite", "name": "Nobody"}, true).has("error"), "offline: nobody to invite")
+	await get_tree().process_frame
+	# --- Floor 1 world ---------------------------------------------------------
+	var w: Node3D = null
+	for c in get_children():
+		if c.has_method("srv_action") and c.get("_farms") != null:
+			w = c
+	_check(w != null and w._farms.plots.size() == F.COUNT and w._guilds != null, "world: eight farm plots and the guild notice board on Floor 1")
+	if w != null:
+		var lay: Array = F.layout(w.HOLLOWBROOK)
+		var clear := 99.0
+		var grass := true
+		var hb: Vector3 = w.HOLLOWBROOK
+		var houses: Array = []
+		for k in 5:
+			var a := TAU * k / 5.0 + 0.35
+			houses.append(hb + Vector3(cos(a), 0, sin(a)) * 10.5)
+		var market: Vector3 = preload("res://scripts/life/stalls.gd").market_center(hb)
+		var herbs: Array = w._herbs.positions if w._herbs else []
+		for d in lay:
+			var p: Vector3 = d["pos"]
+			for q in houses + [PlayerHome.HOME_POS, market, Vector3(WorldArt.POND.x, 0, WorldArt.POND.y), hb]:
+				clear = minf(clear, p.distance_to(q))
+			for q in herbs:
+				clear = minf(clear, p.distance_to(q) + 3.0)
+			var gk := WorldArt.ground_kind(Vector2(p.x, p.z))
+			grass = grass and (gk == WorldArt.Ground.GRASS or gk == WorldArt.Ground.DIRT)
+		_check(clear > 6.0 and grass, "world: plots keep clear of houses, cottage, market, pond, herbs and roads (%.1f m)" % clear)
+		var fp: Dictionary = lay[free_plot]
+		w.player.global_position = fp["front"]
+		var near: Array = w._nearest_interactable()
+		_check(near[0] is Dictionary and int(near[0].get("plot", -9)) == free_plot, "world: interact prompt on your plot (%s)" % str(near[1]))
+		w._farms.open(free_plot, w.hud)
+		_check(w.hud.life.farm_open() and w.hud.any_menu_open() and bool(w._farms.screen.view.get("mine", false)), "world: farm screen opens on your plot")
+		w.hud.close_screens()
+		_check(not w.hud.life.farm_open(), "world: close_screens hides the farm screen")
+		w.player.global_position = w._farms.cart_pos
+		near = w._nearest_interactable()
+		_check(near[0] is Dictionary and int(near[0].get("plot", -9)) == -1, "world: seed cart prompt")
+		var frec := Net._new_record(Net.sanitize_character({"name": "Fenna"}), "e".repeat(32), {})
+		frec["money"] = 200
+		var frs = Net.RecordState.new(frec)
+		var other: int = (free_plot + 1) % F.COUNT
+		_check(w.srv_action(4848, frs, "farm", {"op": "rent", "plot": other}, Vector3(80, 0, -80)).has("error") and frec["money"] == 200, "world: server refuses a plot action from across the island")
+		r = w.srv_action(4848, frs, "farm", {"op": "rent", "plot": other}, lay[other]["front"])
+		_check(not r.has("error") and str(w._farms.signs[other]["owner"]) == "Fenna", "world: server rents at the plot; the sign names the renter")
+		_check(w.srv_action(4848, frs, "farm_signs", {}, Vector3(80, 0, -80)).get("signs", []).size() == F.COUNT, "world: farm sign poll answers from anywhere")
+		var grec := Net._new_record(Net.sanitize_character({"name": "Galen"}), "f".repeat(32), {})
+		grec["money"] = 3000
+		grec["level"] = 20
+		var grs = Net.RecordState.new(grec)
+		_check(w.srv_action(4949, grs, "guild", {"op": "found", "name": "Far Away Guild", "tag": "FAR"}, Vector3(80, 0, -80)).has("error") and grec["money"] == 3000, "world: founding away from the board is refused")
+		r = w.srv_action(4949, grs, "guild", {"op": "found", "name": "Board Side Guild", "tag": "BSG"}, w._guilds.board_pos)
+		_check(not r.has("error") and grec["money"] == 3000 - G.FEE, "world: founding at the notice board")
+		w.player.global_position = w._guilds.board_front()
+		near = w._nearest_interactable()
+		_check(near[0] is Dictionary and near[0].has("guild_board"), "world: notice board prompt (%s)" % str(near[1]))
+		w._guilds.open(w.hud)
+		_check(w.hud.life.guild_open() and bool(w._guilds.screen.view.get("in_guild", false)) and w._guilds.screen.view["guild"]["tag"] in ["SMK", "SMQ"], "world: guild panel shows your guild")
+		w._guilds.screen._set_tab("storage")
+		w._guilds.screen._set_tab("roster")
+		w.hud.close_screens()
+		_check(not w.hud.life.guild_open(), "world: close_screens hides the guild panel")
+		w._guilds._tags_t = 0.0
+		w._guilds._process(0.1)
+		_check(Net.guild_label(str(GameState.character.get("name", ""))).ends_with("]"), "world: your guild tag joins your name label (%s)" % Net.guild_label(str(GameState.character.get("name", ""))))
+		var sys: Array = []
+		_check(G.chat_command("/g hello guild", w.hud, func(m): sys.append(m)) and sys.is_empty(), "chat: /g sends guild chat")
+		_check(not G.chat_command("/p hi", w.hud, func(m): sys.append(m)), "chat: other commands pass through")
+		w.hud.add_chat("Tester", "for the guild", "guild")
+		_check("[Guild]" in w.hud._chat_log.text, "chat: guild channel line in the log")
+		_check(G.chat_command("/guild", w.hud, func(m): sys.append(m)) and w.hud.life.guild_open(), "chat: /guild opens the panel")
+		w.hud.close_screens()
+		# Clean the world test's realm rows.
+		G.run(Net.get_realm(), grs, grec, {"op": "disband"}, func(_r): return true)
+		lnow[0] += F.RENT_SECS * 6.0
+		F.sweep(lr)
+	G.run_local({"op": "disband"}, true)
+	_check(G.guild_of(lr, lh) == "" and F.plot_of(lr, lh) < 0, "offline: test guild disbanded and plot released")
+	GameState.level = lvl0
+	lr.clock = real_clock
+	F.autosave_offline = true
+	G.autosave_offline = true
+
+
+func Stalls_find(items: Array, id: String) -> int:
+	return preload("res://scripts/life/stalls.gd")._find(items, id)

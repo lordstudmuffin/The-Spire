@@ -431,6 +431,9 @@ func net_swing() -> void:
 	if _dead or _rig == null:
 		return
 	var now := Time.get_ticks_msec() / 1000.0
+	var fx := VFX.get_for(self)
+	if fx and fx.has_method("windup_glint"):
+		fx.call("windup_glint", self, WINDUP_BOSS if is_boss else WINDUP)
 	if _anim != null:
 		_anim.speed_scale = 1.0
 		var clip_len := _set_anim("attack", false)

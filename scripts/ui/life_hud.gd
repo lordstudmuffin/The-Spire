@@ -21,6 +21,13 @@ var _store: StorageScreen
 const StallScreenScript := preload("res://scripts/ui/stall_screen.gd")
 var _stall_panel: PanelContainer
 var _stall
+## Farm plots and guilds (P8, scripts/ui/farm_screen.gd, guild_screen.gd).
+const FarmScreenScript := preload("res://scripts/ui/farm_screen.gd")
+const GuildScreenScript := preload("res://scripts/ui/guild_screen.gd")
+var _farm_panel: PanelContainer
+var _farm
+var _guild_panel: PanelContainer
+var _guild
 var _tick := 0.0
 
 
@@ -54,6 +61,12 @@ func _build() -> void:
 	_stall_panel = _hud._modal(_root, 0)
 	_stall = StallScreenScript.build()
 	_hud._modal_box(_stall_panel).add_child(_stall)
+	_farm_panel = _hud._modal(_root, 0)
+	_farm = FarmScreenScript.build()
+	_hud._modal_box(_farm_panel).add_child(_farm)
+	_guild_panel = _hud._modal(_root, 0)
+	_guild = GuildScreenScript.build()
+	_hud._modal_box(_guild_panel).add_child(_guild)
 	GameState.buffs_changed.connect(_refresh_buffs)
 	GameState.life_skill_up.connect(func(skill, level):
 		_hud.toast("%s Lv %d" % [skill.capitalize(), level], "", "Skill up", UITheme.CYAN)
@@ -136,7 +149,8 @@ func _process(delta: float) -> void:
 # --- Screens --------------------------------------------------------------------
 
 func any_open() -> bool:
-	return _cook_panel.visible or _shop_panel.visible or _store_panel.visible or (_stall_panel != null and _stall_panel.visible)
+	return _cook_panel.visible or _shop_panel.visible or _store_panel.visible or (_stall_panel != null and _stall_panel.visible) \
+		or (_farm_panel != null and _farm_panel.visible) or (_guild_panel != null and _guild_panel.visible)
 
 
 func cooking_open() -> bool:
@@ -149,6 +163,10 @@ func hide_all() -> void:
 	_store_panel.hide()
 	if _stall_panel:
 		_stall_panel.hide()
+	if _farm_panel:
+		_farm_panel.hide()
+	if _guild_panel:
+		_guild_panel.hide()
 
 
 func _open(panel: PanelContainer) -> void:
@@ -194,6 +212,10 @@ func refresh() -> void:
 		_store.refresh()
 	if _stall_panel and _stall_panel.visible:
 		_stall.refresh()
+	if _farm_panel and _farm_panel.visible:
+		_farm.refresh()
+	if _guild_panel and _guild_panel.visible:
+		_guild.refresh()
 
 
 ## Opens the market stall screen on stall `i` of the world's MarketStalls
@@ -206,6 +228,28 @@ func open_stall(stalls: Node, i: int):
 
 func stall_open() -> bool:
 	return _stall_panel != null and _stall_panel.visible
+
+
+## Opens the farm screen on plot `i` (-1 = the seed cart) of the FarmField node.
+func open_farm(farms: Node, i: int):
+	_farm.open(farms, i)
+	_open(_farm_panel)
+	return _farm
+
+
+func farm_open() -> bool:
+	return _farm_panel != null and _farm_panel.visible
+
+
+## Opens the guild panel (notice board or /guild).
+func open_guild(guilds: Node):
+	_guild.open(guilds)
+	_open(_guild_panel)
+	return _guild
+
+
+func guild_open() -> bool:
+	return _guild_panel != null and _guild_panel.visible
 
 
 func _on_cooked(res: Dictionary) -> void:

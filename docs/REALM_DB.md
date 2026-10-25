@@ -78,6 +78,8 @@ Introspection: `summary()` (for a Legends board), `log` (last 200 realm log line
 - Limited item (P6): `rs.grant_limited_item("ember_cloak", 3, item)`; announce when `last`.
 - Stall (P7): `ensure_container("stall:3", holder, "stall")` and `("till:3", holder, "till")`; stocking = `srv_transact(peer, [{"item": id, "from": "record", "to": "stall:3"}])`; a sale by the keeper = `transact(buyer_rec, [{"col": price, "from": "record", "to": "till:3"}, {"item": id, "from": "stall:3", "to": "record"}])` plus a 5 % tax move `{"col": tax, "from": "till:3", "to": "realm:tax"}` in the same call; rent = a `claim("stall:3", 1, holder, "stall")` renewed by `touch`.
 - Guild storage (P8): one container per guild; membership is ordinary realm data you can add as a new top-level key with its own journal ops (`_apply` match) if the claim model does not fit.
+  Built 2026-10-25 (scripts/life/guilds.gd): top-level key `guilds: {gid: {name, tag, created, members: {holder: {name, rank, since}}}}`, created lazily by the journal op `"guild"` (`{"id", "g": whole guild}` or `{"id", "remove": true}`), written only through `rdb.commit("guild", ...)`. Storage container `guild:<gid>` (kind "guild"); fee and rent sinks `realm:guilds`, `realm:farms`.
+- Farm plots (P8, scripts/life/farms.gd): claim `plot:hb<i>` (cap 1, kind "plot") plus a container of the same id whose `meta` holds `owner_name`, `rent_until` and four beds `{crop, grown, at, watered, planted}`; growth is computed from those timestamps (LifeData.CROPS), never ticked.
 
 ## Known limits / left for Opus
 - No HUD display of announcements (`realm_announce(text)` on a "hud" group node, or connect `Net.realm_announced`).

@@ -1679,12 +1679,16 @@ var _chat_lines: Array = []
 var _chat_hide_tween: Tween
 
 
-## One chat line. `channel`: say (white), party (cyan), whisper /
-## whisper_to (magenta), system (gold). Names are [url] links that invite.
+## Guild chat channel colour (P8, "/g text").
+const GUILD_CHAT_COLOR := Color("9be38b")
+
+
+## One chat line. `channel`: say (white), party (cyan), guild (green),
+## whisper / whisper_to (magenta), system (gold). Names are [url] links that invite.
 func add_chat(sender_name: String, text: String, channel := "say") -> void:
 	if channel != "system" and Social.is_ignored(sender_name):
 		return
-	var col: Color = Social.CHAT_COLORS.get(channel, UITheme.PARCH)
+	var col: Color = Social.CHAT_COLORS.get(channel, GUILD_CHAT_COLOR if channel == "guild" else UITheme.PARCH)
 	var hex := col.to_html(false)
 	var who := _bb(sender_name)
 	var body := _bb(text)
@@ -1694,6 +1698,8 @@ func add_chat(sender_name: String, text: String, channel := "say") -> void:
 			line = "[color=#%s]%s[/color]" % [hex, body]
 		"party":
 			line = "[color=#%s][Party] [url=%s][b]%s[/b][/url]: %s[/color]" % [hex, who, who, body]
+		"guild":
+			line = "[color=#%s][Guild] [url=%s][b]%s[/b][/url]: %s[/color]" % [hex, who, who, body]
 		"whisper":
 			line = "[color=#%s][url=%s][b]%s[/b][/url] whispers: %s[/color]" % [hex, who, who, body]
 		"whisper_to":
@@ -1755,7 +1761,9 @@ static func _bb(t: String) -> String:
 
 func _on_chat_submitted(text: String) -> void:
 	var t := text.strip_edges()
-	if t != "":
+	if t != "" and preload("res://scripts/life/guilds.gd").chat_command(t, self, func(msg): add_chat("", msg, "system")):
+		pass  # "/g text" guild chat and "/guild ..." (P8)
+	elif t != "":
 		Social.handle(t, send_chat if send_chat.is_valid() else func(_x): pass, func(msg): add_chat("", msg, "system"))
 	close_chat()
 

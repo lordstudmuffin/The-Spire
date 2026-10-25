@@ -1494,6 +1494,83 @@ func net_party_chat(text: String) -> void:
 		_send(m, net_chat, ["party", srv_name_of(peer), text])
 
 
+# --- Guilds (P8, scripts/life/guilds.gd) -------------------------------------
+## Client: lower-case character name -> guild tag, pushed by the server (the
+## Guilds node rebuilds it from the realm every few seconds); offline and on
+## the host the node writes it directly. Player name labels read guild_label().
+var guild_tags := {}
+const RATE_GUILD_CHAT_MS := 500
+
+
+func guild_label(name: String) -> String:
+	var t := str(guild_tags.get(name.to_lower(), ""))
+	return name if t == "" else "%s  [%s]" % [name, t]
+
+
+## Server: send the tag map to every client.
+func broadcast_guild_tags(tags: Dictionary) -> void:
+	if online and multiplayer.multiplayer_peer != null and multiplayer.is_server():
+		net_guild_tags.rpc(tags)
+
+
+@rpc("authority", "call_remote", "reliable")
+func net_guild_tags(tags: Dictionary) -> void:
+	if not _from_server():
+		return
+	var clean := {}
+	for k in tags:
+		if clean.size() >= MAX_PLAYERS * 2:
+			break
+		var t := ""
+		for ch in str(tags[k]).to_upper():
+			if ch >= "A" and ch <= "Z" and t.length() < 4:
+				t += ch
+		if t != "":
+			clean[sanitize_name(str(k)).to_lower()] = t
+	guild_tags = clean
+
+
+func request_guild_chat(text: String) -> void:
+	text = sanitize_text(text)
+	if text == "":
+		return
+	if not online:
+		var rdb = get_realm()
+		var G = load("res://scripts/life/guilds.gd")
+		if rdb == null or G.guild_of(rdb, local_holder()) == "":
+			_system("You are not in a guild.")
+		else:
+			chat_received.emit(my_name(), text, "guild")
+		return
+	_request(net_guild_chat, [text], "You are not in a guild.")
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func net_guild_chat(text: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer := _sender()
+	if not _rate_ok(peer, "guild_chat", RATE_GUILD_CHAT_MS):
+		return
+	text = sanitize_text(text)
+	var rdb = get_realm()
+	var holder := srv_holder(peer)
+	var G = load("res://scripts/life/guilds.gd")
+	var mates: Array = G.mates(rdb, holder) if rdb != null and holder != "" else []
+	if mates.is_empty():
+		_send(peer, net_system, ["You are not in a guild."])
+		return
+	if text == "":
+		return
+	var sender := srv_name_of(peer) if srv_records.has(peer) else my_name()
+	for p in srv_records:
+		if mates.has(RealmDBScript.holder_of_record(srv_records[p])):
+			_send(p, net_chat, ["guild", sender, text])
+	# Listen host: its own character has no record; it hears its guild too.
+	if not dedicated and mates.has(local_holder()):
+		chat_received.emit(sender, text, "guild")
+
+
 @rpc("any_peer", "call_remote", "reliable")
 func net_who() -> void:
 	if not multiplayer.is_server():
@@ -1595,7 +1672,7 @@ func net_party_state(states: Array) -> void:
 func net_chat(channel: String, sender_name: String, text: String) -> void:
 	if not _from_server():
 		return
-	if not (channel in ["party", "whisper", "whisper_to"]):
+	if not (channel in ["party", "whisper", "whisper_to", "guild"]):
 		return
 	chat_received.emit(sanitize_name(sender_name), sanitize_text(text), channel)
 

@@ -37,7 +37,11 @@ const MATERIAL_NAMES := {"iron_ore": "Iron Ore", "beast_hide": "Beast Hide", "sp
 	# under Provisions, not in the smithing materials strip).
 	"minnow": "Minnow", "river_trout": "River Trout", "mire_eel": "Mire Eel", "moonscale_koi": "Moonscale Koi",
 	"wild_herb": "Wild Herb", "willow_rod": "Willow Rod",
-	"grilled_trout": "Grilled Trout", "boar_stew": "Boar Stew", "eel_pie": "Eel Pie", "koi_sashimi": "Koi Sashimi"}
+	"grilled_trout": "Grilled Trout", "boar_stew": "Boar Stew", "eel_pie": "Eel Pie", "koi_sashimi": "Koi Sashimi",
+	# Farm plots (P8): seeds, crops and the dishes they cook into.
+	"turnip_seeds": "Turnip Seeds", "sunwheat_seeds": "Sunwheat Seeds", "honeymelon_seeds": "Honeymelon Seeds",
+	"turnip": "Turnip", "sunwheat": "Sunwheat", "honeymelon": "Honeymelon",
+	"turnip_soup": "Turnip Soup", "harvest_bread": "Harvest Bread", "melon_tart": "Honeymelon Tart"}
 ## Floor layout data the world and the player need before the scene exists:
 ## where a character arrives on each floor (also the respawn point).
 const FLOOR_SPAWNS := {1: Vector3(0, 1, 6), 2: Vector3(0, 1, 37)}

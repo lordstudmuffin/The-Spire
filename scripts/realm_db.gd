@@ -353,6 +353,15 @@ func _apply(op: String, a: Dictionary, t: float) -> void:
 			for p in data["pending"].keys():
 				if str(data["pending"][p].get("holder", "")) == hk:
 					data["pending"].erase(p)
+		"guild":
+			# P8 guilds (scripts/life/guilds.gd): a top-level "guilds" key made on
+			# first use. a: {"id", "g": the whole guild dict} or {"id", "remove": true}.
+			if not (data.get("guilds") is Dictionary):
+				data["guilds"] = {}
+			if bool(a.get("remove", false)):
+				data["guilds"].erase(str(a["id"]))
+			elif a.get("g") is Dictionary:
+				data["guilds"][str(a["id"])] = (a["g"] as Dictionary).duplicate(true)
 		_:
 			_log("unknown journal op '%s' ignored" % op)
 

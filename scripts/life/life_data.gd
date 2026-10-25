@@ -40,6 +40,35 @@ const RECIPES := {
 	"koi_sashimi": {"name": "Koi Sashimi", "cost": {"moonscale_koi": 1}, "xp": 60, "level": 3,
 		"buff": {"regen": 3.0, "atk": 0.12, "speed": 0.12, "dur": 180.0}, "color": "ffd27a",
 		"desc": "Moonscale Koi, sliced thin. Every blessing at once."},
+	# Field crops (P8 farm plots, scripts/life/farms.gd).
+	"turnip_soup": {"name": "Turnip Soup", "cost": {"turnip": 2, "wild_herb": 1}, "xp": 14, "level": 1,
+		"buff": {"regen": 2.5, "atk": 0.0, "speed": 0.0, "dur": 120.0}, "color": "e9d8c4",
+		"desc": "Hollowbrook turnips simmered soft with a herb. Warms you through and mends slowly."},
+	"harvest_bread": {"name": "Harvest Bread", "cost": {"sunwheat": 3}, "xp": 18, "level": 1,
+		"buff": {"regen": 1.0, "atk": 0.0, "speed": 0.08, "dur": 150.0}, "color": "e8b860",
+		"desc": "A round loaf of sunwheat baked in the coals. Light on the feet (+8% speed)."},
+	"melon_tart": {"name": "Honeymelon Tart", "cost": {"honeymelon": 1, "sunwheat": 2}, "xp": 28, "level": 2,
+		"buff": {"regen": 1.5, "atk": 0.08, "speed": 0.06, "dur": 160.0}, "color": "f2a65a",
+		"desc": "Sweet melon in a sunwheat crust. A little of everything (+8% attack, +6% speed)."},
+}
+## Farm crops (P8): the one table for seeds, growth and yields. Times are
+## real seconds: `grow` = watered time until ripe (growth pauses while the
+## soil is dry), `dry` = how long one watering keeps the soil wet, `wither`
+## = seconds without water before an unripe crop dies. Seeds are bought at
+## the field's seed cart; crops and seeds stack in GameState.materials.
+const CROPS := {
+	"turnip": {"name": "Turnip", "seed": "turnip_seeds", "seed_name": "Turnip Seeds", "seed_price": 6,
+		"grow": 900.0, "dry": 600.0, "wither": 3 * 3600.0, "yield": [2, 3], "color": "e9d8c4",
+		"desc": "A fat white root from the Hollowbrook fields. Soup, mostly.",
+		"seed_desc": "A pouch of turnip seed. Ripens in about 15 minutes of wet soil."},
+	"sunwheat": {"name": "Sunwheat", "seed": "sunwheat_seeds", "seed_name": "Sunwheat Seeds", "seed_price": 10,
+		"grow": 1800.0, "dry": 900.0, "wither": 4 * 3600.0, "yield": [3, 4], "color": "e8c25a",
+		"desc": "Golden grain that loves the floor's long afternoons. Bakes into bread.",
+		"seed_desc": "Sunwheat seed. Ripens in about 30 minutes of wet soil."},
+	"honeymelon": {"name": "Honeymelon", "seed": "honeymelon_seeds", "seed_name": "Honeymelon Seeds", "seed_price": 18,
+		"grow": 3600.0, "dry": 1200.0, "wither": 6 * 3600.0, "yield": [1, 2], "color": "f2a65a",
+		"desc": "A heavy, sweet melon. Worth the wait, and the tarts.",
+		"seed_desc": "Honeymelon seed. Ripens in about an hour of wet soil."},
 }
 ## Food ids are the recipe ids (they stack in GameState.materials).
 const GATHER := {"wild_herb": {"name": "Wild Herb", "color": "8fd36a", "desc": "Grows in clumps on the open grass. Cooks love it."}}
@@ -69,20 +98,32 @@ static func is_food(id: String) -> bool:
 ## True for anything the inventory screen shows under Provisions instead of
 ## the smithing materials strip (fish, herbs, food, the rod).
 static func is_life_item(id: String) -> bool:
-	return FISH.has(id) or RECIPES.has(id) or GATHER.has(id) or TOOLS.has(id)
+	return FISH.has(id) or RECIPES.has(id) or GATHER.has(id) or TOOLS.has(id) or CROPS.has(id) or seed_crop(id) != ""
+
+
+## The crop a seed id grows ("" when `id` is no seed).
+static func seed_crop(id: String) -> String:
+	for c in CROPS:
+		if CROPS[c]["seed"] == id:
+			return c
+	return ""
 
 
 static func item_color(id: String) -> Color:
-	for t in [FISH, RECIPES, GATHER, TOOLS]:
+	for t in [FISH, RECIPES, GATHER, TOOLS, CROPS]:
 		if t.has(id):
 			return Color(t[id]["color"])
+	if seed_crop(id) != "":
+		return Color("b89a6a")
 	return Color("f0c060")
 
 
 static func item_desc(id: String) -> String:
-	for t in [FISH, RECIPES, GATHER, TOOLS]:
+	for t in [FISH, RECIPES, GATHER, TOOLS, CROPS]:
 		if t.has(id):
 			return t[id]["desc"]
+	if seed_crop(id) != "":
+		return CROPS[seed_crop(id)]["seed_desc"]
 	return ""
 
 
