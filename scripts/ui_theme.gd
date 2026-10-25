@@ -522,7 +522,22 @@ class ActionCap extends PanelContainer:
 
 	func refresh() -> void:
 		var t: String = InputSetup.hint(action)
+		# Unique arts have no pad button of their own: they are the target
+		# trigger held plus the matching Sword Art button ("LT+RB").
+		var chord := InputSetup.using_gamepad() and action in ["skill_4", "skill_5", "skill_6"]
+		if chord:
+			t = "%s+%s" % [InputSetup.hint("target"), InputSetup.hint("skill_%d" % (int(action.substr(6)) - 3))]
 		_label.text = t
+		if chord:
+			var cb := UITheme.box(Color(UITheme.GOLD, 0.95), Color(1, 1, 1, 0.5), 999, 1)
+			cb.set_content_margin_all(2)
+			cb.content_margin_left = 7
+			cb.content_margin_right = 7
+			add_theme_stylebox_override("panel", cb)
+			_label.add_theme_color_override("font_color", UITheme.NAVY)
+			_label.add_theme_font_size_override("font_size", 12)
+			return
+		_label.add_theme_font_size_override("font_size", 14)
 		if InputSetup.using_gamepad():
 			var fc: Color = InputSetup.face_color(t)
 			var sb: StyleBoxFlat
