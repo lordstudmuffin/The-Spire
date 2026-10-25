@@ -54,7 +54,7 @@ func _ready() -> void:
 	# Remap: save / load round trip through user://settings.json.
 	var saved_bindings: Dictionary = Settings.data["bindings"].duplicate(true)
 	var f_key := InputEventKey.new()
-	f_key.physical_keycode = KEY_F
+	f_key.physical_keycode = KEY_K
 	var displaced := InputSetup.rebind("jump", f_key)
 	_check(displaced == "" and InputMap.event_is_action(f_key, "jump") and InputSetup.events("jump", "kb").size() == 1, "rebind jump to F replaces the key binding")
 	_check(not InputSetup.events("jump", "pad").is_empty(), "the gamepad column survives a keyboard rebind")
@@ -366,7 +366,7 @@ func _ready() -> void:
 	await get_tree().process_frame
 	_check(world.player != null and world.hud != null, "world spawns player and hud")
 	_check(get_tree().get_nodes_in_group("enemies").size() >= 22, "mobs spawned (%d)" % get_tree().get_nodes_in_group("enemies").size())
-	_check(get_tree().get_nodes_in_group("npcs").size() == 11, "11 NPCs spawned (incl. Old Tam, Trader Pell and the Hollowbrook chain)")
+	_check(get_tree().get_nodes_in_group("npcs").size() == 13, "13 NPCs spawned (incl. Old Tam, Trader Pell, the Hollowbrook chain and the limited-quest givers)")
 	_check(get_tree().get_nodes_in_group("ore_veins").size() == 10, "10 ore veins")
 
 	# Smith: with 5 crafts done and no trial yet, first talk should offer the trial.
@@ -715,6 +715,160 @@ func _ready() -> void:
 	hud.close_screens()
 	_check(InputMap.has_action("nearby") and hud.toggle_nearby() and hud.any_menu_open(), "Nearby panel (O) opens")
 	hud.close_screens()
+	# Ring menu: opens on pause, panels slide out, logout asks first, closes.
+	hud._toggle_pause()
+	_check(hud.is_paused() and hud._ring.is_open and hud._ring.visible, "ring menu opens on pause")
+	var ring_nodes := hud._ring.get_child_count()
+	for i in RingMenu.ENTRIES.size():
+		if hud._ring._panel_kind(RingMenu.ENTRIES[i][0]):
+			hud._ring.activate(i)
+			_check(hud._ring.current_panel == RingMenu.ENTRIES[i][0] and hud._ring._panel_body.get_child_count() > 0, "ring panel %s fills" % RingMenu.ENTRIES[i][0])
+	hud._ring._confirm_logout()
+	_check(hud._ring._sub.visible, "log out asks for confirmation in a second panel")
+	_check(hud._ring.back() and not hud._ring._sub.visible, "back closes the confirmation first")
+	_check(hud._ring.get_child_count() == ring_nodes, "ring panels reuse their nodes")
+	hud._toggle_pause()
+	_check(not hud.is_paused() and not hud._ring.is_open, "ring menu closes on pause again")
+	hud._toggle_pause()
+	hud._ring.activate(4)  # Map: leaves the menu and opens the full screen.
+	_check(not hud.is_paused() and hud._map_panel.visible, "ring Map entry opens the map screen")
+	hud.close_screens()
+	# Unique skill: hidden reaction stat -> realm claim (one holder) -> casts.
+	var rdb = Net.get_realm()
+	var me_key: String = Net.local_holder()
+	rdb.release(UniqueSkills.TWIN_FANG, me_key)
+	GameState.unique_skill = ""
+	GameState.hidden_stats = {"reaction": UniqueSkills.SKILLS[UniqueSkills.TWIN_FANG]["threshold"] - 1}
+	var lvl0 := GameState.level
+	GameState.level = maxi(GameState.level, 5)
+	GameState.note_hidden("kill")
+	GameState.note_hidden("kill")
+	_check(GameState.unique_skill == "", "unique skill not granted below the threshold")
+	GameState.note_hidden("dodge")
+	_check(GameState.unique_skill == UniqueSkills.TWIN_FANG and rdb.is_holder(UniqueSkills.TWIN_FANG, me_key), "dodge crosses the threshold: Twin Fang granted and registered")
+	_check("hidden" in GameState.to_dict() and not Net.snapshot_for_client({"hidden": {"reaction": 3}, "name": "x"}).has("hidden"), "hidden stats saved but never sent to clients")
+	var rival: String = Net.RealmDBScript.holder_key("tok", "Rival")
+	_check(UniqueSkills.try_grant(rdb, rival, 50, {"reaction": 999}, "") == "", "a second character cannot take a held unique skill")
+	var pl_u: Player = world.player
+	_check(pl_u.use_unique(0) and pl_u.unique_cd[0] > 0.0, "holder casts a unique Sword Art")
+	_check(not pl_u.use_unique(0), "unique art respects its cooldown")
+	await get_tree().create_timer(1.2, true, false, true).timeout
+	pl_u.unique_cd[1] = 0.0
+	rdb.release(UniqueSkills.TWIN_FANG, me_key)
+	_check(not pl_u.use_unique(1) and GameState.unique_skill == "", "losing the registry slot revokes the skill")
+	GameState.level = lvl0
+	GameState.hidden_stats = {}
+	# Limited quests and items: realm slots, bound serial items, one copy each.
+	for lid in ["lantern_below", "old_watch_whispers", "veil_first_dawn", "wisplight_rapier", "la_floor1"]:
+		rdb.release(lid, me_key)
+	GameState.quests.erase("lantern_below")
+	var shards_keep := int(GameState.materials.get("spirit_shard", 0))
+	GameState.materials["spirit_shard"] = 0
+	# The Guardian test earlier may already have paid the Last Attack mantle.
+	GameState.inventory = GameState.inventory.filter(func(it): return not LimitedContent.is_bound(it))
+	var line_l: String = world._iselde_talk(GameState)
+	_check(GameState.quests.has("lantern_below") and rdb.is_holder("lantern_below", me_key) and "Limited quest" in line_l, "accepting a limited quest reserves its realm slot")
+	_check(not rdb.reserve("lantern_below", 1, rival).get("ok", true), "a full limited quest refuses a second taker")
+	_check("%d of %d" % [0, 6] in world._iselde_talk(GameState), "limited quest shows progress")
+	GameState.materials["spirit_shard"] = 6
+	var inv_n := GameState.inventory.size()
+	world._iselde_talk(GameState)
+	var veil = GameState.inventory[-1] if GameState.inventory.size() > inv_n else {}
+	_check(GameState.quest_done("lantern_below") and veil is Dictionary and veil.get("name", "") == "Veil of First Dawn" and LimitedContent.is_bound(veil) and str(veil.get("serial", "")) != "", "turn-in pays the bound, serialled limited item")
+	_check(rdb.is_holder("veil_first_dawn", me_key) and LimitedContent.slots_left("veil_first_dawn") == 0, "the item claim is on the realm")
+	_check(LimitedContent.grant_item(GameState, "veil_first_dawn").get("already", false) and GameState.inventory.size() == inv_n + 1, "a holder never gets a second copy")
+	world._grant_last_attack(1)
+	world._grant_last_attack(1)
+	var mantles := 0
+	for it in GameState.inventory:
+		if it is Dictionary and it.get("name", "") == "Mantle of the First Floor":
+			mantles += 1
+	_check(mantles == 1 and rdb.is_holder("la_floor1", me_key), "Last Attack bonus is granted once")
+	var dup: Dictionary = veil.duplicate(true)
+	dup["id"] = "dupe_copy"
+	var fake := {"name": "Tester", "token": "", "inventory": [veil.duplicate(true), dup], "home_storage": [], "equipped": {"weapon": null, "armor": null}}
+	rdb.verify_record(fake)
+	_check(fake["inventory"].size() == 1, "a duplicated limited item is removed on load")
+	# Clean up so local play keeps every slot free.
+	for lid in ["lantern_below", "old_watch_whispers", "veil_first_dawn", "wisplight_rapier", "la_floor1"]:
+		rdb.release(lid, me_key)
+	GameState.inventory = GameState.inventory.filter(func(it): return not LimitedContent.is_bound(it))
+	GameState.quests.erase("lantern_below")
+	GameState.materials["spirit_shard"] = shards_keep
+	hud._chat_lines.clear()  # realm announcements went to chat; later chat checks count lines
+	# Mob strikes are telegraphed: stepping out during the wind-up dodges.
+	var mob: Enemy = null
+	for e in get_tree().get_nodes_in_group("enemies"):
+		if e.visible and not e.is_boss:
+			mob = e
+			break
+	if mob:
+		GameState.hidden_stats = {}
+		var hp_wind := GameState.hp
+		mob._windup_target = pl_u
+		pl_u.global_position = mob.global_position + Vector3(20, 0, 0)
+		mob._resolve_strike(1.3 + mob.size.z * 0.5)
+		_check(GameState.hp == hp_wind and int(GameState.hidden_stats.get("reaction", 0)) == 0, "far-away target is neither hit nor credited")
+		mob._windup_target = pl_u
+		pl_u.global_position = mob.global_position + Vector3(2.4, 0, 0)
+		mob._resolve_strike(1.3 + mob.size.z * 0.5)
+		_check(GameState.hp == hp_wind and int(GameState.hidden_stats.get("dodges", 0)) == 1, "stepping out of reach during the wind-up is a dodge")
+		mob._windup_target = pl_u
+		pl_u.global_position = mob.global_position + Vector3(0.5, 0, 0)
+		mob._resolve_strike(1.3 + mob.size.z * 0.5)
+		_check(GameState.hp < hp_wind, "staying in reach takes the blow")
+		GameState.heal_full()
+		# Parry: tap as the strike lands -> no damage, mob staggers, riposte.
+		mob._posture = 0
+		mob._stagger = 0.0
+		pl_u.global_position = mob.global_position + Vector3(0.5, 0, 0)
+		pl_u.model.look_at(Vector3(mob.global_position.x, pl_u.model.global_position.y, mob.global_position.z))
+		pl_u._parry_ready_ms = 0
+		pl_u.press_parry()
+		var hp_p := GameState.hp
+		mob._windup_target = pl_u
+		mob._resolve_strike(1.3 + mob.size.z * 0.5)
+		_check(GameState.hp == hp_p and mob.is_staggered() and pl_u.parries >= 1, "a timed parry deflects the strike and staggers the mob")
+		var mob_hp: float = mob.hp
+		mob.take_hit(10.0, Vector3.FORWARD, 1)
+		_check(is_equal_approx(mob_hp - mob.hp, 10.0 * Enemy.RIPOSTE_MULT), "hits on a staggered mob are ripostes")
+		mob._stagger = 0.0
+		# Holding after the window guards: chip damage and the guard bar wears.
+		pl_u._parry_open_ms = -100000
+		var g0: float = pl_u.guard
+		mob._windup_target = pl_u
+		mob._resolve_strike(1.3 + mob.size.z * 0.5)
+		_check(GameState.hp < hp_p and hp_p - GameState.hp <= mob.damage * 0.31 + 0.5 and pl_u.guard < g0, "guarding takes chip damage and wears the guard bar")
+		for k in 3:
+			mob._windup_target = pl_u
+			mob._resolve_strike(1.3 + mob.size.z * 0.5)
+		_check(pl_u.is_stunned() and not pl_u.blocking, "an empty guard bar is a guard break (stunned)")
+		# Mashing: a whiffed parry goes on cooldown, a second press inside it guards only.
+		pl_u._stun = 0.0
+		pl_u.guard = Player.GUARD_MAX
+		pl_u.release_parry()
+		pl_u._parry_ready_ms = 0
+		pl_u.press_parry()
+		pl_u._parry_open_ms -= 1000  # the window passed with no strike: a whiff
+		pl_u.release_parry()
+		pl_u.press_parry()
+		_check(Time.get_ticks_msec() - pl_u._parry_open_ms > int(Player.PARRY_WINDOW * 1000.0), "a whiffed parry can't be re-opened by mashing")
+		pl_u.release_parry()
+		mob._posture = 0
+		mob._stagger = 0.0
+		GameState.heal_full()
+		GameState.hidden_stats = {}
+	# Death: shatter, grey screen with countdown, respawn at the arrival point.
+	var pl: Player = world.pl if "pl" in world else world.player
+	pl.take_damage(1.0e6)
+	_check(pl.is_dying() and hud.is_dead_screen() and not pl.input_enabled, "lethal hit starts the death sequence")
+	pl.take_damage(50.0)
+	_check(pl.is_dying(), "no damage while dying")
+	await get_tree().create_timer(Player.DEATH_SHATTER + Player.DEATH_TIME + 0.3, true, false, true).timeout
+	_check(not pl.is_dying() and pl.input_enabled and pl.model.visible, "player respawns after the countdown")
+	_check(pl.global_position.distance_to(GameState.spawn_point()) < 3.0 and GameState.hp >= GameState.max_hp(), "respawn at the arrival point with full HP")
+	await get_tree().create_timer(0.5, true, false, true).timeout
+	_check(not hud.is_dead_screen(), "death screen fades out")
 	Net.debug_seed_party(["Kyle", "Mira"], [82, 24], [7, 5])
 	_check(Net.in_party() and Net.party_size() == 3 and Net.party_ids.size() == 2, "seeded party of three")
 	var n0: int = hud._chat_lines.size()
@@ -875,6 +1029,169 @@ func _ready() -> void:
 	_check(GameState.title == "Warden of Talven" and GameState.visited.size() == 3 and GameState.quest_done("gravelmaw_bounty"), "title, visited waystones and the chain survive the save")
 	DirAccess.remove_absolute(SaveSystem.slot_path(2))
 	GameState.floor = 1
+	_check(Net.get_realm() != null and Net.get_realm().claim("smoke_probe", 1, "local:tester", "item")["ok"] and Net.get_realm().release("smoke_probe", "local:tester"), "realm DB (P4) opens offline, grants and releases a claim; full suite: scenes/realm_test.tscn")
+
+	await _test_market()
 
 	print("== Done: %d failure(s)" % _fails)
 	get_tree().quit(1 if _fails > 0 else 0)
+
+
+## P7 Hollowbrook market stalls (scripts/life/stalls.gd) on a throwaway realm
+## with an injected clock, plus the offline path on GameState and the local realm.
+func _test_market() -> void:
+	print("== Market stalls (P7)")
+	var S = preload("res://scripts/life/stalls.gd")
+	const MDIR := "user://realm_test_market"
+	var wipe := func():
+		var d := DirAccess.open(MDIR)
+		if d != null:
+			for f in d.get_files():
+				DirAccess.remove_absolute(MDIR + "/" + f)
+	wipe.call()
+	var rdb = Net.RealmDBScript.open("market", MDIR)
+	var now := [1_800_000_000.0]
+	rdb.clock = func() -> float: return now[0]
+	var keep := func(_r) -> bool: return true
+	var seller := Net._new_record(Net.sanitize_character({"name": "Mara"}), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", {})
+	var buyer := Net._new_record(Net.sanitize_character({"name": "Bram"}), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", {})
+	var poor := Net._new_record(Net.sanitize_character({"name": "Cato"}), "cccccccccccccccccccccccccccccccc", {})
+	var srs = Net.RecordState.new(seller)
+	var brs = Net.RecordState.new(buyer)
+	var prs = Net.RecordState.new(poor)
+	seller["money"] = 500
+	buyer["money"] = 300
+	poor["money"] = 50
+	var r: Dictionary = S.run(rdb, prs, poor, 0, {"op": "rent"}, keep)
+	_check(r.has("error") and poor["money"] == 50 and rdb.holders(S.claim_id(0)).is_empty(), "renting refused without the week's Col")
+	r = S.run(rdb, srs, seller, 0, {"op": "rent", "type": "shop"}, keep)
+	_check(not r.has("error") and seller["money"] == 500 - S.RENT and rdb.is_holder(S.claim_id(0), S.holder_of(seller)) and r["view"]["mine"], "rent a stall: %d Col paid up front, realm claim held" % S.RENT)
+	_check(int(rdb.container(S.SINK).get("col", 0)) == S.RENT and float(S.meta_of(rdb, 0)["rent_until"]) == now[0] + S.RENT_SECS, "rent goes to the market sink; rent runs one week")
+	_check(S.run(rdb, srs, seller, 1, {"op": "rent"}, keep).has("error") and not rdb.is_holder(S.claim_id(1), S.holder_of(seller)), "a second stall for the same character is refused")
+	_check(S.run(rdb, brs, buyer, 0, {"op": "rent"}, keep).has("error") and buyer["money"] == 300, "someone else's stall cannot be rented")
+	var sword := {"id": "mk_sword", "name": "Iron Sword", "kind": "weapon", "rank": 1, "atk": 10, "def": 0}
+	var bound := {"id": "mk_bound", "name": "Ember Fang", "kind": "weapon", "rank": 3, "atk": 30, "def": 0, "bound": true}
+	seller["inventory"].append(sword)
+	seller["inventory"].append(bound)
+	srs.add_material("grilled_trout", 3)
+	r = S.run(rdb, srs, seller, 0, {"op": "stock", "item": "mk_sword", "price": 200}, keep)
+	_check(not r.has("error") and S._find(seller["inventory"], "mk_sword") < 0 and r["view"]["listings"].size() == 1 and int(r["view"]["listings"][0]["price"]) == 200, "stock gear: record -> stall at 200 Col")
+	r = S.run(rdb, srs, seller, 0, {"op": "stock", "item": "mk_bound", "price": 50}, keep)
+	_check(r.has("error") and S._find(seller["inventory"], "mk_bound") >= 0, "a bound item is refused and stays on the record")
+	r = S.run(rdb, srs, seller, 0, {"op": "stock", "mat": "grilled_trout", "count": 5, "price": 60}, keep)
+	_check(r.has("error") and seller["materials"]["grilled_trout"] == 3, "stocking more dishes than carried is refused")
+	r = S.run(rdb, srs, seller, 0, {"op": "stock", "mat": "grilled_trout", "count": 2, "price": 60}, keep)
+	var stack_id := str(r.get("item", ""))
+	_check(not r.has("error") and seller["materials"]["grilled_trout"] == 1 and stack_id.begins_with("stk_") and S._find(seller["inventory"], stack_id) < 0, "stock a stack of 2 dishes (materials -> stall stack)")
+	r = S.run(rdb, prs, poor, 0, {"op": "buy", "item": "mk_sword", "price": 200}, keep)
+	_check(r.has("error") and poor["money"] == 50 and S._find(rdb.container(S.stock_id(0))["items"], "mk_sword") >= 0, "buying without enough Col is refused; the ware stays")
+	_check(S.run(rdb, brs, buyer, 0, {"op": "buy", "item": "mk_sword", "price": 150}, keep).has("error") and buyer["money"] == 300, "a stale price is refused")
+	_check(S.run(rdb, srs, seller, 0, {"op": "buy", "item": "mk_sword"}, keep).has("error"), "the owner cannot buy from their own stall")
+	var till := S.till_id(S.holder_of(seller))
+	r = S.run(rdb, brs, buyer, 0, {"op": "buy", "item": "mk_sword", "price": 200}, keep)
+	_check(not r.has("error") and buyer["money"] == 100 and S._find(buyer["inventory"], "mk_sword") >= 0 and int(r["tax"]) == 10, "buy: buyer pays 200, gets the sword")
+	_check(int(rdb.container(till)["col"]) == 190 and int(rdb.container(S.SINK)["col"]) == S.RENT + 10, "till gets 190, 5% tax (10 Col) leaves through the market sink")
+	r = S.run(rdb, brs, buyer, 0, {"op": "buy", "item": stack_id, "price": 60}, keep)
+	_check(not r.has("error") and buyer["money"] == 40 and int(buyer["materials"].get("grilled_trout", 0)) == 2 and S._find(buyer["inventory"], stack_id) < 0 and r.get("dish", false), "buy a dish stack: it unpacks into the buyer's provisions")
+	_check(int(rdb.container(till)["col"]) == 190 + 57 and rdb.pending_count() == 0, "dish sale pays the till minus tax; every escrow settled")
+	var helm := {"id": "mk_helm", "name": "Hide Vest", "kind": "armor", "rank": 0, "atk": 0, "def": 4}
+	seller["inventory"].append(helm)
+	S.run(rdb, srs, seller, 0, {"op": "stock", "item": "mk_helm", "price": 80}, keep)
+	r = S.run(rdb, srs, seller, 0, {"op": "price", "item": "mk_helm", "price": 95}, keep)
+	_check(not r.has("error") and int(r["view"]["listings"][0]["price"]) == 95, "owner changes a price")
+	_check(S.run(rdb, brs, buyer, 0, {"op": "price", "item": "mk_helm", "price": 1}, keep).has("error"), "a stranger cannot change prices")
+	_check(S.run(rdb, srs, seller, 0, {"op": "type", "type": "restaurant"}, keep).has("error"), "restaurant refused while gear is listed")
+	r = S.run(rdb, srs, seller, 0, {"op": "withdraw", "item": "mk_helm"}, keep)
+	_check(not r.has("error") and S._find(seller["inventory"], "mk_helm") >= 0 and r["view"]["listings"].is_empty(), "withdraw an unsold item back to the pack")
+	r = S.run(rdb, srs, seller, 0, {"op": "type", "type": "restaurant"}, keep)
+	_check(not r.has("error") and r["view"]["type"] == "restaurant" and S.sign_state(rdb)[0]["owner"] == "Mara", "the stall becomes a restaurant; the sign names the owner")
+	_check(S.run(rdb, srs, seller, 0, {"op": "stock", "item": "mk_helm", "price": 80}, keep).has("error"), "a restaurant refuses gear")
+	_check(S.run(rdb, srs, seller, 0, {"op": "stock", "mat": "iron_ore", "count": 1, "price": 5}, keep).has("error"), "a restaurant refuses raw goods")
+	srs.add_material("boar_stew", 2)
+	r = S.run(rdb, srs, seller, 0, {"op": "stock", "mat": "boar_stew", "count": 2, "price": 90}, keep)
+	_check(not r.has("error") and r["view"]["listings"].size() == 1 and seller["materials"]["boar_stew"] == 0, "a restaurant lists cooked dishes")
+	var m0: int = seller["money"]
+	r = S.run(rdb, srs, seller, 0, {"op": "collect"}, keep)
+	_check(not r.has("error") and seller["money"] == m0 + 247 and int(rdb.container(till)["col"]) == 0, "collect the till (247 Col -> record)")
+	_check(S.run(rdb, srs, seller, 0, {"op": "collect"}, keep).has("error"), "an empty till is refused")
+	now[0] += S.RENT_SECS + 3600.0
+	var freed: Array = S.sweep(rdb)
+	_check(freed == [0] and not rdb.is_holder(S.claim_id(0), S.holder_of(seller)) and S.sign_state(rdb)[0]["owner"] == "" and rdb.container(S.stock_id(0))["items"].is_empty(), "rent expiry frees the stall")
+	_check(rdb.container(till)["items"].size() == 1, "unsold dishes return to the owner's till, not lost")
+	r = S.run(rdb, srs, seller, 3, {"op": "collect"}, keep)
+	_check(not r.has("error") and seller["materials"]["boar_stew"] == 2 and rdb.container(till)["items"].is_empty(), "collecting the till returns the dishes as provisions")
+	_check(not S.run(rdb, srs, seller, 1, {"op": "rent"}, keep).has("error"), "after expiry the owner may rent another stall")
+	var crash := {"inventory": [S.make_stack("wild_herb", 3)], "materials": {}}
+	_check(S.unpack_stacks(crash) and crash["inventory"].is_empty() and crash["materials"]["wild_herb"] == 3, "a stack left on a record by a crash unpacks on load")
+	rdb.close()
+	wipe.call()
+	# Offline: the same core through GameState on the local realm.
+	S.autosave_offline = false
+	var lr = Net.get_realm()
+	var real_clock: Callable = lr.clock
+	var lnow := [Time.get_unix_time_from_system()]
+	lr.clock = func() -> float: return lnow[0]
+	S.sweep(lr)
+	GameState.money = 1000
+	var lsword := {"id": "mk_local", "name": "Local Blade", "kind": "weapon", "rank": 0, "atk": 6, "def": 0}
+	GameState.inventory.append(lsword)
+	var local_stall := -1
+	for i in S.COUNT:
+		if S.stall_of(lr, Net.local_holder()) < 0 and str(lr.container(S.stock_id(i)).get("owner", "")) == "":
+			local_stall = i
+			break
+	r = S.run_local(local_stall, {"op": "rent"})
+	_check(not r.has("error") and GameState.money == 1000 - S.RENT, "offline: rent on the local realm through GameState")
+	r = S.run_local(local_stall, {"op": "stock", "item": "mk_local", "price": 40})
+	_check(not r.has("error") and S._find(GameState.inventory, "mk_local") < 0, "offline: stock from GameState's pack")
+	lnow[0] += S.RENT_SECS + 60.0
+	S.sweep(lr)
+	r = S.run_local(local_stall, {"op": "collect"})
+	_check(not r.has("error") and S._find(GameState.inventory, "mk_local") >= 0 and S.stall_of(lr, Net.local_holder()) < 0, "offline: rent expiry returns the blade via the till")
+	lr.clock = real_clock
+	S.autosave_offline = true
+	_check(Net._srv_action(4242, "stall", {"op": "view", "stall": 0}).has("error"), "a stall request on a floor without a market is refused")
+	# Floor 1 world: the market's server path (range checks) and the screen.
+	for c in get_children():
+		if c.has_method("srv_action"):
+			c.queue_free()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	GameState.floor = 1
+	GameState.has_position = false
+	var w: Node3D = load("res://scenes/world.tscn").instantiate()
+	add_child(w)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_check(w._stalls != null and w._stalls.stalls.size() == S.COUNT, "six stalls stand in the Hollowbrook market")
+	var lay: Array = S.layout(w.HOLLOWBROOK)
+	var min_gap := 99.0
+	for d in lay:
+		min_gap = minf(min_gap, (d["pos"] as Vector3).distance_to(w.HOLLOWBROOK))
+		min_gap = minf(min_gap, (d["pos"] as Vector3).distance_to(PlayerHome.HOME_POS))
+	_check(min_gap > 14.0, "stalls keep clear of the well and the cottage (%.1f m)" % min_gap)
+	var mrec := Net._new_record(Net.sanitize_character({"name": "Vendra"}), "dddddddddddddddddddddddddddddddd", {})
+	mrec["money"] = 400
+	var mrs = Net.RecordState.new(mrec)
+	var free_i := -1
+	for i in S.COUNT:
+		if str(lr.container(S.stock_id(i)).get("owner", "")) == "":
+			free_i = i
+			break
+	_check(w.srv_action(4747, mrs, "stall", {"op": "rent", "stall": free_i}, Vector3(80, 0, -80)).has("error") and mrec["money"] == 400, "server refuses a stall action from across the island")
+	r = w.srv_action(4747, mrs, "stall", {"op": "rent", "stall": free_i}, lay[free_i]["front"])
+	_check(not r.has("error") and mrec["money"] == 400 - S.RENT and str(w._stalls.signs[free_i]["owner"]) == "Vendra", "server rents at the stall front; the sign shows the renter")
+	_check(w.srv_action(4747, mrs, "stall_signs", {}, Vector3(80, 0, -80)).get("signs", []).size() == S.COUNT, "sign poll answers from anywhere")
+	w.player.global_position = lay[free_i]["front"]
+	var near: Array = w._nearest_interactable()
+	_check(near[0] is Dictionary and int(near[0].get("stall", -1)) == free_i and "Vendra" in str(near[1]), "interact prompt at a rented stall (%s)" % str(near[1]))
+	w._stalls.open(free_i, w.hud)
+	_check(w.hud.life.stall_open() and w.hud.any_menu_open() and not w._stalls.screen.view.is_empty() and w._stalls.screen.view["owner"] == "Vendra", "stall screen opens on interact with the stall's view")
+	w._stalls.screen._set_tab("manage")
+	w.hud.close_screens()
+	_check(not w.hud.life.stall_open(), "close_screens hides the stall screen")
+	lnow[0] = Time.get_unix_time_from_system() + S.RENT_SECS * 5
+	lr.clock = func() -> float: return lnow[0]
+	S.sweep(lr)
+	lr.clock = real_clock
+	_check(str(lr.container(S.stock_id(free_i)).get("owner", "")) == "", "test stall released again")

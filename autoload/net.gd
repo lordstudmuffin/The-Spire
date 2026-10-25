@@ -20,8 +20,15 @@ signal connection_failed(reason: String)
 signal server_disconnected
 ## Client: the server answered an action (or refused it: result has "error").
 signal action_applied(kind: String, result: Dictionary)
+## Everyone: the server announced something realm-wide (unique skill taken,
+## last limited slot gone). HUD nodes in group "hud" with realm_announce(text)
+## get it too.
+signal realm_announced(text: String)
 
 const RecordState := preload("res://scripts/record_state.gd")
+## Realm world DB (docs/REALM_DB.md). Preloaded so a fresh checkout needs no
+## class cache; use Net.RealmDBScript.holder_key(...) for the statics.
+const RealmDBScript := preload("res://scripts/realm_db.gd")
 
 const DEFAULT_PORT := 4433
 const MAX_PLAYERS := 30
@@ -87,6 +94,13 @@ var _srv_warned := {}
 ## Client: last request time per kind (self rate limit so a held key cannot
 ## flood the server into dropping our real requests).
 var _last_req_ms := {}
+## Realm world DB: open on the server (host()) and lazily offline / on the
+## listen host (realm "local"); always null on a remote client. Use
+## get_realm() rather than reading this directly.
+var realm = null
+## Realm id of this server (`--realm <id>`; several floor servers that share a
+## user:// folder and this id share one world DB). Offline uses "local".
+var realm_id := "server"
 
 
 func _ready() -> void:
@@ -120,6 +134,8 @@ func _ready() -> void:
 			port = int(args[i + 1])
 		elif args[i] == "--token" and i + 1 < args.size():
 			client_token = args[i + 1].left(64)
+		elif args[i] == "--realm" and i + 1 < args.size():
+			realm_id = args[i + 1].validate_filename().left(32)
 		elif args[i] == "--quit-after" and i + 1 < args.size():
 			# Test hook: leave cleanly (snapshot + disconnect) after N seconds.
 			get_tree().create_timer(float(args[i + 1])).timeout.connect(func():
@@ -172,6 +188,7 @@ func host(p := DEFAULT_PORT) -> bool:
 	online = true
 	port = p
 	DirAccess.make_dir_recursive_absolute(DB_DIR)
+	_open_realm(realm_id)
 	return true
 
 
@@ -201,6 +218,7 @@ func _on_auth(peer: int, data: PackedByteArray) -> void:
 		return
 	rec["character"] = character
 	rec["last_peer"] = peer
+	_realm_check_record(rec)
 	pending_characters[peer] = character
 	_pending_records[peer] = rec
 	multiplayer.complete_auth(peer)
@@ -299,6 +317,9 @@ func leave() -> void:
 func _go_offline() -> void:
 	if online and multiplayer.multiplayer_peer and multiplayer.is_server():
 		save_all_records()
+	if realm != null:
+		realm.close()  # compacts; the offline "local" realm reopens lazily
+		realm = null
 	if multiplayer.multiplayer_peer:
 		multiplayer.multiplayer_peer.close()
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
@@ -345,6 +366,7 @@ static func record_defaults() -> Dictionary:
 		"weapon_atk": 0.0, "recipes_unlocked": [], "fishing_level": 1, "fishing_xp": 0, "cooking_level": 1, "cooking_xp": 0,
 		"fish_caught": 0, "home_owned": false, "home_storage": [], "home_furniture": ["", "", "", "", "", ""],
 		"decor_owned": {}, "buffs": {}, "hp": 100.0, "title": "", "visited": [],
+		"unique_skill": "", "hidden": {},
 	}
 
 
@@ -363,14 +385,23 @@ static func fill_record_defaults(rec: Dictionary) -> void:
 			rec["equipped"][slot] = null
 
 
+## Atomic: the record is written to a temp file and renamed over the old
+## one, so a crash mid-write leaves the previous record, never a torn one.
 static func save_record(rec: Dictionary) -> bool:
 	DirAccess.make_dir_recursive_absolute(DB_DIR)
 	rec["saved"] = int(Time.get_unix_time_from_system())
-	var f := FileAccess.open(record_path(rec["name"]), FileAccess.WRITE)
+	var path := record_path(rec["name"])
+	var f := FileAccess.open(path + ".tmp", FileAccess.WRITE)
 	if f == null:
 		push_error("[db] cannot write record for %s: %s" % [rec["name"], FileAccess.get_open_error()])
 		return false
 	f.store_string(JSON.stringify(rec, "\t"))
+	f.flush()
+	f.close()
+	var err := DirAccess.rename_absolute(path + ".tmp", path)
+	if err != OK:
+		push_error("[db] cannot replace record for %s: %s" % [rec["name"], error_string(err)])
+		return false
 	return true
 
 
@@ -407,7 +438,7 @@ func _new_record(character: Dictionary, token: String, claimed_stats) -> Diction
 ## What the client adopts on join: the record minus server-only fields.
 static func snapshot_for_client(rec: Dictionary) -> Dictionary:
 	var snap := rec.duplicate(true)
-	for k in ["token", "weapon_atk", "created", "saved", "last_peer", "position", "_fish"]:
+	for k in ["token", "weapon_atk", "created", "saved", "last_peer", "position", "_fish", "hidden"]:
 		snap.erase(k)
 	# Buffs carry an absolute expiry on the server; the client counts down.
 	var now := Time.get_unix_time_from_system()
@@ -460,6 +491,8 @@ func _on_peer_disconnected(peer: int) -> void:
 		var rec: Dictionary = srv_records[peer]
 		srv_records.erase(peer)
 		save_record(rec)
+		if realm != null:
+			realm.touch(RealmDBScript.holder_of_record(rec))
 		print("[db] saved '%s' Lv %d on disconnect" % [rec["name"], rec["level"]])
 
 
@@ -473,8 +506,188 @@ func _on_persist_tick() -> void:
 		return
 	if multiplayer.is_server():
 		save_all_records()
+		if realm != null:
+			for peer in srv_records:
+				realm.touch(RealmDBScript.holder_of_record(srv_records[peer]))
+			realm.sweep()
+			realm.flush()
 	else:
 		request_save()
+
+
+# --- Realm world DB (server / offline) --------------------------------------------
+
+func _open_realm(id: String) -> void:
+	if realm != null:
+		realm.close()
+	realm = RealmDBScript.open(id)
+	realm.announce = srv_announce
+	print("[realm] '%s' open (seq %d, %d claim(s), %d container(s))" % [id, realm.data["seq"], realm.data["claims"].size(), realm.data["containers"].size()])
+
+
+## The realm DB for server-side and offline code; null on a remote client.
+func get_realm():
+	if remote_client():
+		return null
+	if realm == null:
+		_open_realm(realm_id if online else "local")
+	return realm
+
+
+## Holder key of a connected peer's record ("" when unknown). Offline / host
+## without a record: local_holder().
+func srv_holder(peer: int) -> String:
+	if srv_records.has(peer):
+		return RealmDBScript.holder_of_record(srv_records[peer])
+	if peer == 1 and (not online or (multiplayer.is_server() and not dedicated)):
+		return local_holder()
+	return ""
+
+
+## Holder key of this install's character when it plays offline (or hosts).
+func local_holder() -> String:
+	return RealmDBScript.holder_key("", str(GameState.character.get("name", "Nameless")))
+
+
+## Record load: replay pending escrow onto the record, then drop items whose
+## serials the registry does not know (dupes, foreign copies).
+func _realm_check_record(rec: Dictionary) -> void:
+	var rdb = get_realm()
+	if rdb == null:
+		return
+	var applied: int = rdb.reconcile_record(rec)
+	var removed: Array = rdb.verify_record(rec)
+	# Market stacks (scripts/life/stalls.gd) never stay packed on a record.
+	if preload("res://scripts/life/stalls.gd").unpack_stacks(rec):
+		applied += 1
+	var holder: String = RealmDBScript.holder_of_record(rec)
+	rdb.touch(holder)
+	# A unique skill lost to inactivity (or taken while away) is gone for good.
+	var us := str(rec.get("unique_skill", ""))
+	if us != "" and not UniqueSkills.holds(rdb, us, holder):
+		print("[realm] '%s' no longer holds %s" % [rec["name"], us])
+		rec["unique_skill"] = ""
+		removed.append(us)
+	if applied > 0 or not removed.is_empty():
+		print("[realm] record '%s': %d trade(s) reconciled, %d item(s) removed" % [rec["name"], applied, removed.size()])
+		save_record(rec)
+
+
+## Server: one escrow transaction for a connected peer (see RealmDB.transact):
+## validates and journals the moves, saves the record, settles, and answers the
+## client with the patch. Returns the RealmDB result.
+func srv_transact(peer: int, moves: Array, reply_kind := "trade") -> Dictionary:
+	if not srv_records.has(peer):
+		return {"ok": false, "error": "No record."}
+	var rdb = get_realm()
+	if rdb == null:
+		return {"ok": false, "error": "No realm."}
+	var rec: Dictionary = srv_records[peer]
+	var res: Dictionary = rdb.transact(rec, moves)
+	if not res.get("ok", false):
+		_send(peer, net_apply, [reply_kind, {"error": str(res.get("error", "Refused."))}])
+		return res
+	RecordState.new(rec)._sync_weapon()
+	if save_record(rec):
+		rdb.settle(int(res["seq"]))
+	_srv_reply(peer, reply_kind, {"seq": res["seq"]})
+	return res
+
+
+## Server: a character is deleted; frees its claims, serials, containers and
+## removes the record (token must match). Returns what the realm released.
+func srv_delete_character(name: String, token: String) -> Dictionary:
+	var rec := load_record(name)
+	if rec.is_empty() or str(rec.get("token", "")) != token:
+		return {"ok": false, "error": "No such character or wrong token."}
+	for peer in srv_records.keys():
+		if str(srv_records[peer]["name"]).to_lower() == name.to_lower():
+			kick(peer, "Character deleted")
+			srv_records.erase(peer)
+	var released: Array = []
+	var rdb = get_realm()
+	if rdb != null:
+		released = rdb.release_all(RealmDBScript.holder_of_record(rec))
+	DirAccess.remove_absolute(record_path(name))
+	print("[db] deleted character '%s' (%d realm claim(s) freed)" % [name, released.size()])
+	return {"ok": true, "released": released}
+
+
+## Server / offline: tell everyone on the realm. Clients get net_realm_announce;
+## the host and offline player get it directly.
+## A hidden-stat event ("dodge", "kill") for the player with `peer`:
+## offline the local GameState, on the server that peer's record. Clients do
+## nothing (they never see or report hidden stats).
+func note_hidden(peer: int, event: String) -> void:
+	if not online or (multiplayer.is_server() and peer == multiplayer.get_unique_id() and not srv_records.has(peer)):
+		GameState.note_hidden(event)
+	elif multiplayer.is_server():
+		srv_note_hidden(peer, event)
+
+
+func srv_note_hidden(peer: int, event: String) -> void:
+	if not srv_records.has(peer):
+		return
+	var rec: Dictionary = srv_records[peer]
+	if not (rec.get("hidden") is Dictionary):
+		rec["hidden"] = {}
+	if not UniqueSkills.note(rec["hidden"], event, Time.get_ticks_msec() / 1000.0):
+		return
+	var id := UniqueSkills.try_grant(get_realm(), srv_holder(peer), int(rec.get("level", 1)), rec["hidden"], str(rec.get("unique_skill", "")))
+	if id == "":
+		return
+	rec["unique_skill"] = id
+	save_record(rec)
+	print("[realm] '%s' awakened %s" % [rec["name"], id])
+	srv_announce(UniqueSkills.announce_text(str(rec["name"]), id))
+	if peer == multiplayer.get_unique_id():
+		GameState.unique_skill = id
+		GameState.unique_skill_changed.emit(id)
+	else:
+		_srv_reply(peer, "unique_skill", {"skill": id})
+
+
+## Server / offline: may the player with `peer` use unique skill `id` now?
+func srv_holds_unique(peer: int, id: String) -> bool:
+	if not online:
+		var ok := GameState.unique_skill == id and UniqueSkills.holds(get_realm(), id, local_holder())
+		if not ok and GameState.unique_skill == id:
+			GameState.unique_skill = ""
+			GameState.unique_skill_changed.emit("")
+		return ok
+	if not srv_records.has(peer):
+		# The listen-server host plays from GameState.
+		return peer == multiplayer.get_unique_id() and GameState.unique_skill == id \
+			and UniqueSkills.holds(get_realm(), id, local_holder())
+	return str(srv_records[peer].get("unique_skill", "")) == id and UniqueSkills.holds(get_realm(), id, srv_holder(peer))
+
+
+func srv_announce(text: String) -> void:
+	text = sanitize_text(text, 160)
+	print("[realm] announce: %s" % text)
+	if online and multiplayer.is_server() and multiplayer.multiplayer_peer != null:
+		for p in multiplayer.get_peers():
+			net_realm_announce.rpc_id(p, text)
+		if not dedicated:
+			_deliver_announce(text)
+	elif not online:
+		_deliver_announce(text)
+
+
+func _deliver_announce(text: String) -> void:
+	realm_announced.emit(text)
+	_system(text)
+	if get_tree() != null:
+		for n in get_tree().get_nodes_in_group("hud"):
+			if n.has_method("realm_announce"):
+				n.realm_announce(text)
+
+
+@rpc("authority", "call_remote", "reliable")
+func net_realm_announce(text: String) -> void:
+	if not _from_server():
+		return
+	_deliver_announce(sanitize_text(text, 160))
 
 
 ## Client: push a snapshot of the client-held parts of the character
@@ -1569,16 +1782,27 @@ func net_apply(kind: String, result: Dictionary) -> void:
 ## Server: a mob hit `peer`. Armor soak, HP and death are decided on the
 ## record; the client is told the new HP (net_hp) and, on death, respawned
 ## (net_apply "respawn" with a full-heal patch). Returns true when lethal.
+## Seconds after a death in which the server ignores hits on that player
+## (covers Player.DEATH_SHATTER + Player.DEATH_TIME plus latency).
+const DEATH_GRACE := 6.0
+var _death_grace := {}  # peer -> msec until hits count again
+
+
 func srv_damage(peer: int, amount: float) -> bool:
 	if not srv_records.has(peer):
 		return false
 	var rec: Dictionary = srv_records[peer]
+	# Death grace: the client plays its shatter for a moment before it moves
+	# to the respawn point, so the corpse can't be hit again meanwhile.
+	if Time.get_ticks_msec() < int(_death_grace.get(peer, 0)):
+		return false
 	var rs = RecordState.new(rec)
 	var prev := float(rec["hp"])
 	var died: bool = rs.take_damage(clampf(amount, 0.0, 1000.0))
 	if died:
 		print("[life] '%s' fell (%.0f damage at %.0f hp); respawned at full health" % [rec["name"], amount, prev])
 		rs.heal_full()
+		_death_grace[peer] = Time.get_ticks_msec() + int(DEATH_GRACE * 1000.0)
 		_srv_reply(peer, "respawn", {"prev_hp": prev})
 		return true
 	_send(peer, net_hp, [float(rec["hp"]), rs.max_hp(), prev])
@@ -1601,6 +1825,7 @@ func net_hp(hp: float, max_hp: float, prev: float = -1.0) -> void:
 func _on_life_tick() -> void:
 	if not online or not multiplayer.is_server():
 		return
+	var online_holders: Array = []
 	for peer in srv_records:
 		var rec: Dictionary = srv_records[peer]
 		var rs = RecordState.new(rec)
@@ -1609,6 +1834,9 @@ func _on_life_tick() -> void:
 			_send(peer, net_hp, [float(rec["hp"]), rs.max_hp()])
 		if expired:
 			_srv_reply(peer, "buffs", {})
+		online_holders.append(RealmDBScript.holder_of_record(rec))
+	if realm != null:
+		realm.tick_online(online_holders, _life_timer.wait_time)  # limited-quest reservations
 
 
 ## Screenshot / test hook: pretend to be in a party of these members plus

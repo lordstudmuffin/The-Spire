@@ -62,6 +62,18 @@ Not yet visually verified: creature scale against the player in-world, kobold (b
 ## Model routing (Kyle, 2026-10-25 20:25)
 Opus by default. Fable for: new core architecture, netcode and server-authority changes, stubborn bugs, unexplained performance or memory-leak hunts, major visual/shader work, and hard-to-undo design calls. Escalate to Fable when Opus is stuck after two honest attempts, and hand back to Opus once the hard part is designed. Each Fable-level tag below carries its reason.
 
+## Status of the priority round (game thread, 2026-10-25 22:45 UTC)
+Built and smoke-green (smoke ~420 checks, realm_test 88, 2-bot soak 0 errors, orphans 0):
+- P1 ring menu: scripts/ui/ring_menu.gd (behaviour) + ring_menu_style.gd (look, owned by the visuals thread). Esc/Start opens it. `--open ring[:status|items|skills|quests|messages|logout]` in the screenshot harness.
+- P2 crystal sounds: tools/sfx/gen_crystal.py (pure numpy synthesis, regenerate any time) -> assets/audio/crystal/*.ogg, wired in autoload/audio.gd (EVENTS + LAYERS).
+- P3 game side: Player.die() death sequence (shatter, grey "YOU ARE DEAD" countdown, respawn), Net DEATH_GRACE, HP colour bands + delayed chip bar, heartbeat under 25%, crit hit-stop offline (Enemy._hit_stop). Visual side (VFX.shatter etc.) by the visuals thread.
+- P4 realm DB (Fable): scripts/realm_db.gd, docs/REALM_DB.md.
+- P5 unique skill Twin Fang: scripts/unique_skills.gd. Hidden "reaction" stat (dodges of telegraphed mob strikes, parries, 3-kill chains in 8 s); threshold 30 at Lv5+; realm claim cap 1; arts on keys 4-6, checked on the server in Enemy.net_hit.
+- P6 limited content: scripts/limited_content.gd. Quests "The Lantern Below" (1 place, Lamplighter Iselde on Labyrinth terrace 1) and "Whispers of the Old Watch" (3 places, Old Watchman Bram at Talven); items Veil of First Dawn (1), Wisplight Rapier (3), Mantle of the First Floor = Last Attack bonus on Gravelmaw (1). All bound + serialled.
+- P7 stalls/restaurants: scripts/life/stalls.gd + scripts/ui/stall_screen.gd (6 stalls SE of the Hollowbrook well, 120 Col/week, 5% tax).
+- NEW (Kyle 22:34): parry/guard like the reference Roblox game: Player.press_parry/defend (PARRY_WINDOW 0.22 s, +0.12 s online latency allowance, whiff cooldown 0.7 s, hold = guard with 30% chip damage and a guard bar, 3 blocks = guard break stun). Mob strikes now have a wind-up (Enemy.WINDUP 0.42 s, boss 0.6 s); a parry staggers (boss after 3), staggered mobs take x1.5 ripostes. Keys F / RMB, pad R3. Server-judged (net_parry stamps server time). Hooks for visuals: VFX.parry_flash(pos, broke), VFX.stagger(enemy, secs), VRMCharacter.play_guard(on).
+Next for the game thread: P8 farms + guilds, parry polish (bots that parry, PvP later), HUD skill bar for unique arts, map marker for the market, keeper NPC figure at stalls.
+
 ## Kyle's priority features (added 2026-10-25 20:40; rank ABOVE backlog items 3-12)
 Full design: docs/FLOOR1_PRIORITY_FEATURES.md. Kyle wants the menu and sounds as close as possible to the reference anime, built only from original or CC0 material (never ripped assets); sounds stay swappable in autoload/audio.gd EVENTS, menu look in scripts/ui/ring_menu_style.gd.
 P1. **Ring menu**: swipe-down vertical round-button menu with slide-out glass panels, wrapping the existing screens. Opus: UI work that reuses existing screens and patterns.

@@ -43,9 +43,24 @@ var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 var _wander_target := Vector3.ZERO
 var _wander_timer := 0.0
 var _hit_cd := 0.0
+## Telegraphed strikes: the attack animation starts, the blow lands WINDUP
+## seconds later only if the target is still in reach. Stepping or dashing
+## out at the last moment is a dodge (a hidden "reaction" point, UniqueSkills).
+const WINDUP := 0.42
+const WINDUP_BOSS := 0.6
+var _windup := 0.0
+var _windup_target: Node3D
+## Parried strikes build posture; a full bar staggers the mob (it stops,
+## can't strike, and takes riposte damage). Bosses take three parries.
+const STAGGER_TIME := 1.5
+const STAGGER_TIME_BOSS := 2.2
+const RIPOSTE_MULT := 1.5
+var _posture := 0
+var _stagger := 0.0
 var _knock := Vector3.ZERO
 var _mesh: MeshInstance3D
 var _label: Label3D
+var _plate: MobPlate
 var _dead := false
 var _last_hitter := 1
 var _shown_hp := -1.0
@@ -124,6 +139,13 @@ func _ready() -> void:
 	_label.font_size = 40
 	_label.outline_size = 8
 	add_child(_label)
+	# Styled plate (cursor crystal, name, HP bar) replaces the text label on
+	# rendering clients; the label stays as the headless/debug fallback.
+	if DisplayServer.get_name() != "headless":
+		_plate = MobPlate.new()
+		_plate.position.y = _label.position.y
+		add_child(_plate)
+		_label.visible = false
 	_update_label()
 
 	if Net.online:
@@ -138,6 +160,9 @@ func _ready() -> void:
 
 func _update_label() -> void:
 	_label.text = "%s  Lv%d\n%d / %d" % [display_name, mob_level, ceil(hp), max_hp]
+	if _plate:
+		_plate.set_info(display_name, mob_level, mob_level - GameState.level, is_boss)
+		_plate.set_hp(hp / maxf(1.0, max_hp))
 	_shown_hp = hp
 
 
@@ -188,9 +213,18 @@ func _physics_process(delta: float) -> void:
 		spd = speed
 		var reach := 1.3 + size.z * 0.5
 		var dist := player.global_position.distance_to(global_position)
-		if dist < reach and _hit_cd == 0.0:
-			_damage_player(player, damage)
-			_hit_cd = 1.0
+		if _stagger > 0.0:
+			_stagger = maxf(_stagger - delta, 0.0)
+			spd = 0.0
+			target = global_position
+		elif _windup > 0.0:
+			_windup -= delta
+			spd *= 0.25
+			if _windup <= 0.0:
+				_resolve_strike(reach)
+		elif dist < reach and _hit_cd == 0.0:
+			_windup = WINDUP_BOSS if is_boss else WINDUP
+			_windup_target = player
 			_swing()
 		if ranged > 0.0:
 			# Keep a casting distance instead of closing in, and lob bolts.
@@ -226,6 +260,75 @@ func _physics_process(delta: float) -> void:
 	velocity.z = move.z + _knock.z
 	_knock = _knock.move_toward(Vector3.ZERO, 30 * delta)
 	move_and_slide()
+
+
+func _resolve_strike(reach: float) -> void:
+	_hit_cd = 1.0
+	var t := _windup_target
+	_windup_target = null
+	if t == null or not is_instance_valid(t) or not t.is_inside_tree():
+		return
+	if t.has_method("is_dying") and t.is_dying():
+		return
+	var d := t.global_position.distance_to(global_position)
+	if d < reach * 1.1:
+		var outcome: String = t.defend(global_position) if t.has_method("defend") else ""
+		_show_defence(t, outcome)
+		match outcome:
+			"parry":
+				_parried(t)
+			"block":
+				_damage_player(t, damage * (1.0 - Player.BLOCK_REDUCTION))
+			_:
+				_damage_player(t, damage)
+	elif d < reach * 2.6 and "peer_id" in t:
+		Net.note_hidden(t.peer_id, "dodge")
+
+
+## Tell the defender's machine what happened (the server judged it).
+func _show_defence(t: Node3D, outcome: String) -> void:
+	if outcome == "":
+		return
+	if not Net.online or t.peer_id == multiplayer.get_unique_id():
+		t.defend_fx(outcome, global_position)
+	elif multiplayer.get_peers().has(t.peer_id):
+		t.net_defended.rpc_id(t.peer_id, outcome, global_position, t.guard, t._stun)
+
+
+func _parried(t: Node3D) -> void:
+	_hit_cd = maxf(_hit_cd, 1.2)
+	_posture += 1
+	Net.note_hidden(t.peer_id, "parry")
+	if _posture >= (3 if is_boss else 1):
+		_posture = 0
+		_stagger = STAGGER_TIME_BOSS if is_boss else STAGGER_TIME
+		_windup = 0.0
+		if Net.online:
+			net_staggered.rpc(_stagger)
+		else:
+			net_staggered(_stagger)
+
+
+## Everyone: the mob reels (stagger look and sound; the hit window is the
+## server's _stagger).
+@rpc("authority", "call_local", "reliable")
+func net_staggered(seconds: float) -> void:
+	_stagger = clampf(seconds, 0.0, 3.0)
+	Audio.play("stagger", global_position, 0.05)
+	var fx := VFX.get_for(self)
+	if fx and fx.has_method("stagger"):
+		fx.call("stagger", self, seconds)
+	elif fx:
+		fx.ring(global_position + Vector3(0, size.y * 0.9, 0), Color(1.0, 0.85, 0.3), 1.4, 0.4)
+	if _anim != null:
+		_anim.speed_scale = 0.25
+		get_tree().create_timer(seconds, false).timeout.connect(func():
+			if is_instance_valid(self) and _anim != null:
+				_anim.speed_scale = 1.0)
+
+
+func is_staggered() -> bool:
+	return _stagger > 0.0
 
 
 func _nearest_player() -> Node3D:
@@ -384,6 +487,13 @@ func net_hit(kind: int, from_dir: Vector3, swing: int = 0) -> void:
 		if kind >= 0 and kind < Player.SKILLS.size():
 			mult = Player.SKILLS[kind]["mult"]
 			cooldown = Player.SKILLS[kind]["cooldown"]
+		elif UniqueSkills.is_unique_kind(kind):
+			# Unique Sword Arts: only the realm's holder may land them.
+			var art := UniqueSkills.art_for_kind(kind)
+			if art.is_empty() or not Net.srv_holds_unique(sender, UniqueSkills.TWIN_FANG):
+				return
+			mult = float(art["mult"])
+			cooldown = float(art["cooldown"])
 		elif kind != -1:
 			return
 		var key := "%d:%d" % [sender, kind]
@@ -406,6 +516,9 @@ func net_hit(kind: int, from_dir: Vector3, swing: int = 0) -> void:
 func take_hit(amount: float, from_dir: Vector3, hitter := 1, kind := -1) -> void:
 	if _dead or not Net.is_authority():
 		return
+	if _stagger > 0.0:
+		amount *= RIPOSTE_MULT  # riposte on a staggered mob
+		kind = maxi(kind, 0)    # reads as a heavy (crit) hit
 	hp -= amount
 	_last_hitter = hitter
 	# Offline, and for the listen-server host, the popup is drawn here; clients
@@ -426,6 +539,9 @@ func take_hit(amount: float, from_dir: Vector3, hitter := 1, kind := -1) -> void
 
 func _die() -> void:
 	_dead = true
+	_windup = 0.0
+	_windup_target = null
+	Net.note_hidden(_last_hitter, "kill")
 	Audio.play("boss_death" if is_boss else "death", global_position, 0.15, 0.0, 0.8)
 	if not Net.online:
 		_grant_local()
@@ -468,9 +584,38 @@ func _hit_sfx(amount: float) -> void:
 		Audio.play("grunt", global_position, 0.15, -4.0, 0.7 if "boar" in n else 0.85)
 
 
+## Hit-stop: a crit near the local player freezes time for a few frames so
+## Sword Art hits land with weight. Never on a dedicated server, and only
+## offline (online the world can't stop; the shake carries it instead).
+const HIT_STOP := 0.05
+static var _stop_until := 0
+
+
+func _hit_stop() -> void:
+	if not Audio.enabled:
+		return
+	var me := get_tree().get_first_node_in_group("player") as Node3D
+	if me == null or me.global_position.distance_to(global_position) > 14.0:
+		return
+	if Net.online:
+		if me.has_method("shake"):
+			me.shake(0.12)
+		return
+	var now := Time.get_ticks_msec()
+	if now < _stop_until or Engine.time_scale < 1.0:
+		return
+	_stop_until = now + int(HIT_STOP * 1000.0) + 120
+	Engine.time_scale = 0.05
+	get_tree().create_timer(HIT_STOP, true, false, true).timeout.connect(func():
+		if Engine.time_scale == 0.05:
+			Engine.time_scale = 1.0)
+
+
 ## Floating damage number: pops in with a scale bounce, drifts up and to the
 ## side, then fades and frees itself. Sword Art hits are bigger and hotter.
 func _popup(text: String, color := Color(1.0, 0.85, 0.3), crit := false) -> void:
+	if crit:
+		_hit_stop()
 	var l := Label3D.new()
 	l.text = text
 	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
@@ -563,7 +708,12 @@ func _death_fx() -> void:
 		var clip_len := _set_anim("death", false)
 		if clip_len > 0.0:
 			delay = clampf(clip_len * 0.7, 0.3, 1.4)
-	fx.dissolve(_mesh, _rig, _dissolve_cache, edge, 0.6, delay)
+	# Crystal shatter when the visuals provide it (same arguments as dissolve
+	# plus `big` for bosses); the burn-away dissolve is the fallback.
+	if fx.has_method("shatter"):
+		fx.call("shatter", _mesh, _rig, _dissolve_cache, edge, is_boss, delay)
+	else:
+		fx.dissolve(_mesh, _rig, _dissolve_cache, edge, 0.6, delay)
 	_min_hit = INF
 
 

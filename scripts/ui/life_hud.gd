@@ -17,6 +17,10 @@ var _shop_panel: PanelContainer
 var _shop: ShopScreen
 var _store_panel: PanelContainer
 var _store: StorageScreen
+## Hollowbrook market stall screen (P7, scripts/ui/stall_screen.gd).
+const StallScreenScript := preload("res://scripts/ui/stall_screen.gd")
+var _stall_panel: PanelContainer
+var _stall
 var _tick := 0.0
 
 
@@ -47,6 +51,9 @@ func _build() -> void:
 	_store_panel = _hud._modal(_root, 0)
 	_store = StorageScreen.build()
 	_hud._modal_box(_store_panel).add_child(_store)
+	_stall_panel = _hud._modal(_root, 0)
+	_stall = StallScreenScript.build()
+	_hud._modal_box(_stall_panel).add_child(_stall)
 	GameState.buffs_changed.connect(_refresh_buffs)
 	GameState.life_skill_up.connect(func(skill, level):
 		_hud.toast("%s Lv %d" % [skill.capitalize(), level], "", "Skill up", UITheme.CYAN)
@@ -129,7 +136,7 @@ func _process(delta: float) -> void:
 # --- Screens --------------------------------------------------------------------
 
 func any_open() -> bool:
-	return _cook_panel.visible or _shop_panel.visible or _store_panel.visible
+	return _cook_panel.visible or _shop_panel.visible or _store_panel.visible or (_stall_panel != null and _stall_panel.visible)
 
 
 func cooking_open() -> bool:
@@ -140,6 +147,8 @@ func hide_all() -> void:
 	_cook_panel.hide()
 	_shop_panel.hide()
 	_store_panel.hide()
+	if _stall_panel:
+		_stall_panel.hide()
 
 
 func _open(panel: PanelContainer) -> void:
@@ -183,6 +192,20 @@ func refresh() -> void:
 		_shop.refresh()
 	if _store_panel.visible:
 		_store.refresh()
+	if _stall_panel and _stall_panel.visible:
+		_stall.refresh()
+
+
+## Opens the market stall screen on stall `i` of the world's MarketStalls
+## node and returns the screen (the node forwards server answers to it).
+func open_stall(stalls: Node, i: int):
+	_stall.open(stalls, i)
+	_open(_stall_panel)
+	return _stall
+
+
+func stall_open() -> bool:
+	return _stall_panel != null and _stall_panel.visible
 
 
 func _on_cooked(res: Dictionary) -> void:

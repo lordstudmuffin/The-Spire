@@ -95,6 +95,25 @@ const QUESTS := {
 		"reward": "Floor 2 cleared",
 		"story": "Mirelord raises the drowned to fight beside him. Cut the wisps down fast, then the knight.",
 	},
+	# --- Limited quests (only 1-3 characters in the realm, LimitedContent).
+	"lantern_below": {
+		"title": "The Lantern Below",
+		"giver": "Lamplighter Iselde",
+		"where": "Labyrinth, first terrace",
+		"objective": "Bring Spirit Shards to relight Iselde's lantern",
+		"unit": "shards",
+		"reward": "500 XP  ·  300 Col  ·  Veil of First Dawn (only one in the realm)",
+		"story": "A lamplighter nobody remembers waits at the far corner of the first terrace. Only one traveller will ever carry her veil.",
+	},
+	"old_watch_whispers": {
+		"title": "Whispers of the Old Watch",
+		"giver": "Old Watchman Bram",
+		"where": "Talven camp",
+		"objective": "Bring wolf pelts so Bram can kindle a Wisplight blade",
+		"unit": "pelts",
+		"reward": "380 XP  ·  220 Col  ·  Wisplight Rapier (one of three)",
+		"story": "The last watch-captains forged three blades at the waystones. Bram can kindle them again, but only three were ever made.",
+	},
 	# --- Hollowbrook chain (Floor 1): five quests, one leading to the next.
 	"wolf_pelts": {
 		"title": "Teeth on the North Slope",

@@ -63,7 +63,32 @@ var _report_queued := false
 var _swing_serial := 0
 
 var skill_cd := [0.0, 0.0, 0.0]
+## Cooldowns of the held unique skill's Sword Arts (keys 4-6).
+var unique_cd := [0.0, 0.0, 0.0]
 var _recovery := 0.0
+
+# --- Parry and guard ------------------------------------------------------
+## Tap Parry as a mob's strike is about to land: the blow is deflected, the
+## mob staggers (posture break) and the next hits on it land as ripostes.
+## Holding Parry after the window guards: blocked hits do a fraction of
+## their damage and wear the guard bar down; an empty bar is a guard break
+## (stunned). A whiffed parry (no strike landed in the window) puts parry
+## on a short cooldown so it can't be mashed. Judged where the mob's strike
+## resolves (the server online, using the times it received our presses).
+const PARRY_WINDOW := 0.22       # seconds after the press that a strike is parried
+const PARRY_LATENCY_MAX := 0.12  # extra window online for the press's travel time
+const PARRY_WHIFF_CD := 0.7
+const BLOCK_REDUCTION := 0.7     # blocked hits do 30% damage
+const GUARD_MAX := 100.0
+const GUARD_PER_BLOCK := 34.0    # three blocked hits break guard
+const GUARD_REGEN := 30.0        # per second while not blocking
+const GUARD_BREAK_STUN := 1.3
+var guard := GUARD_MAX
+var blocking := false
+var _parry_open_ms := -100000   # when the current parry window opened (this machine's clock)
+var _parry_ready_ms := 0
+var _stun := 0.0
+var parries := 0                # successful parries (stats / tests)
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 ## Either a VRMCharacter (real anime model) or the built-in CharacterModel.
 var model: Node3D
@@ -311,7 +336,7 @@ func _box(x: float, y: float, z: float) -> BoxMesh:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not is_local or not input_enabled:
+	if not is_local or not input_enabled or _dying:
 		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var inv := -1.0 if Settings.data.get("invert_y", false) else 1.0
@@ -382,18 +407,25 @@ func _physics_process(delta: float) -> void:
 			_name_label.modulate = Color(0.6, 0.95, 0.65) if in_party else Color(0.75, 0.9, 1.0)
 		if multiplayer.is_server():
 			_server_movement_check(delta)
+			# Guard and stun of remote players are judged here (defend()).
+			if _stun > 0.0:
+				_stun = maxf(_stun - delta, 0.0)
+			elif not blocking:
+				guard = minf(guard + GUARD_REGEN * delta, GUARD_MAX)
 		return
 	level = GameState.level
 	srv_attack = GameState.attack_damage()
 
 	cam_pivot.global_position = global_position + Vector3(0, 1.5, 0)
-	if input_enabled and not bot:
+	if input_enabled and not _dying and not bot:
 		_stick_look(delta)
 	_dash_cd = max(_dash_cd - delta, 0.0)
 	_attack_cd = max(_attack_cd - delta, 0.0)
 	_recovery = max(_recovery - delta, 0.0)
 	for i in skill_cd.size():
 		skill_cd[i] = max(skill_cd[i] - delta, 0.0)
+	for i in unique_cd.size():
+		unique_cd[i] = max(unique_cd[i] - delta, 0.0)
 
 	if not is_on_floor():
 		velocity.y -= gravity * delta
@@ -401,7 +433,7 @@ func _physics_process(delta: float) -> void:
 	var input_dir := Vector2.ZERO
 	if bot:
 		input_dir = _bot_think(delta)
-	elif input_enabled and _recovery == 0.0:
+	elif input_enabled and not _dying and _recovery == 0.0:
 		input_dir = Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	# Stick deflection = walk..run (get_vector already applies the deadzone);
 	# keys and the bot always move at full speed.
@@ -410,7 +442,7 @@ func _physics_process(delta: float) -> void:
 	var dir := (basis_y * Vector3(input_dir.x, 0, input_dir.y)).normalized()
 
 	var speed := GameState.move_speed()
-	if input_enabled and Input.is_action_pressed("sprint"):
+	if input_enabled and not _dying and Input.is_action_pressed("sprint"):
 		speed *= 1.7
 	if bot and cheat:
 		speed *= 10.0
@@ -428,12 +460,25 @@ func _physics_process(delta: float) -> void:
 		var fx := VFX.get_for(self)
 		if fx:
 			fx.dash(global_position, dir if dir != Vector3.ZERO else -model.global_transform.basis.z)
-	if input_enabled and Input.is_action_just_pressed("attack") and _attack_cd == 0.0 and _recovery == 0.0:
+	if input_enabled and not _dying and _stun == 0.0:
+		if Input.is_action_just_pressed("parry"):
+			press_parry()
+		elif blocking and not Input.is_action_pressed("parry"):
+			release_parry()
+	if _stun > 0.0:
+		_stun = maxf(_stun - delta, 0.0)
+	elif not blocking:
+		guard = minf(guard + GUARD_REGEN * delta, GUARD_MAX)
+	if input_enabled and not _dying and _stun == 0.0 and not blocking and Input.is_action_just_pressed("attack") and _attack_cd == 0.0 and _recovery == 0.0:
 		_attack()
-	if input_enabled and _recovery == 0.0:
+	if input_enabled and not _dying and _stun == 0.0 and not blocking and _recovery == 0.0:
 		for i in SKILLS.size():
 			if Input.is_action_just_pressed("skill_%d" % (i + 1)) and skill_cd[i] == 0.0:
 				_use_skill(i)
+		if GameState.unique_skill != "":
+			for i in unique_cd.size():
+				if Input.is_action_just_pressed("skill_%d" % (i + 4)) and unique_cd[i] == 0.0:
+					use_unique(i)
 
 	if _dash_timer > 0.0:
 		_dash_timer -= delta
@@ -745,6 +790,152 @@ func _hit_cone(damage: float, range_: float, arc: float, kind := -1) -> int:
 	return hits
 
 
+## A unique Sword Art (UniqueSkills arts of GameState.unique_skill): a rapid
+## multi-slash combo. Offline the realm holder check runs here; online the
+## server re-checks every hit (Enemy.net_hit). Returns false if refused.
+## Parry press: opens the window and starts guarding while held.
+func press_parry() -> void:
+	var now := Time.get_ticks_msec()
+	blocking = true
+	if now >= _parry_ready_ms:
+		_parry_open_ms = now
+		_parry_ready_ms = now + int(PARRY_WHIFF_CD * 1000.0)
+	if _vrm != null and _vrm.has_method("play_guard"):
+		_vrm.play_guard(true)
+	if Net.online and not multiplayer.is_server():
+		net_parry.rpc_id(1, true)
+
+
+func release_parry() -> void:
+	blocking = false
+	if _vrm != null and _vrm.has_method("play_guard"):
+		_vrm.play_guard(false)
+	if Net.online and not multiplayer.is_server():
+		net_parry.rpc_id(1, false)
+
+
+## Owner -> server: parry pressed / released. The server stamps its own time
+## (minus nothing: latency is covered by PARRY_LATENCY_MAX) and applies the
+## same whiff cooldown, so a client can't keep a window open by spamming.
+@rpc("any_peer", "call_remote", "reliable")
+func net_parry(on: bool) -> void:
+	if not multiplayer.is_server() or multiplayer.get_remote_sender_id() != peer_id:
+		return
+	var now := Time.get_ticks_msec()
+	blocking = on
+	if on and now >= _parry_ready_ms:
+		_parry_open_ms = now
+		_parry_ready_ms = now + int(PARRY_WHIFF_CD * 1000.0)
+
+
+## Where a mob's strike resolves (offline/host: here; server: the remote
+## player's node). Returns "parry", "block", "stunned" or "" (no defence).
+## A parry consumes the window and refunds the whiff cooldown.
+func defend(from_pos: Vector3) -> String:
+	if _stun > 0.0:
+		return "stunned"
+	var now := Time.get_ticks_msec()
+	var window := PARRY_WINDOW + (PARRY_LATENCY_MAX if Net.online and not is_local else 0.0)
+	# Must face the attacker roughly (no parrying blows from behind).
+	var to := from_pos - global_position
+	to.y = 0.0
+	var facing := -model.global_transform.basis.z if model else Vector3.FORWARD
+	var front := to.length() < 0.5 or facing.dot(to.normalized()) > -0.1
+	if front and now - _parry_open_ms <= int(window * 1000.0):
+		_parry_open_ms = -100000
+		_parry_ready_ms = now  # a clean parry can chain into the next one
+		parries += 1
+		return "parry"
+	if front and blocking:
+		guard -= GUARD_PER_BLOCK
+		if guard <= 0.0:
+			guard = 0.0
+			blocking = false
+			_stun = GUARD_BREAK_STUN
+			return "stunned"
+		return "block"
+	return ""
+
+
+func is_stunned() -> bool:
+	return _stun > 0.0
+
+
+## Local feedback for a defence outcome (on the defender's own machine).
+func defend_fx(outcome: String, from_pos: Vector3) -> void:
+	var fx := VFX.get_for(self)
+	var at := global_position + Vector3(0, 1.2, 0) + (from_pos - global_position).normalized() * 0.6
+	match outcome:
+		"parry":
+			Audio.play("parry", null if is_local else at, 0.04)
+			shake(0.18)
+			InputSetup.rumble(0.3, 0.9, 0.12)
+			if fx and fx.has_method("parry_flash"):
+				fx.call("parry_flash", at, false)
+			elif fx:
+				fx.flash(at, Color(1.0, 0.95, 0.7), 1.3)
+				fx.ring(at, Color(1.0, 0.85, 0.4), 1.8, 0.25)
+			if _vrm != null:
+				_vrm.hit_stop(0.09)
+		"block":
+			Audio.play("block", null if is_local else at, 0.06)
+			shake(0.1)
+			if fx:
+				fx.hit(at, (global_position - from_pos).normalized(), Color(0.7, 0.85, 1.0))
+		"stunned":
+			Audio.play("guard_break", null if is_local else at, 0.04)
+			shake(0.3)
+			InputSetup.rumble(0.5, 1.0, 0.3)
+			if fx and fx.has_method("parry_flash"):
+				fx.call("parry_flash", at, true)
+
+
+## Server -> owner: the outcome of a defence judged on the server (and the
+## guard / stun it left), so the owner sees and feels it.
+@rpc("authority", "call_remote", "reliable")
+func net_defended(outcome: String, from_pos: Vector3, guard_left: float, stun: float) -> void:
+	if multiplayer.get_remote_sender_id() != 1:
+		return
+	guard = clampf(guard_left, 0.0, GUARD_MAX)
+	_stun = clampf(stun, 0.0, GUARD_BREAK_STUN)
+	if outcome == "stunned":
+		blocking = false
+	if outcome == "parry":
+		parries += 1
+	defend_fx(outcome, from_pos)
+
+
+func use_unique(i: int) -> bool:
+	var id := GameState.unique_skill
+	var arts := UniqueSkills.arts(id)
+	if i < 0 or i >= arts.size() or unique_cd[i] > 0.0:
+		return false
+	if not Net.online and not Net.srv_holds_unique(1, id):
+		return false
+	var art: Dictionary = arts[i]
+	unique_cd[i] = float(art["cooldown"])
+	var hits := int(art.get("hits", 1))
+	_recovery = float(art["recovery"]) + hits * 0.07
+	Audio.play("skill_charge", null if is_local else global_position, 0.05)
+	InputSetup.rumble(0.4, 0.9, 0.3)
+	if float(art["lunge"]) > 0.0:
+		var fwd := -model.global_transform.basis.z
+		velocity.x = fwd.x * float(art["lunge"])
+		velocity.z = fwd.z * float(art["lunge"])
+	# Alternating slashes, one per hit, fast; damage lands once at the end
+	# (the server validates one hit per swing).
+	for h in hits:
+		get_tree().create_timer(0.05 + h * 0.08, false).timeout.connect(func():
+			if is_inside_tree():
+				_play_swing_fx(h % SKILLS.size())
+				if Net.online:
+					net_swing.rpc(h % SKILLS.size()))
+	get_tree().create_timer(0.12 + hits * 0.08, false).timeout.connect(func():
+		if is_inside_tree():
+			_hit_cone(GameState.attack_damage() * float(art["mult"]), float(art["range"]), float(art["arc"]), UniqueSkills.KIND_BASE + i))
+	return true
+
+
 func _use_skill(i: int) -> void:
 	var sk: Dictionary = SKILLS[i]
 	skill_cd[i] = sk["cooldown"]
@@ -777,7 +968,7 @@ func take_damage(amount: float) -> void:
 	if Net.online and multiplayer.is_server() and not is_local:
 		Net.srv_damage(peer_id, amount)
 		return
-	if not is_local:
+	if not is_local or _dying:
 		return
 	GameState.take_damage(amount)
 	Audio.play("player_hit", null, 0.1)
@@ -787,8 +978,7 @@ func take_damage(amount: float) -> void:
 	if fx:
 		fx.hit(global_position + Vector3(0, 1.1, 0), -model.global_transform.basis.z, Color(1.0, 0.35, 0.3))
 	if GameState.hp <= 0.0:
-		Audio.play("teleport")
-		respawn()
+		die()
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -846,6 +1036,60 @@ func net_report_stats(lvl: int, strength: int, weapon_atk: float, weapon_rank: i
 	if lvl != level and lvl != _srv_claimed_level:
 		_srv_claimed_level = lvl
 		print("[anticheat] peer %d (%s) claims Lv %d, server record says Lv %d; claim ignored" % [peer_id, display_name, lvl, level])
+
+
+## Seconds the shattered body lingers before the move to the respawn point,
+## then how long the "You are dead" screen counts down there.
+const DEATH_SHATTER := 1.4
+const DEATH_TIME := 3.0
+var _dying := false
+
+
+## Death: the body bursts into crystal shards where it fell (VFX.shatter when
+## the visuals provide it), the screen greys out with a countdown, then the
+## player respawns at the floor's arrival point. The server already healed
+## and moved the record; this is the local presentation.
+func die() -> void:
+	if _dying:
+		return
+	_dying = true
+	input_enabled = false
+	velocity = Vector3.ZERO
+	var fx := VFX.get_for(self)
+	var tint := Color(0.55, 0.85, 1.0)
+	if fx and fx.has_method("shatter"):
+		fx.call("shatter", null, model, [], tint, false, 0.0)
+	elif fx:
+		fx.flash(global_position + Vector3(0, 1.0, 0), tint, 1.6)
+		fx.sparkle(global_position + Vector3(0, 1.0, 0), tint)
+	Audio.play("player_death")
+	InputSetup.rumble(0.8, 1.0, 0.5)
+	shake(0.4)
+	var hud := get_tree().get_first_node_in_group("hud")
+	var where: String = GameState.FLOOR_NAMES.get(GameState.floor, "town")
+	if hud and hud.has_method("show_death"):
+		hud.show_death(DEATH_SHATTER + DEATH_TIME, where)
+	input_enabled = false  # after show_death: closing screens re-enables input
+	await get_tree().create_timer(DEATH_SHATTER, true, false, true).timeout
+	if not is_instance_valid(self) or not is_inside_tree():
+		return
+	model.visible = false
+	respawn()
+	await get_tree().create_timer(DEATH_TIME, true, false, true).timeout
+	if not is_instance_valid(self) or not is_inside_tree():
+		return
+	model.visible = true
+	_dying = false
+	input_enabled = true
+	if hud and is_instance_valid(hud) and hud.has_method("hide_death"):
+		hud.hide_death()
+	Audio.play("respawn")
+	if fx and is_instance_valid(fx):
+		fx.sparkle(global_position + Vector3(0, 1.0, 0), Color(0.7, 0.95, 1.0))
+
+
+func is_dying() -> bool:
+	return _dying
 
 
 func respawn() -> void:

@@ -206,6 +206,16 @@ func _ready() -> void:
 						e.speed = 0.0
 						e.hp = 610.0
 						e.look_at(Vector3(pl.global_position.x, e.global_position.y, pl.global_position.z))
+	# --open ring or ring:status|items|skills|quests|messages|logout
+	if open_ui.begins_with("ring") and "hud" in scene and scene.hud:
+		scene.hud._toggle_pause()
+		var parts := open_ui.split(":")
+		if parts.size() > 1:
+			for i in RingMenu.ENTRIES.size():
+				if RingMenu.ENTRIES[i][0] == parts[1]:
+					scene.hud._ring.activate(i)
+					if parts[1] == "logout":
+						scene.hud._ring._confirm_logout()
 	if "--settings" in args or open_ui in ["settings", "controls"]:
 		var form: SettingsPanel = null
 		if scene.has_method("_open_settings"):

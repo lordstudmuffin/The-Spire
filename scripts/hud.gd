@@ -14,6 +14,11 @@ var _chat_panel: PanelContainer
 ## Quest Log, Map). Built in code with UITheme; screens live in scripts/ui.
 
 var _hp_bar: ProgressBar
+var _hp_chip: ProgressBar
+var _guard_bar: ProgressBar
+var _hp_fills: Array = []
+var _hp_band := 0
+var _chip_tw: Tween
 var _xp_bar: ProgressBar
 var _hp_text: Label
 var _xp_text: Label
@@ -136,6 +141,7 @@ class RadialSweep extends Control:
 func _ready() -> void:
 	var root := Control.new()
 	_root = root
+	add_to_group("hud")
 	root.theme = UITheme.theme()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -160,6 +166,8 @@ func _ready() -> void:
 	_craft_box = _modal_box(_craft_panel)
 	_build_screens(root)
 	_build_pause(root)
+	_ring = RingMenu.build(self)
+	root.add_child(_ring)
 	life = LifeHUD.attach(self, root)
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	var on_joy := func(id: int, connected: bool):
@@ -179,6 +187,9 @@ func _ready() -> void:
 	GameState.inventory_changed.connect(_on_inventory_changed)
 	GameState.class_unlocked.connect(func(c): toast("%s" % c, "Hidden class unlocked", "Class"))
 	GameState.leveled_up.connect(_on_level_up)
+	GameState.unique_skill_changed.connect(func(id):
+		if id != "":
+			toast(UniqueSkills.display_name(id), "Unique skill awakened  ·  Sword Arts on 4, 5, 6", "Only you hold this", UITheme.GOLD))
 	SaveSystem.saved.connect(func(_s): toast("Game saved"))
 	Net.chat_received.connect(add_chat)
 	_refresh()
@@ -238,10 +249,23 @@ func _build_player_plate(root: Control) -> void:
 	# HP bar with gradient fill and numeric overlay.
 	var hp_wrap := Control.new()
 	hp_wrap.custom_minimum_size = Vector2(320, 22)
+	# Delayed "chip" bar: on a hit the lost chunk stays pale for a moment,
+	# then drains, so big hits read at a glance.
+	_hp_chip = ProgressBar.new()
+	_hp_chip.show_percentage = false
+	_hp_chip.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_hp_chip.add_theme_stylebox_override("fill", UITheme.gradient_fill_box([Color(1, 1, 1, 0.85), Color(1, 0.92, 0.85, 0.85)]))
+	hp_wrap.add_child(_hp_chip)
 	_hp_bar = ProgressBar.new()
 	_hp_bar.show_percentage = false
 	_hp_bar.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_hp_bar.add_theme_stylebox_override("fill", UITheme.gradient_fill_box([Color("c9184a"), UITheme.ROSE, Color("ff8fa3")]))
+	_hp_bar.add_theme_stylebox_override("background", StyleBoxEmpty.new())
+	_hp_fills = [
+		UITheme.gradient_fill_box([Color("3f9c2f"), Color("6fd34a"), Color("a8f07a")]),
+		UITheme.gradient_fill_box([Color("b88a12"), Color("f2c230"), Color("ffe27a")]),
+		UITheme.gradient_fill_box([Color("a3161c"), Color("e6392f"), Color("ff7a6b")]),
+	]
+	_hp_bar.add_theme_stylebox_override("fill", _hp_fills[0])
 	hp_wrap.add_child(_hp_bar)
 	_hp_text = UITheme.label("", 12, UITheme.PARCH, true)
 	_hp_text.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -251,6 +275,14 @@ func _build_player_plate(root: Control) -> void:
 	_hp_text.add_theme_constant_override("outline_size", 4)
 	hp_wrap.add_child(_hp_text)
 	v.add_child(hp_wrap)
+	# Guard bar (parry/guard): only shown while guarding or recovering.
+	_guard_bar = ProgressBar.new()
+	_guard_bar.show_percentage = false
+	_guard_bar.custom_minimum_size = Vector2(320, 5)
+	_guard_bar.max_value = Player.GUARD_MAX
+	_guard_bar.add_theme_stylebox_override("fill", UITheme.gradient_fill_box([Color("6aa8ff"), Color("bfe0ff")], 2))
+	_guard_bar.visible = false
+	v.add_child(_guard_bar)
 	# Thin XP bar.
 	var xp_row := HBoxContainer.new()
 	xp_row.add_theme_constant_override("separation", 8)
@@ -511,6 +543,20 @@ func _slot_card(key: String, name_text: String) -> Dictionary:
 	return {"sweep": sweep, "cd": cd, "name": name_l, "card": slot, "stack": stack}
 
 
+var _unique_slots: Array = []
+var _unique_spacer: Control
+
+
+func _update_unique_slots(id: String) -> void:
+	var arts := UniqueSkills.arts(id)
+	_unique_spacer.visible = not arts.is_empty()
+	for i in _unique_slots.size():
+		var on := i < arts.size()
+		(_unique_slots[i]["card"] as Control).visible = on
+		if on:
+			(_unique_slots[i]["name"] as Label).text = arts[i]["name"]
+
+
 func _build_skill_bar(root: Control) -> void:
 	_skill_bar = HBoxContainer.new()
 	_skill_bar.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
@@ -560,6 +606,19 @@ func _build_skill_bar(root: Control) -> void:
 		(slot["stack"] as Control).add_child(b)
 		_skill_buttons.append(b)
 		_skill_slots.append(slot)
+	# Unique skill arts (keys 4-6): only shown while the realm lists you as
+	# the holder (GameState.unique_skill).
+	_unique_spacer = UITheme.spacer(6)
+	_skill_bar.add_child(_unique_spacer)
+	var arts := UniqueSkills.arts(UniqueSkills.TWIN_FANG)
+	for i in arts.size():
+		var us := _slot_card("skill_%d" % (i + 4), arts[i]["name"])
+		var usb: StyleBoxFlat = (us["card"] as PanelContainer).get_theme_stylebox("panel").duplicate()
+		usb.border_color = Color(UITheme.GOLD.r, UITheme.GOLD.g, UITheme.GOLD.b, 0.75)
+		(us["card"] as PanelContainer).add_theme_stylebox_override("panel", usb)
+		_unique_slots.append(us)
+	_update_unique_slots(GameState.unique_skill)
+	GameState.unique_skill_changed.connect(_update_unique_slots)
 
 
 ## Bottom-right key hints: the screens and their keys.
@@ -1040,12 +1099,21 @@ func _build_pause(root: Control) -> void:
 
 func _process(delta: float) -> void:
 	_update_vignette()
+	if _death_left > 0.0:
+		_death_left -= delta
+		_death_sub.text = "Returning to %s in %d" % [_death_where, maxi(ceili(_death_left), 1)]
 	_poll_boss(delta)
 	if _map_panel.visible:
 		_update_map_legend()
 	var player := get_tree().get_first_node_in_group("player")
 	if player == null:
 		return
+	if "guard" in player:
+		var show_guard: bool = player.blocking or player.guard < Player.GUARD_MAX - 0.5 or player.is_stunned()
+		_guard_bar.visible = show_guard
+		if show_guard:
+			_guard_bar.value = player.guard
+			_guard_bar.modulate = Color(1, 0.45, 0.4) if player.is_stunned() else Color.WHITE
 	_place_t -= delta
 	if _place_t <= 0.0:
 		_place_t = 0.5
@@ -1061,6 +1129,14 @@ func _process(delta: float) -> void:
 		(slot["sweep"] as RadialSweep).set_frac(frac)
 		(slot["cd"] as Label).text = "%.1f" % cd if cd > 0.0 else ""
 		(slot["name"] as Label).modulate.a = 0.45 if cd > 0.0 else 1.0
+	if GameState.unique_skill != "" and "unique_cd" in player:
+		var arts := UniqueSkills.arts(GameState.unique_skill)
+		for i in mini(arts.size(), _unique_slots.size()):
+			var ucd: float = player.unique_cd[i]
+			var us: Dictionary = _unique_slots[i]
+			(us["sweep"] as RadialSweep).set_frac(clampf(ucd / maxf(float(arts[i]["cooldown"]), 0.01), 0.0, 1.0))
+			(us["cd"] as Label).text = "%.1f" % ucd if ucd > 0.0 else ""
+			(us["name"] as Label).modulate.a = 0.45 if ucd > 0.0 else 1.0
 	if not _dash_slot.is_empty() and "_dash_cd" in player:
 		var dcd: float = player._dash_cd
 		(_dash_slot["sweep"] as RadialSweep).set_frac(clamp(dcd / Player.DASH_COOLDOWN, 0.0, 1.0))
@@ -1160,6 +1236,11 @@ func _update_vignette() -> void:
 	if frac < 0.25:
 		pulse = (0.2 + 0.12 * sin(Time.get_ticks_msec() * 0.006)) * (1.0 - frac / 0.25)
 	var strength := maxf(_vignette_flash, pulse)
+	# Heartbeat under 25% HP (not while dead or in a menu).
+	_heart_t -= get_process_delta_time()
+	if frac < 0.25 and GameState.hp > 0.0 and not _menu_paused and not (_death_overlay and _death_overlay.visible) and _heart_t <= 0.0:
+		_heart_t = lerpf(0.75, 1.1, frac / 0.25)
+		Audio.play("heartbeat", null, 0.0)
 	_vignette.visible = strength > 0.003
 	if _vignette.visible:
 		_vignette_mat.set_shader_parameter("strength", strength)
@@ -1220,6 +1301,30 @@ func _on_inventory_changed() -> void:
 	_refresh()
 
 
+## HP bar colour bands (green > 50% > yellow > 25% > red) and the chip drain.
+func _update_hp_look() -> void:
+	var mx := maxf(GameState.max_hp(), 1.0)
+	var f := GameState.hp / mx
+	var band := 0 if f > 0.5 else (1 if f > 0.25 else 2)
+	if band != _hp_band:
+		_hp_band = band
+		_hp_bar.add_theme_stylebox_override("fill", _hp_fills[band])
+	_hp_chip.max_value = mx
+	if GameState.hp >= _hp_chip.value:
+		if _chip_tw:
+			_chip_tw.kill()
+		_hp_chip.value = GameState.hp
+	elif not (_chip_tw and _chip_tw.is_running()):
+		_chip_tw = create_tween()
+		_chip_tw.tween_interval(0.4)
+		_chip_tw.tween_property(_hp_chip, "value", GameState.hp, 0.45).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	else:
+		# Already draining: retarget to the newest HP after the current drain.
+		_chip_tw.kill()
+		_chip_tw = create_tween()
+		_chip_tw.tween_property(_hp_chip, "value", GameState.hp, 0.45).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+
+
 func _refresh() -> void:
 	_info.text = str(GameState.character["name"]).to_upper()
 	_class_label.text = (GameState.class_title() + ("  ·  " + GameState.title if GameState.title != "" else "")).to_upper()
@@ -1228,6 +1333,7 @@ func _refresh() -> void:
 	_floor_label.text = "Floor %d" % GameState.floor
 	_hp_bar.max_value = GameState.max_hp()
 	_hp_bar.value = GameState.hp
+	_update_hp_look()
 	_hp_text.text = "%d / %d" % [ceili(GameState.hp), GameState.max_hp()]
 	_xp_bar.max_value = GameState.xp_to_next()
 	_xp_bar.value = GameState.xp
@@ -1459,6 +1565,9 @@ func _pop_in(dim: PanelContainer) -> void:
 
 
 var _menu_paused := false
+## The ring menu (scripts/ui/ring_menu.gd) is the menu; the old pause modal
+## is kept only as the parent of the settings modal.
+var _ring: RingMenu
 
 
 ## Offline the whole game pauses. Online the world keeps running (other
@@ -1475,8 +1584,8 @@ func _open_settings() -> void:
 		_settings_form = SettingsPanel.build()
 		_settings_form.closed.connect(func():
 			_settings_panel.hide()
-			_pause_panel.show()
-			(_pause_panel.get_meta("first") as Control).grab_focus())
+			if _menu_paused:
+				_ring.reshow())
 		box.add_child(_settings_form)
 	_pause_panel.hide()
 	_settings_panel.show()
@@ -1489,15 +1598,17 @@ func _toggle_pause() -> void:
 	if _settings_panel and _settings_panel.visible:
 		_settings_panel.hide()
 	_menu_paused = not _menu_paused
-	Audio.play("ui_open" if _menu_paused else "ui_close")
 	if not Net.online:
 		get_tree().paused = _menu_paused
-	_pause_panel.visible = _menu_paused
+	_pause_panel.visible = false
 	if _menu_paused:
 		_hide_screens()
 		_craft_panel.hide()
-		_pop_in(_pause_panel)
-		(_pause_panel.get_meta("first") as Control).grab_focus()
+		_ring.open()
+	else:
+		_ring.close()
+	# The quest card sits where the ring's panels slide out.
+	create_tween().tween_property(_quest_card, "modulate:a", 0.0 if _menu_paused else 1.0, 0.15)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _menu_paused else Input.MOUSE_MODE_CAPTURED
 	var player := get_tree().get_first_node_in_group("player")
 	if player:
@@ -1692,6 +1803,74 @@ func set_prompt(text: String) -> void:
 
 
 var _toast_tween: Tween
+var _heart_t := 0.0
+
+
+# --- Death and realm notices -------------------------------------------------
+
+var _death_overlay: ColorRect
+var _death_label: Label
+var _death_sub: Label
+var _death_tw: Tween
+var _death_left := 0.0
+var _death_where := ""
+
+
+## Grey-out with "You are dead" and a countdown; the player script respawns
+## when it ends (see Player.death_sequence). Input is blocked meanwhile.
+func show_death(seconds: float, where: String) -> void:
+	if _death_overlay == null:
+		_death_overlay = ColorRect.new()
+		_death_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_death_overlay.color = Color(0.08, 0.08, 0.1, 0.0)
+		_death_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+		_root.add_child(_death_overlay)
+		var v := VBoxContainer.new()
+		v.set_anchors_preset(Control.PRESET_CENTER)
+		v.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		v.grow_vertical = Control.GROW_DIRECTION_BOTH
+		v.alignment = BoxContainer.ALIGNMENT_CENTER
+		_death_overlay.add_child(v)
+		_death_label = UITheme.heading("YOU ARE DEAD", 44, Color(0.95, 0.3, 0.28))
+		_death_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		v.add_child(_death_label)
+		_death_sub = UITheme.label("", 17, UITheme.PARCH)
+		_death_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		v.add_child(_death_sub)
+	_death_overlay.visible = true
+	_death_overlay.color.a = 0.0
+	_death_label.modulate.a = 0.0
+	if _death_tw:
+		_death_tw.kill()
+	_death_tw = create_tween()
+	_death_tw.tween_property(_death_overlay, "color:a", 0.62, 0.5).set_delay(0.35)
+	_death_tw.parallel().tween_property(_death_label, "modulate:a", 1.0, 0.5).set_delay(0.6)
+	_death_left = seconds
+	_death_where = where
+	_death_sub.text = "Returning to %s in %d" % [where, ceili(seconds)]
+	close_screens()
+
+
+func hide_death() -> void:
+	if _death_overlay == null or not _death_overlay.visible:
+		return
+	if _death_tw:
+		_death_tw.kill()
+	_death_tw = create_tween()
+	_death_tw.tween_property(_death_overlay, "color:a", 0.0, 0.4)
+	_death_tw.parallel().tween_property(_death_label, "modulate:a", 0.0, 0.3)
+	_death_tw.tween_callback(func(): _death_overlay.visible = false)
+
+
+func is_dead_screen() -> bool:
+	return _death_overlay != null and _death_overlay.visible
+
+
+## Server-wide notice (unique skill granted, last limited slot taken...).
+## Called by Net on every client through group "hud".
+func realm_announce(text: String) -> void:
+	Audio.play("realm_announce")
+	toast(text, "", "Realm announcement", UITheme.GOLD)
 
 
 ## Centre-top notice. `sub` is a smaller second line, `kicker` a small

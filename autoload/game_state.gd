@@ -14,6 +14,7 @@ signal class_unlocked(class_name_: String)
 signal buffs_changed
 signal home_changed
 signal life_skill_up(skill: String, level: int)
+signal unique_skill_changed(id: String)
 
 # Starting classes. Hidden classes unlock later through quests.
 const ORIGINS := {
@@ -59,6 +60,10 @@ var smithing_level := 1
 var smithing_xp := 0
 var items_crafted := 0
 var hidden_class := ""
+## One-holder-per-realm skill this character holds ("" none; UniqueSkills).
+var unique_skill := ""
+## Hidden stats that unique skills watch (never shown, never sent to clients).
+var hidden_stats := {}
 var floors_cleared := 0
 ## Which floor of the Spire this character is on (1-based). Offline it is
 ## saved with the character; online it follows the server (one server = one
@@ -121,6 +126,8 @@ func reset() -> void:
 	smithing_xp = 0
 	items_crafted = 0
 	hidden_class = ""
+	unique_skill = ""
+	hidden_stats = {}
 	floors_cleared = 0
 	floor = 1
 	recipes_unlocked = []
@@ -147,6 +154,19 @@ func apply_origin(origin: String) -> void:
 
 func class_title() -> String:
 	return hidden_class if hidden_class != "" else character["origin"]
+
+
+## Offline: a hidden-stat event for the local character. Online the server
+## does this on the record (Net.note_hidden picks the right side).
+func note_hidden(event: String) -> void:
+	if not UniqueSkills.note(hidden_stats, event, Time.get_ticks_msec() / 1000.0):
+		return
+	var realm = Net.get_realm()
+	var id := UniqueSkills.try_grant(realm, Net.local_holder(), level, hidden_stats, unique_skill)
+	if id != "":
+		unique_skill = id
+		unique_skill_changed.emit(id)
+		Net.srv_announce(UniqueSkills.announce_text(str(character.get("name", "Someone")), id))
 
 
 func unlock_hidden_class(cls: String) -> void:
@@ -525,6 +545,8 @@ func to_dict() -> Dictionary:
 		"smithing_xp": smithing_xp,
 		"items_crafted": items_crafted,
 		"hidden_class": hidden_class,
+		"unique_skill": unique_skill,
+		"hidden": hidden_stats,
 		"floors_cleared": floors_cleared,
 		"floor": floor,
 		"recipes_unlocked": recipes_unlocked,
@@ -590,6 +612,9 @@ func apply_patch(d: Dictionary) -> void:
 	items_crafted = maxi(int(d.get("items_crafted", items_crafted)), 0)
 	var hc := str(d.get("hidden_class", hidden_class))
 	hidden_class = hc if HIDDEN_CLASSES.has(hc) else ""
+	var prev_unique := unique_skill
+	var us := str(d.get("unique_skill", unique_skill))
+	unique_skill = us if UniqueSkills.is_unique(us) else ""
 	floors_cleared = maxi(int(d.get("floors_cleared", floors_cleared)), 0)
 	if d.get("recipes_unlocked") is Array:
 		recipes_unlocked = []
@@ -632,6 +657,8 @@ func apply_patch(d: Dictionary) -> void:
 		leveled_up.emit(level)
 	if hidden_class != "" and hidden_class != prev_class:
 		class_unlocked.emit(hidden_class)
+	if unique_skill != prev_unique:
+		unique_skill_changed.emit(unique_skill)
 	if fishing_level > prev_fish:
 		life_skill_up.emit("fishing", fishing_level)
 	if cooking_level > prev_cook:
@@ -722,6 +749,10 @@ func from_dict(d: Dictionary) -> void:
 	hidden_class = str(d.get("hidden_class", ""))
 	if not HIDDEN_CLASSES.has(hidden_class):
 		hidden_class = ""
+	unique_skill = str(d.get("unique_skill", ""))
+	if not UniqueSkills.is_unique(unique_skill):
+		unique_skill = ""
+	hidden_stats = d.get("hidden", {}).duplicate(true) if d.get("hidden") is Dictionary else {}
 	floors_cleared = int(d.get("floors_cleared", 0))
 	floor = clampi(int(d.get("floor", 1)), 1, 2)
 	recipes_unlocked = []

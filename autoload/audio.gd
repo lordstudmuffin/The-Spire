@@ -22,8 +22,8 @@ const EVENTS := {
 	"crit": ["impact_sounds/impactMetal_heavy_002.ogg", "impact_sounds/impactGlass_heavy_000.ogg"],
 	"slam": ["impact_sounds/impactPlate_heavy_001.ogg", "impact_sounds/impactPlate_heavy_002.ogg"],
 	"grunt": ["impact_sounds/impactSoft_heavy_000.ogg", "impact_sounds/impactSoft_heavy_001.ogg", "impact_sounds/impactSoft_heavy_002.ogg"],
-	"death": ["impact_sounds/impactSoft_heavy_003.ogg", "impact_sounds/impactSoft_heavy_004.ogg"],
-	"boss_death": ["impact_sounds/impactBell_heavy_002.ogg"],
+	"death": ["crystal/shatter.ogg"],
+	"boss_death": ["crystal/shatter_boss.ogg"],
 	"player_hit": ["impact_sounds/impactSoft_medium_001.ogg", "impact_sounds/impactSoft_medium_002.ogg"],
 	# Movement
 	"step_grass": ["impact_sounds/footstep_grass_000.ogg", "impact_sounds/footstep_grass_001.ogg", "impact_sounds/footstep_grass_002.ogg", "impact_sounds/footstep_grass_003.ogg", "impact_sounds/footstep_grass_004.ogg"],
@@ -33,16 +33,16 @@ const EVENTS := {
 	"land": ["impact_sounds/impactSoft_medium_000.ogg"],
 	"dash": ["rpg_audio/cloth3.ogg"],
 	# Progression / crafting / loot
-	"level_up": ["music_jingles/jingles_STEEL00.ogg"],
-	"quest_complete": ["music_jingles/jingles_STEEL02.ogg"],
-	"quest_accept": ["interface_sounds/confirmation_001.ogg"],
+	"level_up": ["crystal/level_up.ogg"],
+	"quest_complete": ["crystal/quest_complete.ogg"],
+	"quest_accept": ["crystal/quest_accept.ogg"],
 	"class_unlock": ["music_jingles/jingles_PIZZI00.ogg"],
 	"craft_success": ["music_jingles/jingles_PIZZI10.ogg"],
 	"craft_pot": ["rpg_audio/metalPot2.ogg"],
 	"anvil": ["rpg_audio/metalClick.ogg"],
 	"craft_fail": ["interface_sounds/error_004.ogg"],
 	"coins": ["rpg_audio/handleCoins.ogg", "rpg_audio/handleCoins2.ogg"],
-	"pickup": ["rpg_audio/handleSmallLeather.ogg", "rpg_audio/handleSmallLeather2.ogg"],
+	"pickup": ["crystal/item_get.ogg"],
 	"equip": ["rpg_audio/clothBelt.ogg"],
 	"drop": ["rpg_audio/dropLeather.ogg"],
 	"mine": ["rpg_audio/chop.ogg", "impact_sounds/impactMining_000.ogg", "impact_sounds/impactMining_001.ogg"],
@@ -60,22 +60,52 @@ const EVENTS := {
 	"door_close": ["rpg_audio/doorClose_1.ogg"],
 	"teleport": ["interface_sounds/maximize_004.ogg"],
 	# UI
-	"ui_click": ["ui_audio/click1.ogg"],
-	"ui_hover": ["ui_audio/rollover2.ogg"],
-	"ui_open": ["interface_sounds/open_001.ogg"],
-	"ui_close": ["interface_sounds/close_001.ogg"],
-	"ui_back": ["interface_sounds/back_001.ogg"],
-	"ui_confirm": ["interface_sounds/confirmation_002.ogg"],
-	"ui_error": ["interface_sounds/error_001.ogg"],
+	"ui_click": ["crystal/menu_select.ogg"],
+	"ui_hover": ["crystal/menu_select.ogg"],
+	"ui_open": ["crystal/menu_confirm.ogg"],
+	"ui_close": ["crystal/menu_back.ogg"],
+	"ui_back": ["crystal/menu_back.ogg"],
+	"ui_confirm": ["crystal/menu_confirm.ogg"],
+	"ui_error": ["crystal/menu_error.ogg"],
 	"ui_toggle": ["ui_audio/switch1.ogg"],
-	"ui_tick": ["interface_sounds/tick_001.ogg"],
-	"chat": ["interface_sounds/bong_001.ogg"],
+	"ui_tick": ["crystal/menu_select.ogg"],
+	"chat": ["crystal/notify.ogg"],
+	# Crystal interface set (synthesized by tools/sfx/gen_crystal.py; regenerate
+	# or tweak there). Ring menu, notifications, loot, death and realm events.
+	"menu_open": ["crystal/menu_open.ogg"],
+	"menu_close": ["crystal/menu_close.ogg"],
+	"menu_select": ["crystal/menu_select.ogg"],
+	"panel_slide": ["crystal/panel_slide.ogg"],
+	"notify": ["crystal/notify.ogg"],
+	"party_invite": ["crystal/party_invite.ogg"],
+	"item_rare": ["crystal/item_rare.ogg"],
+	"hit_digital": ["crystal/hit_digital.ogg"],
+	"crit_digital": ["crystal/crit_digital.ogg"],
+	"shatter": ["crystal/shatter.ogg"],
+	"shatter_boss": ["crystal/shatter_boss.ogg"],
+	"player_death": ["crystal/player_death.ogg"],
+	"respawn": ["crystal/respawn.ogg"],
+	"heartbeat": ["crystal/heartbeat.ogg"],
+	"realm_announce": ["crystal/realm_announce.ogg"],
+	"skill_charge": ["crystal/skill_charge.ogg"],
+	"parry": ["crystal/parry.ogg"],
+	"block": ["crystal/block.ogg"],
+	"guard_break": ["crystal/guard_break.ogg"],
+	"stagger": ["crystal/stagger.ogg"],
+}
+
+## Extra events that always play with an event (same position): the crisp
+## "digital" tick on every hit, the low thud under a boss shatter.
+const LAYERS := {
+	"hit_flesh": ["hit_digital"], "hit_metal": ["hit_digital"], "hit_heavy": ["hit_digital"],
+	"crit": ["crit_digital"], "boss_death": ["slam"],
 }
 
 ## Per-event minimum gap in seconds (bursts of inventory_changed etc.).
-const MIN_GAP := {"pickup": 0.3, "coins": 0.25, "ui_hover": 0.05, "ui_click": 0.05, "chat": 0.2, "hit_flesh": 0.03, "hit_metal": 0.03, "crit": 0.08}
+const MIN_GAP := {"heartbeat": 0.7, "hit_digital": 0.03, "menu_select": 0.04, "notify": 0.2, "pickup": 0.3, "coins": 0.25, "ui_hover": 0.05, "ui_click": 0.05, "chat": 0.2, "hit_flesh": 0.03, "hit_metal": 0.03, "crit": 0.08}
 ## Per-event volume offsets in dB.
-const GAIN := {"ui_hover": -14.0, "ui_click": -6.0, "ui_tick": -10.0, "step_grass": -8.0, "step_stone": -10.0, "step_wood": -8.0,
+const GAIN := {"ui_hover": -16.0, "ui_click": -8.0, "ui_tick": -10.0, "menu_select": -8.0, "hit_digital": -9.0, "crit_digital": -5.0,
+	"pickup": -6.0, "panel_slide": -6.0, "heartbeat": -2.0, "shatter": -2.0, "step_grass": -8.0, "step_stone": -10.0, "step_wood": -8.0,
 	"swing": -4.0, "crit": -3.0, "level_up": -2.0, "quest_complete": -2.0, "grunt": -3.0, "death": -2.0, "anvil": -4.0, "chat": -8.0}
 
 const MUSIC := {
@@ -119,6 +149,7 @@ var _ambient_tweens := {}        # name -> Tween
 var _poll := 0.0
 var _last_money := -1
 var _last_haul := 0
+var _last_inv_size := 0
 var _quest_snapshot := {}
 var _bus := {}                   # name -> index
 
@@ -161,6 +192,7 @@ func _ready() -> void:
 	GameState.money_changed.connect(_on_money)
 	GameState.quest_changed.connect(_on_quest)
 	_last_haul = _haul()
+	_last_inv_size = GameState.inventory.size()
 	GameState.inventory_changed.connect(_on_inventory)
 
 
@@ -239,13 +271,20 @@ func play(event: String, pos = null, pitch_var := 0.08, volume_db := 0.0, pitch_
 		p3.pitch_scale = pitch
 		p3.volume_db = vol
 		p3.play()
+		_play_layers(event, pos, volume_db)
 		return p3
 	var p := _free_2d()
 	p.stream = s
 	p.pitch_scale = pitch
 	p.volume_db = vol
 	p.play()
+	_play_layers(event, pos, volume_db)
 	return p
+
+
+func _play_layers(event: String, pos, volume_db: float) -> void:
+	for extra in LAYERS.get(event, []):
+		play(extra, pos, 0.05, volume_db)
 
 
 func _free_2d() -> AudioStreamPlayer:
@@ -413,8 +452,12 @@ func _haul() -> int:
 func _on_inventory() -> void:
 	var h := _haul()
 	if h > _last_haul:
-		play("pickup")
+		# Epic rank (2) and above gets the long rare-drop chime.
+		var inv: Array = GameState.inventory
+		var rare := inv.size() > _last_inv_size and inv.size() > 0 and inv[-1] is Dictionary and int(inv[-1].get("rank", 0)) >= 2
+		play("item_rare" if rare else "pickup")
 	_last_haul = h
+	_last_inv_size = GameState.inventory.size()
 
 
 func _on_quest() -> void:

@@ -37,6 +37,8 @@ var _mob_spawner: MultiplayerSpawner
 var _fishing: Fishing
 var _herbs: HerbField
 var _home: PlayerHome
+## Hollowbrook market stalls (P7, scripts/life/stalls.gd); null off Floor 1.
+var _stalls: Node3D = null
 var _campfires: Array = []  # {"pos", "range", "label", "where"}
 ## Floor 1 waystones around the Talven fields (Scout Fen's visit quest):
 ## {"pos", "beacon": i, "lit": bool, "fx": Node3D}. Lit state mirrors
@@ -319,7 +321,9 @@ func _on_interact() -> void:
 	var near := _nearest_interactable()
 	if near[0] is Dictionary:
 		# Pads, the cottage ("kind") and camp fires ("where") are plain dicts.
-		if near[0].has("beacon"):
+		if near[0].has("stall"):
+			_stalls.open(int(near[0]["stall"]), hud)
+		elif near[0].has("beacon"):
 			_light_beacon(int(near[0]["beacon"]))
 		elif near[0].has("kind"):
 			var line: String = _home_interact_online(near[0]) if Net.remote_client() else _home.interact(near[0], player, hud, self)
@@ -459,6 +463,10 @@ func _track_ore_quest() -> void:
 ## The life-layer prompt, checked after NPCs and before ore veins.
 func _life_interactable() -> Array:
 	var p := player.global_position
+	if _stalls:
+		var st: Dictionary = _stalls.nearest(p)
+		if not st.is_empty():
+			return [st, st["label"]]
 	if _home:
 		var hit := _home.nearest(p)
 		if not hit.is_empty():
@@ -720,6 +728,11 @@ func _build_life_floor1() -> void:
 		_life_keep.append([sp, 2.0])
 
 
+## Hollowbrook market: six rentable player stalls (scripts/life/stalls.gd).
+func _build_market_floor1() -> void:
+	_stalls = preload("res://scripts/life/stalls.gd").build(self, HOLLOWBROOK)
+
+
 func _build_life_floor2(village: Dictionary) -> void:
 	_new_fishing()
 	var lake: Vector3 = Floor2Art.LAKE
@@ -889,6 +902,10 @@ func srv_action(peer: int, rs, kind: String, payload: Dictionary, pos: Vector3) 
 			if not rs.visit("waystone_%d" % i):
 				return {"error": "That stone is already awake."}
 			return {"i": i, "lit": GameState.visited_count(rs.visited, "waystone_")}
+		"stall", "stall_signs":
+			if _stalls == null:
+				return {"error": "There is no market on this floor."}
+			return _stalls.srv(peer, rs, kind, payload, pos)
 		"enter_labyrinth":
 			if not _srv_near(pos, TOWER_POS + Vector3(0, 0, 14), 5.0):
 				return {"error": "You are not at the Labyrinth gate."}
@@ -959,6 +976,10 @@ func _home_interact_online(hit: Dictionary) -> String:
 func _on_net_action(kind: String, res: Dictionary) -> void:
 	if hud == null:
 		return
+	if kind in ["stall", "stall_signs"]:
+		if _stalls:
+			_stalls.on_net(kind, res)
+		return
 	if kind in ["cast", "land"]:
 		if _fishing:
 			_fishing.on_net(kind, res)
@@ -1009,10 +1030,13 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 			hud.show_dialogue(str(res.get("npc", "")), str(res.get("line", "")))
 		"floor_cleared":
 			hud.toast("FLOOR %d CLEARED!" % GameState.floor)
+		"last_attack":
+			hud.toast("LAST ATTACK BONUS", str(res.get("item", "")), "Only one in the realm", UITheme.GOLD)
+		"unique_skill":
+			pass  # GameState.unique_skill_changed already toasts
 		"respawn":
 			if player:
-				Audio.play("teleport")
-				player.respawn()
+				player.die()
 		"hp":
 			if player and float(res.get("hp", 0.0)) < float(res.get("prev", 0.0)):
 				var lost: float = float(res["prev"]) - float(res["hp"])
@@ -1273,6 +1297,118 @@ func _spawn_hollowbrook_chain() -> void:
 	fen.quest_id = "talven_waystones"
 	_set_talk(fen, _fen_talk)
 	add_child(fen)
+	_spawn_limited_npcs()
+
+
+# --- Limited quests (LimitedContent: 1-3 holders in the whole realm) --------
+
+func _spawn_limited_npcs() -> void:
+	var bram := NPC.new()
+	bram.npc_name = "Old Watchman Bram"
+	bram.appearance = {"hair_color": "d8d4cc", "outfit_color": "3a3f4a", "hair_style": 0, "eye_color": "6a7a8a", "height": 1.0}
+	bram.position = TALVEN + Vector3(-3.6, 0, 3.2)
+	bram.rotation.y = PI * 0.8
+	bram.quest_id = "old_watch_whispers"
+	_set_talk(bram, _bram_talk)
+	add_child(bram)
+	# A lamplighter nobody in town remembers, at the far edge of the first
+	# Labyrinth terrace.
+	var iselde := NPC.new()
+	iselde.npc_name = "Lamplighter Iselde"
+	iselde.appearance = {"hair_color": "f1d9a0", "outfit_color": "e8e4de", "hair_style": 3, "eye_color": "f0c060", "height": 0.94}
+	iselde.position = LAB_LEVELS[0] + Vector3(-7.0, 0, 5.0)
+	iselde.rotation.y = PI * 0.25
+	iselde.quest_id = "lantern_below"
+	_set_talk(iselde, _iselde_talk)
+	add_child(iselde)
+
+
+## Shared flow: accept reserves a realm slot (refused when full), the slot
+## frees itself if the quest sits unfinished too long, the turn-in confirms
+## it and pays the limited item.
+func _limited_talk(gs, qid: String, req: String, lines: Dictionary) -> String:
+	var q: Dictionary = LimitedContent.QUESTS[qid]
+	var mat: String = q["mat"]
+	var need := int(q["need"])
+	if gs.quest_done(qid):
+		return lines["done"]
+	if req != "" and not gs.quest_done(req):
+		return lines["locked"]
+	if not gs.quests.has(qid):
+		var res := LimitedContent.reserve_quest(gs, qid)
+		if not res.get("ok", false):
+			return lines["full"]
+		gs.start_quest(qid, need)
+		var left := LimitedContent.slots_left(qid)
+		return "%s\n(Limited quest: %d of %d places left in the realm. Finish within two hours of play or the place passes on.)" % [lines["offer"], left, int(q["cap"])]
+	if not LimitedContent.holds_quest(gs, qid):
+		gs.quests.erase(qid)
+		if gs == GameState:
+			GameState.quest_changed.emit()
+		return lines["expired"]
+	var have := int(gs.materials.get(mat, 0))
+	gs.quests[qid]["progress"] = mini(have, need)
+	if gs == GameState:
+		GameState.quest_changed.emit()
+	if have < need:
+		return lines["in_progress"] % [have, need]
+	var conf := LimitedContent.confirm_quest(gs, qid)
+	if not conf.get("ok", false):
+		gs.quests.erase(qid)
+		return lines["expired"]
+	gs.spend_materials({mat: need})
+	gs.complete_quest(qid)
+	gs.add_xp(int(q["xp"]))
+	gs.add_money(int(q["col"]))
+	var item_id: String = q["reward"]
+	var got := LimitedContent.grant_item(gs, item_id)
+	var reward: String = LimitedContent.ITEMS[item_id]["name"] if got.get("ok", false) else "no item (the realm refused it)"
+	return "%s\n(+%d XP, +%d Col, %s)" % [lines["turn_in"], int(q["xp"]), int(q["col"]), reward]
+
+
+func _bram_talk(gs = GameState) -> String:
+	return _limited_talk(gs, "old_watch_whispers", "talven_waystones", {
+		"locked": "The stones are dark and so am I. Wake the old line with Fen first, then we will talk about what the watch left behind.",
+		"offer": "You lit the line. Then you have earned the rest of the story: the last watch-captains forged three blades at those stones, and the wolves dragged the scabbards off. Bring me 5 wolf pelts from the north slope and I will kindle one more blade. Only three were ever made.",
+		"in_progress": "%d of %d pelts. The pack runs the scrub below the tower. Do not dawdle: the fire in these stones does not wait forever.",
+		"turn_in": "Five. The stones remember you. Take it: a Wisplight blade, one of three. It will not leave your hand for anyone else's.",
+		"done": "Carry it well. Three blades, three wardens. The watch is not dead while one of you walks.",
+		"full": "Three blades were promised and three wardens carry them now. I am sorry. The stones have nothing left to give.",
+		"expired": "You took too long, and the stones gave your place to another. That is the way of the old watch. Come back if a place opens again.",
+	})
+
+
+func _iselde_talk(gs = GameState) -> String:
+	return _limited_talk(gs, "lantern_below", "", {
+		"locked": "",
+		"offer": "Oh. You can see me. Nobody climbs this far and looks at the corners. My lantern went out when the Guardian woke, and only the shards of this tower can relight it. Bring me 6 Spirit Shards. I only have the one veil to give, and I will give it once.",
+		"in_progress": "%d of %d shards. The terraces' guardians carry them. Please hurry: if you wander off too long, the lantern will choose someone else.",
+		"turn_in": "Light. Real light. Here: the Veil of First Dawn. There is only one, and now it is yours. When you climb higher, take a little of this floor's morning with you.",
+		"done": "The lantern burns. Thank you, Lamplighter's friend.",
+		"full": "Someone already carries my lantern's promise. I am sorry, traveller. There was only ever one veil.",
+		"expired": "The lantern waited, and you did not come. Someone else carries the promise now, or will soon.",
+	})
+
+
+## Last Attack bonus: the first character in the realm to land the killing
+## blow on Floor 1's Guardian gets the one Mantle of the First Floor.
+func _grant_last_attack(killer: int) -> void:
+	if GameState.floor != 1:
+		return
+	if not Net.online or (killer == multiplayer.get_unique_id() and not Net.srv_records.has(killer)):
+		var res := LimitedContent.grant_item(GameState, "la_floor1")
+		if res.get("ok", false) and not res.get("already", false):
+			hud.toast("LAST ATTACK BONUS", LimitedContent.ITEMS["la_floor1"]["name"], "Only one in the realm", UITheme.GOLD)
+			Net.srv_announce("%s took the Last Attack on the Floor Guardian." % str(GameState.character.get("name", "Someone")))
+		return
+	if not Net.srv_records.has(killer):
+		return
+	var rs = Net.RecordState.new(Net.srv_records[killer])
+	var res := LimitedContent.grant_item(rs, "la_floor1")
+	if res.get("ok", false) and not res.get("already", false):
+		Net.save_record(Net.srv_records[killer])
+		Net.srv_announce("%s took the Last Attack on the Floor Guardian." % str(Net.srv_records[killer]["name"]))
+		Net._srv_reply(killer, "last_attack", {"item": LimitedContent.ITEMS["la_floor1"]["name"]})
 
 
 ## Shared flow for the chain's gather quests: progress mirrors the material
@@ -1433,6 +1569,7 @@ func _build_floor1() -> void:
 	_spawn_ore_veins()
 	_spawn_npcs()
 	_build_life_floor1()
+	_build_market_floor1()
 	_build_beacons()
 	await LoadingScreen.step("Planting the meadow", 0.7)
 	_dress_world()
@@ -1844,7 +1981,7 @@ func _spawn_boss() -> void:
 		_boss_summon(null)
 		return
 	_spawn_mob({"name": "Floor Guardian: Gravelmaw", "level": 7, "hp": 650, "dmg": 18, "xp": 600, "money": 400,
-		"color": "806b8c", "size": [3.0, 2.6, 3.6], "speed": 2.6, "aggro": 40, "boss": true, "respawns": false,
+		"color": "806b8c", "size": [4.2, 4.0, 4.8], "speed": 2.6, "aggro": 40, "boss": true, "respawns": false,
 		"drops": {"spirit_shard": 1.0, "iron_ore": 1.0}, "pos": [bp.x, bp.y, bp.z]})
 	# Two sentinels guard the Guardian; they do not respawn.
 	for side in [-1, 1]:
@@ -1876,6 +2013,8 @@ func _boss_summon(boss: Enemy) -> void:
 func _on_boss_died(_e: Enemy) -> void:
 	_boss = null
 	_floor_cleared_on_server = true
+	if is_instance_valid(_e):
+		_grant_last_attack(_e._last_hitter)
 	if Net.online:
 		# Server: the clear reward goes onto the record of everyone on the
 		# summit (server-accepted positions) and reaches them as a patch.
@@ -2310,7 +2449,7 @@ func _spawn_mobs() -> void:
 		for i in 3:
 			var a := TAU * i / 3.0 + lvl
 			_add_mob("Kobold Scout", 5 + lvl, 110 + 30 * lvl, 12 + 3 * lvl, 80 + 20 * lvl, 20, "6b7a3a",
-				base + Vector3(cos(a) * 5, 1, sin(a) * 5), "", {"iron_ore": 0.6, "spirit_shard": 0.2})
+				base + Vector3(cos(a) * 5, 1, sin(a) * 5), "", {"iron_ore": 0.6, "spirit_shard": 0.2}, [0.9, 1.5, 0.9])
 		# Tunnel Rats scurry round the terrace rim (quick, weak).
 		for i in 2:
 			var a := TAU * i / 2.0 + lvl + 1.0
@@ -2322,9 +2461,12 @@ func _spawn_mobs() -> void:
 		"pos": [LAB_LEVELS[1].x, LAB_LEVELS[1].y + 1, LAB_LEVELS[1].z - 4]})
 
 
-func _add_mob(n: String, lvl: int, hp: float, dmg: float, xp: int, money: int, c: String, pos: Vector3, quest: String, drops: Dictionary) -> void:
-	_spawn_mob({"name": n, "level": lvl, "hp": hp, "dmg": dmg, "xp": xp, "money": money, "color": c,
-		"pos": [pos.x, pos.y, pos.z], "quest": quest, "drops": drops})
+func _add_mob(n: String, lvl: int, hp: float, dmg: float, xp: int, money: int, c: String, pos: Vector3, quest: String, drops: Dictionary, size: Array = []) -> void:
+	var d := {"name": n, "level": lvl, "hp": hp, "dmg": dmg, "xp": xp, "money": money, "color": c,
+		"pos": [pos.x, pos.y, pos.z], "quest": quest, "drops": drops}
+	if size.size() == 3:
+		d["size"] = size
+	_spawn_mob(d)
 
 
 # =========================================================== Floor 2 =====
