@@ -1051,6 +1051,126 @@ void fragment() {
 	tw.tween_callback(layer.queue_free)
 
 
+## Field mobs (Aincrad's first floor behaviours, gameplay's enemy.gd).
+const RUSH_COLOR := Color(1.0, 0.5, 0.2)
+const HOWL_COLOR := Color(0.7, 0.8, 1.0)
+const LURE_COLOR := Color(1.0, 0.78, 0.3)
+
+
+## A boar paws the ground before its charge: dust kicked up at its feet, a
+## warning glint, and an orange lane to where the charge will end.
+func mob_rush_warning(enemy: Node3D, to: Vector3, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	var from := enemy.global_position
+	var d := to - from
+	d.y = 0.0
+	var length := maxf(d.length(), 1.0)
+	var w := 1.4
+	var mid := from + d * 0.5
+	var t := _telegraph(enemy, 2, Vector3(mid.x, _ground_y(mid), mid.z), Vector2(w, length), d.normalized() if d.length() > 0.01 else _forward(enemy), secs)
+	if t and t.material_override is ShaderMaterial:
+		(t.material_override as ShaderMaterial).set_shader_parameter("color", RUSH_COLOR)
+	var feet := Vector3(from.x, _ground_y(from), from.z)
+	for k in 3:
+		get_tree().create_timer(secs * 0.25 * k, false).timeout.connect(func():
+			if _valid(enemy):
+				puff(enemy.global_position - _forward(enemy) * 0.4, 0.8))
+	var box := _body_bounds(enemy)
+	_glint(Vector3(box.get_center().x, box.end.y + 0.2, box.get_center().z), RUSH_COLOR, 0.9, secs, true)
+	ring(feet, RUSH_COLOR, 1.6, 0.4)
+
+
+## A wolf howls (or a vine's scent spreads) and packmates answer: a ring
+## rolls out over the ground and a pale shock ring leaves the caller's head;
+## every answering mob gets a small glint.
+func mob_pack_call(enemy: Node3D, answered: int) -> void:
+	if not _valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var head := Vector3(box.get_center().x, box.end.y, box.get_center().z)
+	var col := LURE_COLOR if str(enemy.get("pack")) == "vine" else HOWL_COLOR
+	_shock_ring(head, col, 2.2, 0.5)
+	get_tree().create_timer(0.15, false).timeout.connect(func(): _shock_ring(head, col, 3.4, 0.6))
+	ring(Vector3(head.x, _ground_y(head), head.z), col, 10.0 + 2.0 * answered, 0.9)
+	var pk := str(enemy.get("pack"))
+	if pk == "":
+		return
+	for e in get_tree().get_nodes_in_group("enemies"):
+		if e != enemy and e is Node3D and str(e.get("pack")) == pk and _valid(e) \
+				and (e as Node3D).global_position.distance_to(enemy.global_position) < 22.0:
+			var eb := _body_bounds(e)
+			_glint(Vector3(eb.get_center().x, eb.end.y + 0.3, eb.get_center().z), col, 0.7, 0.6, true)
+
+
+## A Snaptrap's swollen fruit bursts: a cloud of amber scent spores, pulp
+## spray and a wide ring showing how far the scent carries.
+func mob_lure_burst(enemy: Node3D) -> void:
+	if not _valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var top := Vector3(box.get_center().x, box.end.y - 0.2, box.get_center().z)
+	burst_at(AABB(top - Vector3(0.25, 0.25, 0.25), Vector3(0.5, 0.5, 0.5)), LURE_COLOR)
+	_fire(top, "smoke_03", false, Color(LURE_COLOR, 0.55), 1.0, 1.6, 0.8, 2.2, Vector3.UP, 80.0, -0.3, 0.6, 1.4, 0.4, false)
+	_fire(top, "star_05", true, LURE_COLOR.lightened(0.3), 0.8, 1.2, 1.5, 3.5, Vector3.UP, 70.0, -1.5, 0.08, 0.18, 0.0, false)
+	ring(Vector3(top.x, _ground_y(top), top.z), LURE_COLOR, 22.0, 1.2)
+
+
+## Last bar: the lord throws down axe and buckler and draws the curved
+## longblade (MobDress.draw_blade) in a flash of steel light.
+func boss_weapon_swap(enemy: Node3D, _data: Dictionary) -> void:
+	if not _valid(enemy):
+		return
+	var tip := MobDress.draw_blade(enemy)
+	var box := _body_bounds(enemy)
+	var at: Vector3 = tip.global_position if tip else box.get_center()
+	_glint(at, Color(0.85, 0.92, 1.0), 2.4, 0.7, true)
+	flash(box.get_center(), Color(1.0, 0.9, 0.7), 3.0)
+	flash_light(box.get_center(), Color(1.0, 0.75, 0.4), 8.0)
+	_tinted_slash(box.get_center() - Vector3(0, 1.1, 0) + Vector3(0, box.size.y * 0.1, 0), _forward(enemy), Color(1.0, 0.8, 0.45), 2.4, 0.2, 0.0, 0.45)
+	_shock_ring(box.get_center(), ENRAGE_COLOR, box.size.y * 1.6, 0.6)
+
+
+## A leap slam: the body arcs from `from` to the landing spot over the
+## wind-up (the enemy itself snaps there on impact), shadowed by the ring.
+func boss_leap(enemy: Node3D, from: Vector3, to: Vector3, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	var m: Node3D = enemy.get("_mesh")
+	if m == null:
+		return
+	var base := m.position
+	var off := m.global_position - enemy.global_position
+	var hgt := clampf(from.distance_to(to) * 0.5, 3.0, 8.0)
+	var crouch := secs * 0.3
+	puff(from, 2.0)
+	var tw := m.create_tween()
+	tw.tween_interval(crouch)
+	tw.tween_method(func(t: float):
+		if is_instance_valid(m):
+			var p := from.lerp(to, t)
+			p.y += sin(t * PI) * hgt
+			m.global_position = p + off, 0.0, 1.0, secs - crouch).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	get_tree().create_timer(secs + 0.12, false).timeout.connect(func():
+		if is_instance_valid(m):
+			m.position = base)
+
+
+## A blade turned by plate (armoured halberdiers before they are staggered):
+## white-gold sparks off the armour and a short bright flash.
+func mob_plated_hit(enemy: Node3D, from_dir: Vector3) -> void:
+	if not _valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var d := from_dir
+	d.y = 0.0
+	d = d.normalized() if d.length_squared() > 0.001 else _forward(enemy)
+	var at := box.get_center() + Vector3(0, box.size.y * 0.1, 0) - d * box.size.z * 0.4
+	_fire(at, "spark_04", true, Color(1.0, 0.92, 0.6), 0.9, 0.25, 4.0, 8.0, (-d + Vector3.UP * 0.6).normalized(), 50.0, -9.0, 0.05, 0.12, 0.0, true)
+	_glint(at, Color(1.0, 0.95, 0.8), 0.8, 0.25, true)
+	Audio.play("block", at, 0.1, -4.0, 1.3)
+
+
 func _player_forward(player: Node3D) -> Vector3:
 	var m = player.get("model")
 	return _forward(m) if m is Node3D else _forward(player)

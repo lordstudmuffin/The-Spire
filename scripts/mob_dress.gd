@@ -161,6 +161,52 @@ static func apply(inst: Node3D, kind: String) -> void:
 			_part(sheath, _bx(u * 0.025, u * 0.14, u * 0.035), _mat(Color("c8a24a")), sp + Vector3(0, u * 0.3, -u * 0.2), Vector3(1.2, 0, 0.15))
 
 
+## The lord's last-bar swap: axe and buckler gone, the curved longblade
+## drawn from the hip (the scabbard stays, empty). Returns the blade's tip
+## node for effects, or null when `root` wears no lord dress.
+static func draw_blade(root: Node) -> Node3D:
+	var wpn := root.find_child("KoboldWeapon", true, false)
+	if wpn == null or wpn.get_child_count() == 0:
+		return null
+	var hold: Node3D = wpn.get_child(0)
+	if hold.has_node("Longblade"):
+		return hold.get_node("Longblade/Tip")
+	for c in hold.get_children():
+		(c as Node3D).visible = false
+	var off := root.find_child("KoboldOffhand", true, false)
+	if off:
+		(off as Node3D).visible = false
+	var sheath := root.find_child("KoboldSheath", true, false)
+	if sheath and sheath.get_child_count() > 0 and sheath.get_child(0).get_child_count() > 1:
+		(sheath.get_child(0).get_child(1) as Node3D).visible = false  # the hilt
+	# Size the blade from the axe haft that was there (model-space units).
+	var u := 2.4
+	for c in hold.get_children():
+		if c is MeshInstance3D and (c as MeshInstance3D).mesh is CylinderMesh:
+			u = ((c as MeshInstance3D).mesh as CylinderMesh).height / 0.62 * 1.0
+			break
+	var blade := Node3D.new()
+	blade.name = "Longblade"
+	hold.add_child(blade)
+	var steel := _mat(Color("d8dde6"), Color(0.55, 0.65, 0.8), 0.25)
+	_part(blade, _bx(u * 0.03, u * 0.14, u * 0.035), _mat(Color("2a1a14")), Vector3(0, -u * 0.02, 0))  # grip
+	_part(blade, _bx(u * 0.1, u * 0.02, u * 0.05), _mat(Color("c8a24a")), Vector3(0, u * 0.06, 0))   # guard
+	# A gentle curve: segments bending back along +Z as they rise.
+	var p := Vector3(0, u * 0.07, 0)
+	var ang := 0.0
+	for k in 7:
+		var seg := u * 0.1
+		var dir := Vector3(0, cos(ang), sin(ang))
+		_part(blade, _bx(u * 0.012, seg * 1.08, u * (0.05 - k * 0.004)), steel, p + dir * seg * 0.5, Vector3(-ang, 0, 0))
+		p += dir * seg
+		ang += 0.06
+	var tip := Node3D.new()
+	tip.name = "Tip"
+	tip.position = p
+	blade.add_child(tip)
+	return tip
+
+
 static func _mat(c: Color, emission := Color.BLACK, strength := 0.0) -> ShaderMaterial:
 	if _shader == null:
 		_shader = load("res://shaders/toon_creature.gdshader")

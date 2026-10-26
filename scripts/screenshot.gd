@@ -329,6 +329,27 @@ func _ready() -> void:
 							hfx.hearth_glow(pl)
 						else:
 							hfx.class_art_cast(pl, "Hearthwright" if demo == "hearth_flare" else "Stillblade", demo)
+				"boss_swap", "boss_leap", "plated":
+					var bs: Node3D = null
+					for e in scene.get_tree().get_nodes_in_group("enemies"):
+						if (e.get("is_boss") and e.get("brain") != null) or (demo == "plated" and "halberdier" in str(e.get("display_name")).to_lower()):
+							bs = e
+							break
+					var sfx := VFX.get_for(pl)
+					if bs and sfx:
+						bs.set("speed", 0.0)
+						bs.set("aggro_range", 0.0)
+						# Stand it where the --cam shots look (the arena's far side).
+						if "ARENA_POS" in scene:
+							bs.global_position = scene.ARENA_POS + Vector3(0, 0.2, -6)
+							bs.rotation.y = 0.0
+						match demo:
+							"boss_swap":
+								sfx.boss_weapon_swap(bs, {})
+							"boss_leap":
+								sfx.boss_leap(bs, bs.global_position, bs.global_position + Vector3(0, 0, 8), 1.0)
+							"plated":
+								sfx.mob_plated_hit(bs, Vector3(0, 0, -1))
 				"battle_result":
 					var bh = scene.get("hud")
 					if bh and bh.has_method("show_battle_result"):

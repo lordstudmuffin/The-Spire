@@ -636,7 +636,22 @@ func _build(hollowbrook: Vector3) -> void:
 		world.add_child(wares)
 		if WorldProps.live_prop(wares, "dungeon", "crates_stacked", pos - fwd * 1.3 - side * 1.0, rot + 0.3, WorldProps.DUNGEON * 0.8, "none") == null:
 			WorldArt.crate(wares, pos - fwd * 1.3 - side * 1.0, 0.8, rot)
-		stalls.append({"pos": pos, "rot": rot, "front": d["front"], "sign": sign, "seats": seats, "wares": wares})
+		# The stall keeper: stands behind the counter while the stall is rented
+		# and stocked (the owner can be offline; the keeper sells for them).
+		# Art hook: WorldProps.stall_keeper(parent, pos, rot, index) builds the
+		# figure; a plain primitive stands in until it exists.
+		var keeper := Node3D.new()
+		keeper.name = "Keeper%d" % k
+		keeper.visible = false
+		world.add_child(keeper)
+		var kpos := pos - fwd * 0.55
+		var wp: Script = load("res://scripts/world_props.gd")
+		if not (wp.has_method("stall_keeper") and wp.call("stall_keeper", keeper, kpos, rot + PI, k)):
+			var apron := Color("b8865a") if k % 2 == 0 else Color("6f8f5a")
+			WorldArt.cyl(keeper, 0.2, 0.26, 1.05, kpos + Vector3(0, 0.55, 0), apron, 8)
+			WorldArt.cyl(keeper, 0.24, 0.24, 0.32, kpos + Vector3(0, 1.22, 0), Color("e8d2b8"), 8)
+			WorldArt.cyl(keeper, 0.27, 0.2, 0.12, kpos + Vector3(0, 1.43, 0), Color("4a3a2e"), 8)
+		stalls.append({"pos": pos, "rot": rot, "front": d["front"], "sign": sign, "seats": seats, "wares": wares, "keeper": keeper})
 	if Net.is_authority() or not Net.online:
 		_refresh_local_signs()
 
@@ -684,6 +699,7 @@ func apply_signs(list: Array) -> void:
 			lbl.modulate = Color("ffcf8a") if resto else Color("bfe8ff")
 		(st["seats"] as Node3D).visible = owner != "" and resto
 		(st["wares"] as Node3D).visible = owner != "" and not resto and int(s.get("n", 0)) > 0
+		(st["keeper"] as Node3D).visible = owner != "" and int(s.get("n", 0)) > 0
 
 
 ## Interact prompt: {"stall": i, "label"} when the player stands at a stall front.

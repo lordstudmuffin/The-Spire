@@ -769,6 +769,8 @@ func net_event(kind: String, data: Dictionary) -> void:
 					Audio.play("skill_charge", pos, 0.05, 2.0, 0.7)
 					if fx and fx.has_method("boss_slam_warning"):
 						fx.call("boss_slam_warning", e, pos, float(data.get("radius", 5.0)), secs)
+					if fx and bool(data.get("leap", false)) and fx.has_method("boss_leap"):
+						fx.call("boss_leap", e, data.get("from", e.global_position), pos, secs)
 					elif fx:
 						fx.ring(pos + Vector3(0, 0.1, 0), Color(1.0, 0.35, 0.15), float(data.get("radius", 5.0)) * 2.0, secs)
 		"charge":

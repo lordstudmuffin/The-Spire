@@ -1323,6 +1323,8 @@ func _test_market() -> void:
 	_check(w.srv_action(4747, mrs, "stall", {"op": "rent", "stall": free_i}, Vector3(80, 0, -80)).has("error") and mrec["money"] == 400, "server refuses a stall action from across the island")
 	r = w.srv_action(4747, mrs, "stall", {"op": "rent", "stall": free_i}, lay[free_i]["front"])
 	_check(not r.has("error") and mrec["money"] == 400 - S.RENT and str(w._stalls.signs[free_i]["owner"]) == "Vendra", "server rents at the stall front; the sign shows the renter")
+	w._stalls.apply_signs([{"owner": "Vendra", "type": "shop", "n": 2}, {"owner": "", "n": 0}, {"owner": "Vendra", "type": "shop", "n": 0}])
+	_check(w._stalls.stalls[0]["keeper"].visible and not w._stalls.stalls[1]["keeper"].visible and not w._stalls.stalls[2]["keeper"].visible, "a keeper stands at rented, stocked stalls only")
 	_check(w.srv_action(4747, mrs, "stall_signs", {}, Vector3(80, 0, -80)).get("signs", []).size() == S.COUNT, "sign poll answers from anywhere")
 	w.player.global_position = lay[free_i]["front"]
 	var near: Array = w._nearest_interactable()
@@ -2307,6 +2309,11 @@ func _test_duels() -> void:
 	const B := 7202
 	const C := 7203
 	var field := Vector3(10, 1, -45)
+	# The duel field sits in wolf country: freeze this world's mobs so a pack
+	# never joins the duel (a mob kill ends it and made the suite flaky).
+	for e in get_tree().get_nodes_in_group("enemies"):
+		if world.is_ancestor_of(e):
+			e.process_mode = Node.PROCESS_MODE_DISABLED
 	var make := func(peer: int, pname: String, pos: Vector3) -> Player:
 		var rec: Dictionary = Net._new_record(Net.sanitize_character({"name": pname}), "0123456789abcdef0123456789abcdef", {})
 		Net.srv_records[peer] = rec

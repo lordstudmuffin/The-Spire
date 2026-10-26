@@ -828,6 +828,12 @@ func take_hit(amount: float, from_dir: Vector3, hitter := 1, kind := -1) -> void
 	_popup("-%d" % int(round(amount)), Color(1.0, 0.85, 0.3), crit)
 	_hit_sfx(amount)
 	_hit_fx(from_dir, crit, VFX.kind_color(kind))
+	if armor < 1.0 and _stagger <= 0.0:
+		# Plate turned the blade: sparks and a clang on every peer.
+		if Net.online:
+			net_plated.rpc(from_dir)
+		else:
+			net_plated(from_dir)
 	_knock = from_dir * (2.0 if is_boss else 8.0)
 	if hp <= 0:
 		_die()
@@ -838,6 +844,14 @@ func take_hit(amount: float, from_dir: Vector3, hitter := 1, kind := -1) -> void
 		tw.tween_property(_mesh, "scale", Vector3(1.2, 0.8, 1.2), 0.05)
 		tw.tween_property(_mesh, "scale", Vector3.ONE, 0.1)
 		_update_label()
+
+
+## Everyone: a plated hit (VFX hook mob_plated_hit(enemy, dir)).
+@rpc("authority", "call_local", "unreliable")
+func net_plated(from_dir: Vector3) -> void:
+	var pfx := VFX.get_for(self)
+	if pfx and pfx.has_method("mob_plated_hit"):
+		pfx.call("mob_plated_hit", self, from_dir)
 
 
 ## The player node of `peer` (the nearest one, should two worlds overlap
@@ -1197,10 +1211,10 @@ func _rig_kind() -> String:
 		return "wolf"
 	if "sergeant" in n:
 		return "sergeant"
-	if "kobold" in n:
-		return "kobold"
 	if "sentinel" in n or "halberdier" in n or "golem" in n:
 		return "sentinel"
+	if "kobold" in n:
+		return "kobold"
 	for k in ["slime", "bat", "rat"]:
 		if k in n:
 			return k
