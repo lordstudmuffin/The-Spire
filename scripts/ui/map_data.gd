@@ -107,6 +107,10 @@ static func landmarks() -> Array:
 			{"pos": pond_pos(), "kind": "water", "label": "Mill Pond", "radius": pond_radius()},
 			{"pos": WorldArt.GROVE, "kind": "camp", "label": "Snaptrap Grove", "radius": 6.0, "area": 16.0},
 			{"pos": WorldArt.WINDMILL, "kind": "farm", "label": "Old Windmill", "radius": 3.0, "area": 10.0},
+			{"pos": WorldArt.RUINED_WATCH, "kind": "tower", "label": "Ruined Watch", "radius": 4.0, "area": 14.0},
+			{"pos": WorldArt.HUNTERS_CAMP, "kind": "camp", "label": "Hunters' Camp", "radius": 3.0, "area": 11.0},
+			{"pos": WorldArt.SHRINE, "kind": "board", "label": "Wayside Shrine", "radius": 2.5, "area": 10.0},
+			{"pos": WorldArt.SIEGE_CAMP, "kind": "camp", "label": "Old Siege Camp", "radius": 3.0, "area": 12.0},
 		]
 		var mk: Vector3 = load("res://scripts/life/stalls.gd").market_center(hb)
 		var fm: Vector3 = load("res://scripts/life/farms.gd").field_center(hb)

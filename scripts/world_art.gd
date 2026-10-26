@@ -42,6 +42,12 @@ const WINDMILL := Vector2(-186, -60)
 const GREYTUSK := Vector2(0, 216)
 const POND := Vector2(162, -72)
 const POND_RADIUS := 8.0
+## Wayside landmarks in the open country (scripts/floor1_landmarks.gd).
+const RUINED_WATCH := Vector2(140, 108)
+const HUNTERS_CAMP := Vector2(-150, -98)
+const SHRINE := Vector2(-96, 176)
+const SIEGE_CAMP := Vector2(58, -112)
+const STREAM_BRIDGE := Vector2(215, -75.5)
 ## North-half woods between the town and the tower (vegetation density).
 const WOODS_Z := Vector2(-262, -60)
 ## Roads as polylines (each a list of points); they bend a little so the long
@@ -236,6 +242,7 @@ const FLAT_ZONES := [
 	[PLAZA, 52.0, 22.0], [HOLLOWBROOK, 48.0, 18.0], [TALVEN, 28.0, 14.0], [TOWER, 44.0, 20.0],
 	[POND, 24.0, 14.0], [GROVE, 20.0, 14.0], [WINDMILL, 18.0, 12.0],
 	[Vector2(-90, -150), 6.0, 9.0], [Vector2(-60, -204), 6.0, 9.0], [Vector2(21, -129), 6.0, 9.0],
+	[RUINED_WATCH, 16.0, 12.0], [HUNTERS_CAMP, 13.0, 10.0], [SHRINE, 12.0, 10.0], [SIEGE_CAMP, 14.0, 10.0],
 ]
 ## Set by world.gd per floor: height_at() is 0 everywhere when off.
 static var terrain_on := false

@@ -2066,6 +2066,10 @@ func _build_floor1() -> void:
 	_build_life_floor1()
 	_build_market_floor1()
 	_build_beacons()
+	# Wayside landmarks in the open country (and the hunters' cooking fire).
+	var lm: Dictionary = preload("res://scripts/floor1_landmarks.gd").build(self)
+	_life_keep.append_array(lm["keep"])
+	_campfires.append({"pos": lm["fire"], "range": 2.6, "label": "Cook at the hunters' fire", "where": "Hunters' camp fire"})
 	_routines = preload("res://scripts/npc_routines.gd").build(self)
 	_monument = preload("res://scripts/monument.gd").build(self)
 	_results = preload("res://scripts/battle_results.gd").build(self)
