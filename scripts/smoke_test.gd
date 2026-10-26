@@ -1718,6 +1718,15 @@ func _test_labyrinth() -> void:
 	_check(world._monument != null and face.get("got").size() == 1 and str(face.get("got")[0]["name"]) == str(GameState.character.get("name", "Nameless")), "the Monument lists the local character offline and fills the art node")
 	_check(world._nearest_interactable()[0] == world._monument and world._monument.text().begins_with("1. "), "E next to the monument reads it")
 	face.queue_free()
+	# Post-battle results: kills and drops add up into one window.
+	var br: Node = world._results
+	br.close()
+	br.note_kill("Meadow Slime", 12, 2)
+	br.note_kill("Meadow Slime", 12, 2)
+	br.note_item("beast_hide")
+	var res_data: Dictionary = br.close()
+	_check(int(res_data.get("kills", 0)) == 2 and int(res_data["xp"]) == 24 and int(res_data["col"]) == 4 and int(res_data["foes"]["Meadow Slime"]) == 2 and int(res_data["items"]["beast_hide"]) == 1 and br.close().is_empty(), "battle results sum the fight's kills, EXP, Col and items")
+	_check(load("res://scripts/battle_results.gd").summary(res_data).contains("+24 EXP") and load("res://scripts/battle_results.gd").summary(res_data).contains("Beast Hide x1"), "the results summary reads +24 EXP / Beast Hide x1")
 	var L = load("res://scripts/labyrinth_features.gd")
 	var now := Time.get_unix_time_from_system()
 	var keep_chests: Dictionary = GameState.chests.duplicate()

@@ -47,6 +47,7 @@ var _lab: Node3D = null
 ## Floor 1 villagers' day/night walks (scripts/npc_routines.gd).
 var _routines: Node = null
 var _monument: Node = null
+var _results: Node = null
 var _guilds: Node3D = null
 ## Player duels (scripts/duels.gd): server state + client events.
 var _duels: Node = null
@@ -1164,6 +1165,11 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 				hud.life._on_cooked(res)
 		"crystal":
 			crystal_effect(str(res.get("id", "")))
+		"loot":
+			if _results:
+				var got: Dictionary = res.get("drops", {}) if res.get("drops") is Dictionary else {}
+				for id in got:
+					_results.note_item(str(id), int(got[id]))
 		"gear":
 			gear_notice(str(res.get("slot", "")), str(res.get("state", "")))
 		"repair":
@@ -1839,6 +1845,8 @@ func _build_floor1() -> void:
 	_build_beacons()
 	_routines = preload("res://scripts/npc_routines.gd").build(self)
 	_monument = preload("res://scripts/monument.gd").build(self)
+	_results = preload("res://scripts/battle_results.gd").build(self)
+	_results.hud = hud
 	NpcBark.attach(self, _routines)
 	await LoadingScreen.step("Planting the meadow", 0.7)
 	_dress_world()

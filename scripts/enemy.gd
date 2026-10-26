@@ -849,11 +849,16 @@ func _grant_share(xp: int, money: int, killer: bool) -> void:
 		fx.sparkle(global_position + Vector3(0, size.y * 0.6, 0))
 	GameState.add_xp(maxi(xp, 0))
 	GameState.add_money(maxi(money, 0))
+	var results := get_tree().get_first_node_in_group("battle_results")
+	if results:
+		results.note_kill(display_name, xp, money)
 	if not killer or Net.remote_client():
 		return  # online, drops and quest credit are rolled on the server record (net_apply "loot")
 	for mat in drops:
 		if randf() < drops[mat]:
 			GameState.add_material(mat)
+			if results:
+				results.note_item(mat)
 	if quest_id != "":
 		GameState.advance_quest(quest_id)
 
