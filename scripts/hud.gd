@@ -1465,7 +1465,7 @@ func _refresh() -> void:
 	if _quest_panel.visible:
 		_quest_log.tracked = tracked_quest
 		_quest_log.refresh()
-	if _craft_panel.visible:
+	if _craft_panel.visible and not forging():
 		_build_craft()
 	if life:
 		life.refresh()
@@ -1584,6 +1584,9 @@ func _build_craft() -> void:
 
 
 func _do_craft(recipe_name: String) -> void:
+	if Forging.uses_minigame(recipe_name):
+		_start_forge(recipe_name)
+		return
 	_suppress_feed = true  # the forge toast already announces the item
 	var item := Crafting.craft(recipe_name)
 	_suppress_feed = false
@@ -1593,11 +1596,102 @@ func _do_craft(recipe_name: String) -> void:
 		Audio.play("craft_fail")
 		toast(item["error"])
 		return
-	_forge_sfx(int(item["rank"]))
-	var msg := "%s" % item["name"]
+	_forged(item)
+
+
+## Toast (and rebuild) for a finished piece, offline or from the server.
+func _forged(item: Dictionary) -> void:
+	_forge_sfx(int(item.get("rank", 0)))
+	var rank := int(item.get("rank", 0))
 	var sub := "Smithing Lv %d" % GameState.smithing_level if item.get("skill_up", false) else ""
-	toast(msg, sub, "Forged" if int(item["rank"]) < 3 else "Masterwork forged!", Crafting.rank_color(int(item["rank"])))
-	_build_craft()
+	if item.has("forge_q"):
+		var qtxt := "%s work" % Forging.quality_word(float(item["forge_q"]))
+		sub = qtxt if sub == "" else "%s  ·  %s" % [qtxt, sub]
+	toast(str(item.get("name", "")), sub, "Forged" if rank < 3 else "Masterwork forged!", Crafting.rank_color(rank))
+	if _forge and _forge.is_active():
+		_forge.resolve(str(item.get("name", "")))
+		get_tree().create_timer(1.4, false).timeout.connect(func():
+			_forge = null
+			refresh_craft())
+	else:
+		_forge = null
+		refresh_craft()
+
+
+# --- Forging minigame (Forging / ForgeWidget) ---------------------------------
+
+var _forge: ForgeWidget
+
+
+func _start_forge(recipe_name: String) -> void:
+	if _forge and _forge.is_active():
+		return
+	var err := Crafting.check(recipe_name, GameState)
+	if err != "":
+		Audio.play("craft_fail")
+		toast(err)
+		return
+	if Net.remote_client():
+		Net.request_action("forge_start", {"recipe": recipe_name})
+		return  # the world calls forge_begin with the server's specs
+	forge_begin({"recipe": recipe_name, "specs": Forging.roll_specs(recipe_name, GameState.smithing_level, GameState.hidden_class == "Forgeborn")})
+
+
+## Opens the heat bar for `res` = {recipe, specs} (the server's answer online).
+func forge_begin(res: Dictionary) -> void:
+	if not _craft_panel.visible:
+		return
+	for c in _craft_box.get_children():
+		c.queue_free()
+	_section(_craft_box, "Haldor's anvil", "Esc to abandon")
+	_forge = ForgeWidget.make()
+	_craft_box.add_child(_forge)
+	var tip := UITheme.subtle("Strike while the spark is over the glow; dead centre is a Perfect strike. Better work rolls higher ranks and stats.", 12)
+	tip.autowrap_mode = TextServer.AUTOWRAP_WORD
+	_craft_box.add_child(tip)
+	_forge.finished.connect(_on_forge_finished)
+	_forge.begin(str(res.get("recipe", "")), res.get("specs", []), Net.remote_client())
+	Audio.play("craft_pot", null, 0.05, -4.0, 0.8)
+
+
+func _on_forge_finished(recipe_name: String, quality: float, _grades: Array) -> void:
+	if Net.remote_client():
+		return  # the server's grading forges the piece; the world calls forge_result
+	get_tree().create_timer(0.45, false).timeout.connect(func():
+		_suppress_feed = true
+		var item := Crafting.craft(recipe_name, GameState, quality)
+		_suppress_feed = false
+		if item.has("error"):
+			forge_failed(str(item["error"]))
+			return
+		item["forge_q"] = quality
+		_forged(item))
+
+
+## Online: the server's answer to the last strike.
+func forge_result(res: Dictionary) -> void:
+	_forged(res)
+
+
+## The server (or the local craft) refused the piece.
+func forge_failed(reason: String) -> void:
+	Audio.play("craft_fail")
+	toast(reason, "", "", UITheme.ROSE)
+	if _forge:
+		_forge.cancel()
+		_forge = null
+	refresh_craft()
+
+
+func _hide_craft() -> void:
+	_craft_panel.hide()
+	if _forge:
+		_forge.cancel()
+		_forge = null
+
+
+func forging() -> bool:
+	return _forge != null and _forge.is_active()
 
 
 func _do_repair(slot: String) -> void:
@@ -1617,7 +1711,7 @@ func _do_repair(slot: String) -> void:
 
 ## Rebuilds the anvil panel when it is open (after a repair or a forge).
 func refresh_craft() -> void:
-	if _craft_panel and _craft_panel.visible:
+	if _craft_panel and _craft_panel.visible and not forging():
 		_build_craft()
 
 
@@ -1633,6 +1727,9 @@ func _forge_sfx(rank: int) -> void:
 
 func toggle_craft() -> bool:
 	_craft_panel.visible = not _craft_panel.visible
+	if not _craft_panel.visible and _forge:
+		_forge.cancel()
+		_forge = null
 	Audio.play("ui_open" if _craft_panel.visible else "ui_close")
 	if _craft_panel.visible:
 		_hide_screens()
@@ -1688,7 +1785,7 @@ func _toggle_screen(panel: PanelContainer) -> bool:
 	if _menu_paused:
 		return false
 	_hide_screens()
-	_craft_panel.hide()
+	_hide_craft()
 	panel.show()
 	if panel == _inv_panel:
 		_inventory.refresh()
@@ -1718,7 +1815,7 @@ func _toggle_screen(panel: PanelContainer) -> bool:
 func close_screens() -> void:
 	var was_open := any_menu_open()
 	_hide_screens()
-	_craft_panel.hide()
+	_hide_craft()
 	if was_open:
 		Audio.play("book_close")
 	menus_closed.emit()
@@ -1776,7 +1873,7 @@ func _toggle_pause() -> void:
 	_pause_panel.visible = false
 	if _menu_paused:
 		_hide_screens()
-		_craft_panel.hide()
+		_hide_craft()
 		_ring.open()
 	else:
 		_ring.close()

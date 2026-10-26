@@ -34,8 +34,10 @@ static func rank_color(rank: int) -> Color:
 
 ## Weighted roll. At skill 1 almost everything is Normal/Rare; by skill 8
 ## Legendary shows up for real. Forgeborn adds a chance of a free bump.
-static func roll_rank(smithing_level: int, forgeborn := false) -> int:
-	var l := float(smithing_level)
+## `quality` (0..1, Forging) moves the roll by up to Forging.QUALITY_LEVELS
+## smithing levels either way; a flawless forging never comes out Normal.
+static func roll_rank(smithing_level: int, forgeborn := false, quality := 0.5) -> int:
+	var l := float(Forging.effective_level(smithing_level, quality))
 	var weights := [
 		max(60.0 - l * 6.0, 8.0),  # Normal
 		25.0 + l * 2.0,            # Rare
@@ -56,15 +58,19 @@ static func roll_rank(smithing_level: int, forgeborn := false) -> int:
 			break
 	if forgeborn and rank < RANKS.size() - 1 and randf() < 0.25:
 		rank += 1
+	if quality >= 0.99:
+		rank = maxi(rank, 1)
 	return rank
 
 
 static var _serial := 0
 
 
-static func make_item(recipe_name: String, rank: int, crafter: String) -> Dictionary:
+## Better forging also narrows the stat roll toward its top.
+static func make_item(recipe_name: String, rank: int, crafter: String, quality := 0.5) -> Dictionary:
 	var r: Dictionary = RECIPES[recipe_name]
-	var value := int(round(r["base"] * RANK_MULT[rank] * randf_range(0.9, 1.15)))
+	var q := clampf(quality, 0.0, 1.0)
+	var value := int(round(r["base"] * RANK_MULT[rank] * randf_range(0.86 + 0.08 * q, 1.08 + 0.1 * q)))
 	_serial += 1
 	var item := {
 		"id": "%s_%d_%d" % [recipe_name.to_lower().replace(" ", "_"), Time.get_ticks_msec(), _serial],
@@ -74,6 +80,7 @@ static func make_item(recipe_name: String, rank: int, crafter: String) -> Dictio
 		"atk": value if r["kind"] == "weapon" else 0,
 		"def": value if r["kind"] == "armor" else 0,
 		"crafted_by": crafter,
+		"quality": int(round(q * 100.0)),
 	}
 	Durability.stamp(item)
 	return item
@@ -88,37 +95,51 @@ static func cost_text(recipe_name: String) -> String:
 	return ", ".join(parts)
 
 
+## "" when `gs` can forge `recipe_name` here and now, else the reason.
+static func check(recipe_name: String, gs = GameState) -> String:
+	if not RECIPES.has(recipe_name):
+		return "Unknown recipe."
+	var r: Dictionary = RECIPES[recipe_name]
+	if not recipe_known(recipe_name, gs):
+		return "You do not know this recipe yet. (The Mirewood shrine keeper teaches it.)"
+	if not gs.has_materials(r["cost"]):
+		return "Not enough materials."
+	if gs.money < r["col"]:
+		return "Not enough Col."
+	if r["kind"] != "tool" and gs.inventory.size() >= Net.MAX_INVENTORY:
+		return "Your pack is full (%d pieces). Store some in the cottage chest." % Net.MAX_INVENTORY
+	return ""
+
+
 ## Attempts a craft. Returns the item, or an empty dict with a reason.
 ## `gs` is GameState (offline, listen-server host) or the server-side record
 ## of the crafter. An online client never crafts here: the request goes to
 ## the server (Net.request_action), which crafts against the record and
 ## answers with the item and a state patch; this returns {"pending": true}.
-static func craft(recipe_name: String, gs = GameState) -> Dictionary:
+## `quality` comes from the forging minigame (Forging); the server passes the
+## quality it graded itself, a plain "craft" request gets QUICK_QUALITY.
+static func craft(recipe_name: String, gs = GameState, quality := Forging.QUICK_QUALITY) -> Dictionary:
 	if not RECIPES.has(recipe_name):
 		return {"error": "Unknown recipe."}
 	if gs == GameState and Net.remote_client():
 		Net.request_action("craft", {"recipe": recipe_name})
 		return {"pending": true}
 	var r: Dictionary = RECIPES[recipe_name]
-	if not recipe_known(recipe_name, gs):
-		return {"error": "You do not know this recipe yet. (The Mirewood shrine keeper teaches it.)"}
-	if not gs.has_materials(r["cost"]):
-		return {"error": "Not enough materials."}
-	if gs.money < r["col"]:
-		return {"error": "Not enough Col."}
-	if r["kind"] != "tool" and gs.inventory.size() >= Net.MAX_INVENTORY:
-		return {"error": "Your pack is full (%d pieces). Store some in the cottage chest." % Net.MAX_INVENTORY}
+	var err := check(recipe_name, gs)
+	if err != "":
+		return {"error": err}
 	gs.spend_materials(r["cost"])
 	gs.add_money(-r["col"])
 	if r["kind"] == "tool":
 		gs.add_material(r["material"], 1)
 		return {"name": recipe_name, "kind": "tool", "rank": 0, "skill_up": gs.add_smithing_xp(r["xp"])}
-	var rank := roll_rank(gs.smithing_level, gs.hidden_class == "Forgeborn")
-	var item := make_item(recipe_name, rank, gs.character["name"])
+	var rank := roll_rank(gs.smithing_level, gs.hidden_class == "Forgeborn", quality)
+	var item := make_item(recipe_name, rank, gs.character["name"], quality)
 	gs.add_item(item)
 	gs.items_crafted += 1
 	gs.advance_quest("forge_trial")
 	# Return a copy with the skill-up flag so the saved item stays clean.
 	var result := item.duplicate()
-	result["skill_up"] = gs.add_smithing_xp(r["xp"])
+	# A clean forging teaches more: up to +50% smithing EXP.
+	result["skill_up"] = gs.add_smithing_xp(int(round(r["xp"] * (1.0 + 0.5 * clampf(quality, 0.0, 1.0)))) if quality > Forging.QUICK_QUALITY else r["xp"])
 	return result

@@ -988,6 +988,27 @@ func srv_action(peer: int, rs, kind: String, payload: Dictionary, pos: Vector3) 
 			if _srv_npc_near(pos, ["Smith Haldor", "Smith Orla"]) == null:
 				return {"error": "You need an anvil (talk to a smith)."}
 			return Crafting.craft(str(payload.get("recipe", "")), rs)
+		"forge_start":
+			if _srv_npc_near(pos, ["Smith Haldor", "Smith Orla"]) == null:
+				return {"error": "You need an anvil (talk to a smith)."}
+			var fr := str(payload.get("recipe", ""))
+			if not Forging.uses_minigame(fr):
+				return {"error": "Nothing to hammer: forge that one directly."}
+			var ferr := Crafting.check(fr, rs)
+			return {"error": ferr} if ferr != "" else Forging.srv_open(rs, fr)
+		"forge_strike":
+			var st := Forging.srv_strike(rs, int(payload.get("i", -1)), int(payload.get("at", -1)), Net.srv_rtt(peer))
+			if not st.get("done", false):
+				return st
+			# The last strike lands the piece: re-check at the anvil, then
+			# forge at the quality the server graded.
+			if _srv_npc_near(pos, ["Smith Haldor", "Smith Orla"]) == null:
+				return {"error": "You walked away from the anvil; the piece is spoiled."}
+			var made := Crafting.craft(str(st["recipe"]), rs, float(st["quality"]))
+			if not made.has("error"):
+				made["forge_q"] = float(st["quality"])
+				made["grades"] = st["grades"]
+			return made
 		"repair":
 			if _srv_npc_near(pos, ["Smith Haldor", "Smith Orla"]) == null:
 				return {"error": "You need an anvil (talk to a smith)."}
@@ -1168,6 +1189,18 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 		if _fishing:
 			_fishing.on_net(kind, res)
 		return
+	if kind == "forge_start" or kind == "forge_strike":
+		if res.has("error"):
+			hud.forge_failed(str(res["error"]))
+		elif kind == "forge_start":
+			hud.forge_begin(res)
+		elif res.has("name"):
+			hud.forge_result(res)
+			if _bot_mode:
+				print("[bot] forged %s at quality %.2f %s" % [res["name"], float(res.get("forge_q", -1)), str(res.get("grades", []))])
+		if res.has("error") and _bot_mode:
+			print("[bot] forge refused: %s" % res["error"])
+		return
 	if res.has("error"):
 		Audio.play("craft_fail")
 		hud.toast(str(res["error"]), "", "", UITheme.ROSE)
@@ -1331,6 +1364,10 @@ func _physics_process(delta: float) -> void:
 	if not _bot_mode or player == null or not Net.remote_client():
 		return
 	_chore_t += delta
+	if _bot_forge_tick():
+		player.velocity.x = 0.0
+		player.velocity.z = 0.0
+		return
 	if _duel_mode and _duels != null and _duels.bot_tick(self, player, delta):
 		return
 	if _summit_mode:
@@ -1375,6 +1412,26 @@ func _physics_process(delta: float) -> void:
 		_chore_act(CHORES[_chore_i])
 		return
 	_chore_walk(goal, delta)
+
+
+var _bot_forging := false
+
+
+## Bot: strike the anvil bar whenever the spark sits dead centre; close the
+## panel once the piece is forged (or refused).
+func _bot_forge_tick() -> bool:
+	if not _bot_forging or hud == null:
+		return false
+	var fw: ForgeWidget = hud._forge
+	if fw != null and fw._active:
+		var spec: Dictionary = fw.specs[fw.grades.size()]
+		if Forging.grade(spec, float(fw._elapsed() - fw._last)) == "perfect":
+			fw.strike()
+	elif fw == null:
+		if hud._craft_panel.visible:
+			hud.toggle_craft()
+		_bot_forging = false
+	return _bot_forging
 
 
 func _chore_next(note := "") -> void:
@@ -1433,9 +1490,15 @@ func _chore_act(kind: String) -> void:
 			_pick_herb(_herbs.nearest(player.global_position, 3.0))
 			_chore_next()
 		"smith":
+			# Through the real anvil minigame: open the panel, hammer each
+			# strike dead centre (_bot_forge_tick), let the server grade it.
 			Net.request_action("talk", {"npc": "Smith Haldor"})
-			var r := Crafting.craft("Iron Sword")
-			_chore_next("forge requested" if r.has("pending") else str(r))
+			if not hud._craft_panel.visible:
+				hud.toggle_craft()
+			var ferr := Crafting.check("Iron Sword", GameState)
+			hud._start_forge("Iron Sword")
+			_bot_forging = ferr == "" and hud._craft_panel.visible
+			_chore_next("forging at the anvil" if ferr == "" else ferr)
 		"tam":
 			Net.request_action("talk", {"npc": "Old Tam"})
 			_chore_next()

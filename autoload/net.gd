@@ -44,7 +44,7 @@ const MAX_INVENTORY := 60
 const LEVEL_CAP := 100
 ## Per-kind minimum interval between two accepted action requests of a peer.
 const RATE_ACTION_MS := {"craft": 400, "cook": 400, "eat": 250, "crystal": 500, "repair": 400, "buy": 400, "buy_home": 1000, "mine": 700, "herb": 400,
-	"cast": 1500, "land": 800, "talk": 400, "store": 150, "place": 300, "rest": 2000, "spend_point": 100, "equip": 150,
+	"cast": 1500, "land": 800, "forge_start": 400, "forge_strike": 150, "talk": 400, "store": 150, "place": 300, "rest": 2000, "spend_point": 100, "equip": 150,
 	"unequip": 150, "enter_labyrinth": 1000, "duel": 400}
 const RATE_ACTION_DEFAULT_MS := 250
 ## Slack added to every server-side range check (sync lag, srv_position lag).
@@ -461,7 +461,7 @@ func _new_record(character: Dictionary, token: String, claimed_stats) -> Diction
 ## What the client adopts on join: the record minus server-only fields.
 static func snapshot_for_client(rec: Dictionary) -> Dictionary:
 	var snap := rec.duplicate(true)
-	for k in ["token", "weapon_atk", "created", "saved", "last_peer", "position", "_fish", "hidden"]:
+	for k in ["token", "weapon_atk", "created", "saved", "last_peer", "position", "_fish", "_forge", "hidden"]:
 		snap.erase(k)
 	# Buffs carry an absolute expiry on the server; the client counts down.
 	var now := Time.get_unix_time_from_system()
@@ -1249,6 +1249,16 @@ func _srv_player_pos(peer: int) -> Variant:
 	return node.srv_position() if node.has_method("srv_position") else node.global_position
 
 
+## Server: `peer`'s round trip in ms (ENet's running estimate; 100 for the
+## host itself or a fake test peer). Forging uses it to bound strike times.
+func srv_rtt(peer: int) -> int:
+	var mp = multiplayer.multiplayer_peer
+	if peer == 1 or not (mp is ENetMultiplayerPeer) or not multiplayer.get_peers().has(peer):
+		return 100
+	var pp: ENetPacketPeer = (mp as ENetMultiplayerPeer).get_peer(peer)
+	return int(pp.get_statistic(ENetPacketPeer.PEER_ROUND_TRIP_TIME)) if pp else 100
+
+
 ## Server: run a server->client handler for `peer`: an rpc for a connected
 ## client, a direct call for the host itself. Silently skips anyone else
 ## (a peer that just dropped, or a fake record in the smoke test).
@@ -1846,7 +1856,7 @@ func net_who_answer(list: Array) -> void:
 ## client, which adopts the patch (GameState.apply_patch) and emits
 ## action_applied for the world's UI feedback. Kinds:
 ##   mine {vein}, herb {i}, cast {spot}, land {spot}, cook {id}, eat {id},
-##   craft {recipe}, buy {id}, buy_home, store {id, to_storage}, place {slot,
+##   craft {recipe}, forge_start {recipe}, forge_strike {i, at}, buy {id}, buy_home, store {id, to_storage}, place {slot,
 ##   id}, rest, talk {npc}, enter_labyrinth, spend_point {stat}, equip {id},
 ##   unequip {kind}. HP: srv_damage / net_hp; loot: srv_reward_kill.
 

@@ -730,6 +730,7 @@ func _ready() -> void:
 	vrs.add_material("iron_ore", 3)
 	_check(world.srv_action(4343, vrs, "craft", {"recipe": "Iron Sword"}, npc_pos["Smith Haldor"]).has("name") and vrec["inventory"].size() == 1, "crafting at Haldor's anvil lands on the record")
 	_check(world.srv_action(4343, vrs, "craft", {"recipe": "Spirit Blade"}, npc_pos["Smith Haldor"]).has("error"), "crafting without the shards is refused")
+	_test_forging(world, vrs, vrec, npc_pos["Smith Haldor"], far)
 	_check(world.srv_action(4343, vrs, "cook", {"id": "grilled_trout"}, far).has("error") and world.srv_action(4343, vrs, "buy", {"id": "rug"}, far).has("error"), "cooking needs a fire, buying needs the trader")
 	vrs.add_material("river_trout", 1)
 	vrs.add_material("wild_herb", 1)
@@ -2716,3 +2717,83 @@ func _test_permadeath() -> void:
 	GameState.character = keep_char
 	GameState.character["permadeath"] = false
 	GameState.heal_full()
+
+
+## Client ms (after its strike opened) where `spec`'s spark is dead centre,
+## at least `min_ms` in.
+func _perfect_ms(spec: Dictionary, min_ms: int) -> int:
+	var period := float(spec["period"])
+	var ms := fposmod(float(spec["center"]) * 0.5 - float(spec["phase"]), 1.0) * period
+	while ms < float(min_ms):
+		ms += period
+	return int(round(ms))
+
+
+## Forging minigame: the server rolls the strikes, grades each one itself and
+## only takes strike times that fit their arrival.
+func _test_forging(world: Node, vrs, vrec: Dictionary, anvil: Vector3, far: Vector3) -> void:
+	print("== Forging minigame (server-graded strikes)")
+	var spec := {"center": 0.5, "width": 0.2, "period": 1000, "phase": 0.0}
+	_check(Forging.grade(spec, 250.0) == "perfect" and Forging.grade(spec, 750.0) == "perfect" and Forging.grade(spec, 0.0) == "miss" and Forging.grade(spec, 6000.0) == "miss", "heat bar: dead centre is Perfect, the far end and a timed-out strike miss")
+	_check(Forging.quality(["perfect", "perfect", "perfect"]) == 1.0 and is_equal_approx(Forging.quality(["good", "miss"]), 0.325), "quality is the strikes' average score")
+	_check(Forging.strike_count("Iron Sword") == 3 and Forging.strike_count("Spirit Blade") == 4 and not Forging.uses_minigame("Willow Rod"), "3 strikes, 4 for advanced recipes; tools skip the anvil game")
+	var lo := 0
+	var hi := 0
+	for k in 400:
+		lo += Crafting.roll_rank(3, false, 0.0)
+		hi += Crafting.roll_rank(3, false, 1.0)
+	_check(hi > lo + 60, "better forging rolls higher ranks (%d vs %d over 400)" % [hi, lo])
+	_check(Crafting.roll_rank(1, false, 1.0) >= 1, "a flawless forging is never Normal")
+	_check(world.srv_action(4343, vrs, "forge_start", {"recipe": "Iron Sword"}, far).has("error"), "forging away from an anvil is refused")
+	_check(world.srv_action(4343, vrs, "forge_start", {"recipe": "Willow Rod"}, anvil).has("error"), "tools are not hammered")
+	vrs.add_material("iron_ore", 6)
+	var open: Dictionary = world.srv_action(4343, vrs, "forge_start", {"recipe": "Iron Sword"}, anvil)
+	_check(open.get("specs", []).size() == 3 and vrec.has("_forge") and not Net.snapshot_for_client(vrec).has("_forge"), "forge_start rolls 3 strikes on the record (never sent in snapshots)")
+	# A strike claiming a moment that has not happened yet spoils the piece.
+	vrec["_forge"]["t0"] = Time.get_ticks_msec() - 300
+	_check(world.srv_action(4343, vrs, "forge_strike", {"i": 0, "at": 2000}, anvil).has("error") and not vrec.has("_forge"), "a strike from the future is refused and spoils the session")
+	open = world.srv_action(4343, vrs, "forge_start", {"recipe": "Iron Sword"}, anvil)
+	vrec["_forge"]["t0"] = Time.get_ticks_msec() - 3000
+	_check(world.srv_action(4343, vrs, "forge_strike", {"i": 0, "at": 1500}, anvil).has("error"), "a held-back strike (far older than its arrival) is refused")
+	open = world.srv_action(4343, vrs, "forge_start", {"recipe": "Iron Sword"}, anvil)
+	_check(world.srv_action(4343, vrs, "forge_strike", {"i": 1, "at": 0}, anvil).has("error"), "out-of-order strikes are refused")
+	open = world.srv_action(4343, vrs, "forge_start", {"recipe": "Iron Sword"}, anvil)
+	var specs: Array = open["specs"]
+	var inv0: int = vrec["inventory"].size()
+	var ore0: int = int(vrec["materials"]["iron_ore"])
+	var last := 0
+	var res: Dictionary = {}
+	for i in specs.size():
+		var at := last + _perfect_ms(specs[i], Forging.MIN_GAP_MS + 10)
+		vrec["_forge"]["t0"] = Time.get_ticks_msec() - at - 60  # arrives 60 ms after the client's strike
+		res = world.srv_action(4343, vrs, "forge_strike", {"i": i, "at": at}, anvil)
+		if i < specs.size() - 1:
+			_check(str(res.get("grade", "")) == "perfect", "strike %d graded Perfect by the server" % (i + 1))
+		last = at
+	_check(res.has("name") and is_equal_approx(float(res.get("forge_q", 0)), 1.0) and int(res.get("rank", 0)) >= 1 and int(res.get("quality", 0)) == 100, "three Perfect strikes forge a flawless piece (%s)" % str(res.get("name", res)))
+	_check(vrec["inventory"].size() == inv0 + 1 and int(vrec["materials"]["iron_ore"]) == ore0 - 3 and not vrec.has("_forge"), "the piece lands on the record, materials spent once, session closed")
+	# Missing every strike still forges, at Crude quality.
+	open = world.srv_action(4343, vrs, "forge_start", {"recipe": "Iron Sword"}, anvil)
+	last = 0
+	for i in 3:
+		var at := last + int(Forging.STRIKE_WINDOW * 1000.0) + 50
+		vrec["_forge"]["t0"] = Time.get_ticks_msec() - at - 60
+		res = world.srv_action(4343, vrs, "forge_strike", {"i": i, "at": at}, anvil)
+		last = at
+	_check(res.has("name") and float(res.get("forge_q", 1)) == 0.0 and res.get("grades", []) == ["miss", "miss", "miss"], "timed-out strikes all miss; the piece still forges, Crude")
+	_check(world.srv_action(4343, vrs, "forge_strike", {"i": 0, "at": 400}, anvil).has("error"), "a strike with no session is refused")
+	# Local widget: a perfect run reports quality 1.0.
+	var fw := ForgeWidget.make()
+	add_child(fw)
+	var got := [-1.0]
+	fw.finished.connect(func(_r, q, _g): got[0] = q)
+	fw.begin("Iron Sword", Forging.roll_specs("Iron Sword", 1, false, 7), false)
+	_check(Forging.roll_specs("Iron Sword", 1, false, 7) == Forging.roll_specs("Iron Sword", 1, false, 7), "seeded strike specs are deterministic")
+	last = 0
+	for i in fw.specs.size():
+		var at := last + _perfect_ms(fw.specs[i], Forging.MIN_GAP_MS + 30)
+		fw._land(at)
+		last = at
+	_check(is_equal_approx(got[0], 1.0) and fw.is_active(), "anvil widget grades a perfect run 1.0 and holds until the piece is forged")
+	fw.queue_free()
+
