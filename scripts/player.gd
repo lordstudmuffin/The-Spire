@@ -184,6 +184,12 @@ var model: Node3D
 var _vrm: VRMCharacter
 var cam_pivot: Node3D
 var spring: SpringArm3D
+## Camera boom: closer than the old 4.5 m so the character fills the frame
+## like an action RPG; the mouse wheel zooms between the limits.
+const CAM_DEFAULT := 3.4
+const CAM_MIN := 2.0
+const CAM_MAX := 7.5
+const CAM_ZOOM_STEP := 0.4
 var camera: Camera3D
 var _dash_timer := 0.0
 var _dash_cd := 0.0
@@ -264,7 +270,7 @@ func _ready() -> void:
 		add_child(cam_pivot)
 		cam_pivot.top_level = true
 		spring = SpringArm3D.new()
-		spring.spring_length = 4.5
+		spring.spring_length = CAM_DEFAULT
 		spring.rotation.x = -0.35
 		spring.add_excluded_object(get_rid())
 		cam_pivot.add_child(spring)
@@ -436,6 +442,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		var inv := -1.0 if Settings.data.get("invert_y", false) else 1.0
 		cam_pivot.rotation.y -= event.relative.x * MOUSE_SENS * Settings.data["mouse_sens"]
 		spring.rotation.x = clamp(spring.rotation.x - event.relative.y * inv * MOUSE_SENS * Settings.data["mouse_sens"], -1.2, 0.4)
+	elif event is InputEventMouseButton and event.pressed and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED \
+			and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+		var dir := -1.0 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0
+		spring.spring_length = clampf(spring.spring_length + dir * CAM_ZOOM_STEP, CAM_MIN, CAM_MAX)
 	elif event.is_action_pressed("quick_heal") or (event.is_action_pressed("interact") and event is InputEventJoypadButton and Input.is_action_pressed("target")):
 		quick_heal()
 	elif event.is_action_pressed("interact"):

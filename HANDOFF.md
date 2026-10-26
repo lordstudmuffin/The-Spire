@@ -163,6 +163,15 @@ P8. **Farm plots and guilds**: 8 rentable farm plots with real-time crops; guild
 - Gotcha: VFX._fire ignores tiny scale_min/max in practice (soft circles render ~0.3 m); use star_05 / spark_04 for small embers.
 - Next: fields/meadow pass on Forward+, Floor 1 boss arena dressing, preset perf numbers from Kyle's PC.
 
+## Round after Kyle's playtest (2026-10-26, local Claude Code on Kyle's PC)
+Kyle: "map is too small, visuals look bad, combat needs a lot of work (parrying), multiplayer hosted by players is not okay."
+- Map: Floor 1 radius 90 -> 270. All anchors live in WorldArt (FLOOR1_RADIUS, TOWER, HOLLOWBROOK, TALVEN, GROVE, POND, WINDMILL, GREYTUSK, landmark consts, ROADS polylines); world.gd/duels/audio/net/home mirror them and smoke checks they agree. Ground shader takes roads/zones as uniforms (WorldArt.bind_floor1_layout).
+- Hills: WorldArt.height_at (2 m grid, FastNoiseLite seed 1717, FLAT_ZONES + roads + stream + rim stay at y=0), HeightMapShape3D collider (WorldArt.height_shape), terrain mesh, vegetation, veins, herbs and ground mobs (world._spawn_mob lifts pos) follow it. WorldArt.terrain_on is true only on Floor 1. Anything new placed outside a flat zone must use WorldArt.height_at.
+- Landmarks: scripts/floor1_landmarks.gd (Ruined Watch, Hunters' Camp + cooking fire, Wayside Shrine, Old Siege Camp, stream bridge). Town crowd: scripts/town_crowd.gd (cosmetic, client-only).
+- Multiplayer: dedicated servers only (docs/DEDICATED_SERVER.md, config/servers.json, tools/server/). Net.GAME_VERSION handshake, status query, realm browser in main_menu.gd.
+- Combat: parry tiers (PERFECT in the first 0.09 s), server late-press grace (RTT + 40 ms, 60-260), dash i-frames (net_dash), 3-hit combo with a server-validated finisher, gold (parryable) vs red (unparryable) telegraphs, HUD callouts. Camera boom 3.4 m with wheel zoom 2-7.5.
+- Not visually verified yet (Kyle games on this PC; never open a Godot window without asking): landmarks, realm browser, combat callouts/telegraphs, camera distance.
+
 ## Who owns what between threads
 - Main build thread: all gameplay, UI, world, shaders, tests.
 - Since 20:46 UTC two threads: gameplay (logic, net, hud.gd behaviour, audio) and visuals (shaders/, render_profile, sky/lighting, world_art/world_props, vfx.gd, ui_theme.gd, ring_menu_style.gd, mob_plate.gd, player_status.gd, realm_banner.gd). Shared files take additive patches only.
