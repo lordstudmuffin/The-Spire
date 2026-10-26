@@ -420,6 +420,16 @@ func _ready() -> void:
 		# --summit: stand on the Labyrinth summit (lights the arena braziers).
 		if i == 3 and "--summit" in args and scene.has_method("_enter_summit"):
 			scene._enter_summit()
+		# --monument-demo: sample names on the Monument (permadeath, fallen).
+		if i == 36 and "--monument-demo" in args:
+			scene.get_tree().call_group("monument", "set_names", [
+				{"name": "Kirika", "level": 14, "floors": 1, "online": true, "permadeath": true},
+				{"name": "Asterion", "level": 12, "floors": 1, "online": true},
+				{"name": "Lowen", "level": 9, "floors": 0, "online": false},
+				{"name": "Diavel", "level": 9, "floors": 0, "online": false, "permadeath": true, "fallen": {"cause": "Vargash"}},
+				{"name": "Mira", "level": 7, "floors": 0, "online": true, "permadeath": true},
+				{"name": "Coper", "level": 5, "floors": 0, "online": false, "permadeath": true, "fallen": {"cause": "Dire Wolf"}},
+				{"name": "Sasha", "level": 4, "floors": 0, "online": true}])
 		# --stalls-open: every market stall rented and stocked (keepers, wares).
 		if i == 3 and "--stalls-open" in args and scene.get("_stalls") != null:
 			for st in scene._stalls.stalls:
@@ -455,6 +465,10 @@ func _ready() -> void:
 			if scene.get("player"):
 				scene.player.last_xp_lost = 37
 			scene.hud.show_death(8.0, "the Town of First Light")
+		if open_ui == "fallen" and i == 4 and "hud" in scene and scene.hud:
+			Engine.time_scale = 9.0  # let the whole fall sequence play out by the shot
+			FallenScreen.show_in(scene.hud._root, "Kirika", {"t": 1792900000, "cause": "Vargash the Kobold Warlord",
+				"where": "the Labyrinth", "level": 14, "floor": 1}, 9.0)
 		if open_ui == "realm" and i == 28 and "hud" in scene and scene.hud:
 			scene.hud.realm_announce("A player has claimed the unique skill «Starfall Edge»")
 		if demo == "guard" and i == 30 and "player" in scene and scene.player:

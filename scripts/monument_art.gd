@@ -5,7 +5,10 @@ extends Node3D
 ## Names glow while their player is in the realm and turn gold once they
 ## have cleared Floor 1. Gameplay feeds it through the "monument" group:
 ## set_names([{name, level, floors, online}, ...]), sorted by level then
-## name, about every 20 s and on joins. Original procedural art.
+## name, about every 20 s and on joins. Permadeath climbers (entry
+## "permadeath": true) carry a crimson crystal mark; fallen ones (entry
+## "fallen": their fall info, or true) are struck through in ash, as names
+## of the dead are on Aincrad's monument. Original procedural art.
 
 const ROWS := 12
 const COLS := 2
@@ -15,8 +18,12 @@ const ONLINE := Color(0.82, 0.95, 1.0)
 const OFFLINE := Color(0.62, 0.66, 0.74, 0.55)
 const CLEARED := Color(1.0, 0.84, 0.45)
 const GLOW := Color(0.3, 0.7, 1.0, 0.8)
+const UNDYING := Color(1.0, 0.28, 0.32)
+const FALLEN := Color(0.62, 0.42, 0.42, 0.75)
 
 var _rows: Array[Label3D] = []
+var _strikes: Array[MeshInstance3D] = []
+var _marks: Array[MeshInstance3D] = []
 var _count: Label3D
 
 
@@ -65,6 +72,15 @@ func _ready() -> void:
 			var l := _label(Vector3(x, y0 + SLAB.y - 0.58 - r * ROW_H, face), 0.0036, 34, HORIZONTAL_ALIGNMENT_LEFT)
 			l.width = col_w / 0.0036
 			_rows.append(l)
+			# Strike line (fallen) and crimson crystal mark (permadeath).
+			var line := BoxMesh.new()
+			line.size = Vector3(1.0, 0.014, 0.004)
+			var st := WorldArt.mesh_node(self, line, l.position + Vector3(0, -0.004, 0.003), WorldArt.rune_mat(Color(0.85, 0.25, 0.25), 0.6))
+			st.visible = false
+			_strikes.append(st)
+			var gem := WorldArt.mesh_node(self, MobPlate._cursor_shape(), l.position + Vector3(-0.07, 0.0, 0.01), WorldArt.rune_mat(UNDYING, 1.4), Vector3.ZERO, Vector3.ONE * 0.45)
+			gem.visible = false
+			_marks.append(gem)
 	_count = _label(Vector3(0, y0 + 0.14, face), 0.003, 26, HORIZONTAL_ALIGNMENT_CENTER)
 	_count.modulate = Color(0.6, 0.7, 0.85, 0.8)
 	set_names([])
@@ -96,16 +112,32 @@ func set_names(entries: Array) -> void:
 		var l := _rows[i]
 		if i >= entries.size():
 			l.text = ""
+			_strikes[i].visible = false
+			_marks[i].visible = false
 			continue
 		var e: Dictionary = entries[i]
 		var cleared := int(e.get("floors", 0)) >= 1
 		var online := bool(e.get("online", false))
+		var fallen = e.get("fallen", false)
+		var dead: bool = fallen is Dictionary or (fallen is bool and fallen)
 		l.text = "%s   Lv %d" % [String(e.get("name", "?")).to_upper(), int(e.get("level", 1))]
 		var col := CLEARED if cleared else ONLINE
 		if not online:
 			col = Color(col.lerp(OFFLINE, 0.55), OFFLINE.a)
 		l.modulate = col
 		l.outline_modulate = Color(CLEARED, 0.55) if cleared and online else (GLOW if online else Color(0, 0, 0, 0))
+		if bool(e.get("permadeath", false)) and not dead:
+			l.outline_modulate = Color(UNDYING, 0.5)
+		if dead:
+			l.modulate = FALLEN
+			l.outline_modulate = Color(0, 0, 0, 0)
+		_marks[i].visible = bool(e.get("permadeath", false)) or dead
+		var w := l.font.get_string_size(l.text, HORIZONTAL_ALIGNMENT_LEFT, -1, l.font_size).x * l.pixel_size if l.font else 1.0
+		_strikes[i].visible = dead
+		_strikes[i].scale.x = w + 0.04
+		var left := l.position.x  # left-aligned rows start at the label origin
+		_strikes[i].position.x = left + w * 0.5
+		_marks[i].position.x = left - 0.06
 	var online_n := 0
 	for e in entries:
 		if bool((e as Dictionary).get("online", false)):
