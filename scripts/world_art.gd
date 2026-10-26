@@ -211,6 +211,23 @@ static func cyl(parent: Node, top: float, bottom: float, h: float, pos: Vector3,
 	return mesh_node(parent, cm, pos, mat(c), rot)
 
 
+## Nature-kit rocks ship salmon clay with a lime cap; shift them to the
+## floor's grey stone with a deeper moss so they sit in the meadow.
+static func _stone_tint(m: Mesh) -> void:
+	if m == null or m.has_meta("stone_tinted"):
+		return
+	m.set_meta("stone_tinted", true)
+	for i in m.get_surface_count():
+		var sm := m.surface_get_material(i) as StandardMaterial3D
+		if sm == null:
+			continue
+		var c := sm.albedo_color
+		if c.g > c.r:   # the moss cap
+			sm.albedo_color = Color(0.36, 0.56, 0.27)
+		else:
+			sm.albedo_color = Color(0.68, 0.66, 0.64).lerp(c, 0.12)
+
+
 static var _rocks := {}
 
 
@@ -762,7 +779,9 @@ static func build_vegetation(parent: Node3D, rng: RandomNumberGenerator, radius:
 		rm.material_override = foliage_mat(Color.WHITE, 0.0, 0.03)
 	for k in pack_rocks:
 		if not pack_rocks[k].is_empty():
-			AssetLib.multi(parent, "nature", k, pack_rocks[k])
+			var pm := AssetLib.multi(parent, "nature", k, pack_rocks[k])
+			if pm:
+				_stone_tint(pm.multimesh.mesh)
 
 	if headless():
 		return
