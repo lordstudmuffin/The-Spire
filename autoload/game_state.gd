@@ -26,6 +26,9 @@ const ORIGINS := {
 # Hidden classes: name -> stat bonus and perk text. Unlocked by secret quests.
 const HIDDEN_CLASSES := {
 	"Forgeborn": {"bonus": {"strength": 3, "endurance": 2}, "perk": "Crafted gear rolls one rank higher more often."},
+	# Rules, arts and unlock deeds: scripts/hidden_classes.gd.
+	"Stillblade": {"bonus": {"agility": 2, "endurance": 2, "strength": 1}, "perk": "Guard recovers faster. Still Water counters right after a parry; Breaking Wave staggers."},
+	"Hearthwright": {"bonus": {"endurance": 2, "spirit": 2, "agility": 1}, "perk": "Food lasts longer and works harder. Cook anywhere. Hearth Flare scatters coals and leaves you glowing."},
 }
 const STAT_NAMES := ["strength", "agility", "endurance", "spirit"]
 const POINTS_PER_LEVEL := 3
@@ -172,6 +175,7 @@ func class_title() -> String:
 ## Offline: a hidden-stat event for the local character. Online the server
 ## does this on the record (Net.note_hidden picks the right side).
 func note_hidden(event: String) -> void:
+	HiddenClasses.note(self, event)  # hidden-class deeds (parry streaks, dishes, catches)
 	if not UniqueSkills.note(hidden_stats, event, Time.get_ticks_msec() / 1000.0):
 		return
 	var realm = Net.get_realm()

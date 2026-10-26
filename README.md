@@ -18,7 +18,7 @@ First open imports the VRM models and animation clips (a minute or so).
 - Quest NPCs (E to talk): Guide Mira (5 boars), Captain Rhys (6 wolves), Elder Wren in Hollowbrook (ore delivery), Quartermaster Dain at Talven camp. Tower gate opens at level 5.
 - Sword Arts on keys 1/2/3: Horizontal (wide arc), Vertical Arc (heavy), Rage Spike (lunge). Cooldowns shown on the bottom bar.
 - Blacksmithing: mine Iron Ore from veins (E), hides/shards drop from mobs, talk to Smith Haldor by the plaza to forge. Every craft rolls a rank Normal..Mythical. Equip gear from the Tab menu.
-- Hidden class: craft 2 items and Haldor offers the Trial of the Forge; craft 5 to become Forgeborn.
+- Hidden class: craft 2 items and Haldor offers the Trial of the Forge; craft 5 to become Forgeborn. Two more are found, not offered: Stillblade (parry streaks, Dain at Talven) and Hearthwright (cook, fish and farm, then Rook). See docs/HIDDEN_CLASSES.md.
 - Labyrinth: at level 5 the tower gate opens onto Terrace 1. Glowing pads climb to Terrace 2 (Kobold Scouts, a Kobold Sergeant) and then the summit arena.
 - Floor Guardian: on the summit, Beat Gravelmaw (watch the ground slam) to clear Floor 1.
 - Hollowbrook village (south-west) and the Talven camp (north-west) with their own NPCs.

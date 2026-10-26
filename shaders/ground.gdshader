@@ -104,12 +104,37 @@ void fragment() {
 
 	// Cobbles: a soft per-stone shade and the plaza's concentric ring; the
 	// stone pattern itself comes from the cobblestone detail map.
-	vec2 cp = p * 2.4;
-	cp.x += step(0.5, fract(cp.y * 0.5)) * 0.5;
-	vec2 ci = floor(cp);
-	vec2 cf = fract(cp) - 0.5;
-	float cob = smoothstep(0.5, 0.4, length(cf * vec2(1.0, 1.3)));
-	float cshade = 0.86 + 0.14 * hash12(ci);
+	// Voronoi set stones: F2 - F1 gives the mortar joint between rounded,
+	// irregular cobbles (only evaluated where the plaza or tower apron is).
+	float cob = 1.0;
+	float cshade = 1.0;
+	if (plaza_m > 0.001 || tower > 0.001) {
+		vec2 cp = p * 2.2;
+		vec2 ci = floor(cp);
+		vec2 cf = fract(cp);
+		float f1 = 8.0;
+		float f2 = 8.0;
+		vec2 id = vec2(0.0);
+		for (int j = -1; j <= 1; j++) {
+			for (int i = -1; i <= 1; i++) {
+				vec2 g2 = vec2(float(i), float(j));
+				vec2 o = vec2(hash12(ci + g2), hash12(ci + g2 + 19.19)) * 0.8 + 0.1;
+				float dd = length(g2 + o - cf);
+				if (dd < f1) {
+					f2 = f1;
+					f1 = dd;
+					id = ci + g2;
+				} else if (dd < f2) {
+					f2 = dd;
+				}
+			}
+		}
+		float joint = f2 - f1;
+		cob = smoothstep(0.04, 0.16, joint);
+		// Domed stones: lighter toward each stone's middle.
+		cob *= 0.88 + 0.12 * smoothstep(0.6, 0.0, f1);
+		cshade = 0.82 + 0.2 * hash12(id);
+	}
 	float ring = smoothstep(0.1, 0.0, abs(fract(dplaza * 0.2) - 0.5) - 0.42);
 	vec3 stone_base = stone.rgb * 0.9;
 	float cob_amt = mix(1.0, 0.25, detail_strength);
@@ -139,7 +164,7 @@ void fragment() {
 		vec3 detail = gd * w_grass + pd * w_path + cd * w_cob;
 		float dmean = grass_mean * w_grass + path_mean * w_path + cobble_mean * w_cob;
 		vec3 d_rel = detail / max(dmean, 0.05);          // ~1.0 on average
-		float rel = clamp(lum(d_rel), 0.45, 1.8);        // luminance variation
+		float rel = clamp(lum(d_rel), 0.6, 1.3);         // luminance variation (kept narrow: painted, not photographic)
 		vec3 d_hue = d_rel / max(lum(d_rel), 0.05);      // hue only
 		col *= mix(vec3(1.0), vec3(rel), detail_strength) * mix(vec3(1.0), d_hue, detail_tint * detail_strength);
 

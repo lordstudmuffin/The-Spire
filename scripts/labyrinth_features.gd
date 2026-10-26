@@ -74,6 +74,9 @@ func _build(w: Node3D, levels: Array) -> void:
 		if node == null:
 			node = _box_chest(p, face, bool(d["locked"]))
 		chests.append({"def": d, "pos": p, "node": node})
+		var fx := VFX.get_for(w)
+		if fx and fx.has_method("chest_sparkle"):
+			fx.call("chest_sparkle", node, true, Color(1.0, 0.75, 0.3) if d["locked"] else Color(1.0, 0.9, 0.6))
 	for lvl in mini(SPIKES.size(), levels.size()):
 		for k in SPIKES[lvl].size():
 			var p: Vector3 = levels[lvl] + (SPIKES[lvl][k] as Vector3)
@@ -99,6 +102,9 @@ func _build_spike(p: Vector3, lvl: int, phase: float) -> Dictionary:
 	var root := Node3D.new()
 	root.position = p
 	add_child(root)
+	var kit := _kit_spike(root)
+	if not kit.is_empty():
+		return {"pos": p, "lvl": lvl, "phase": phase, "node": root, "tips": kit["tips"], "plate": kit["plate"]}
 	var plate := MeshInstance3D.new()
 	var pm := BoxMesh.new()
 	pm.size = Vector3(SPIKE_HALF * 2.0, 0.08, SPIKE_HALF * 2.0)
@@ -124,6 +130,45 @@ func _build_spike(p: Vector3, lvl: int, phase: float) -> Dictionary:
 			m.position = Vector3(-0.75 + ix * 0.5, 0.3, -0.75 + iz * 0.5)
 			tips.add_child(m)
 	return {"pos": p, "lvl": lvl, "phase": phase, "node": root, "tips": tips, "plate": plate}
+
+
+## Spike trap from the dungeon kit (floor_tile_big_spikes): the tile is the
+## plate and its "spikes" mesh goes under `tips`, squashed to 0.6 m so the
+## existing rest / rattle / up offsets (-0.5, -0.45, 0) hide and show it.
+## Empty if the model is missing (the cone fallback is used instead).
+func _kit_spike(root: Node3D) -> Dictionary:
+	var path := "res://assets/props/dungeon/floor_tile_big_spikes.glb"
+	if not ResourceLoader.exists(path):
+		return {}
+	var scn := load(path) as PackedScene
+	if scn == null:
+		return {}
+	var inst := scn.instantiate()
+	var tile := inst.find_child("floor_tile_big_spikes", true, false) as MeshInstance3D
+	var sp := inst.find_child("spikes", true, false) as MeshInstance3D
+	if tile == null or sp == null:
+		inst.free()
+		return {}
+	var k := SPIKE_HALF * 2.0 / 4.0   # kit tile is 4 m across: match the hit area
+	tile.get_parent().remove_child(tile)
+	sp.get_parent().remove_child(sp)
+	inst.free()
+	tile.scale = Vector3(k, 0.5, k)
+	tile.position = Vector3(0, 0.05, 0)
+	# Kit stone is pale beige: shade it toward the terraces' violet stone.
+	var tm := tile.get_active_material(0)
+	if tm is StandardMaterial3D:
+		tm = tm.duplicate()
+		tm.albedo_color = Color(0.72, 0.66, 0.78)
+		tile.material_override = tm
+	root.add_child(tile)
+	var tips := Node3D.new()
+	tips.position = Vector3(0, -0.5, 0)
+	root.add_child(tips)
+	sp.scale = Vector3(k * 1.6, 0.3, k * 1.6)
+	sp.position = Vector3(0, -0.02, 0)
+	tips.add_child(sp)
+	return {"tips": tips, "plate": tile}
 
 
 # --- Spike traps -------------------------------------------------------------

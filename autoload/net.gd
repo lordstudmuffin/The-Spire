@@ -633,6 +633,12 @@ func srv_note_hidden(peer: int, event: String) -> void:
 	var rec: Dictionary = srv_records[peer]
 	if not (rec.get("hidden") is Dictionary):
 		rec["hidden"] = {}
+	# Hidden-class deeds (HiddenClasses): a parry while the Stillblade quest
+	# is open moves the quest, so the client gets a patch for that one.
+	var quests_before := var_to_str(rec["quests"])
+	HiddenClasses.note(RecordState.new(rec), event)
+	if var_to_str(rec["quests"]) != quests_before:
+		_srv_reply(peer, "quest", {})
 	if not UniqueSkills.note(rec["hidden"], event, Time.get_ticks_msec() / 1000.0):
 		return
 	var id := UniqueSkills.try_grant(get_realm(), srv_holder(peer), int(rec.get("level", 1)), rec["hidden"], str(rec.get("unique_skill", "")))
@@ -647,6 +653,29 @@ func srv_note_hidden(peer: int, event: String) -> void:
 		GameState.unique_skill_changed.emit(id)
 	else:
 		_srv_reply(peer, "unique_skill", {"skill": id})
+
+
+## Server / offline: the hidden class of the player with `peer` ("" none).
+## Remote players come from their record; the host and offline play from
+## GameState. Checked on every class art hit (Enemy.net_hit).
+func srv_hidden_class(peer: int) -> String:
+	if srv_records.has(peer):
+		var hc := str(srv_records[peer].get("hidden_class", ""))
+		return hc if GameState.HIDDEN_CLASSES.has(hc) else ""
+	if not online or peer == multiplayer.get_unique_id():
+		return GameState.hidden_class
+	return ""
+
+
+## Server / offline: a class art landed and grants its caster a buff
+## (Hearth Flare's glow). Records get it with an expiry and a patch; the
+## host and offline player get it on GameState.
+func srv_class_buff(peer: int, id: String, data: Dictionary) -> void:
+	if srv_records.has(peer):
+		RecordState.new(srv_records[peer]).add_buff(id, float(data.get("dur", 0.0)), data)
+		_srv_reply(peer, "buffs", {})
+	elif not online or peer == multiplayer.get_unique_id():
+		GameState.add_buff(id, float(data.get("dur", 0.0)), data)
 
 
 ## Server / offline: may the player with `peer` use unique skill `id` now?
@@ -1878,6 +1907,7 @@ func srv_damage(peer: int, amount: float) -> bool:
 	var rs = RecordState.new(rec)
 	var prev := float(rec["hp"])
 	var died: bool = rs.take_damage(clampf(amount, 0.0, 1000.0))
+	HiddenClasses.note(rs, "hurt")  # a hit ends a clean parry streak
 	if died:
 		print("[life] '%s' fell (%.0f damage at %.0f hp); respawned at full health" % [rec["name"], amount, prev])
 		rs.heal_full()

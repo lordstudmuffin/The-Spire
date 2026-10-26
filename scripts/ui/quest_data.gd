@@ -151,6 +151,29 @@ const QUESTS := {
 		"reward": "340 XP  ·  200 Col  ·  2 Spirit Shards",
 		"story": "The old watch set waystones around these fields long before the town. They went dark when the Guardian woke. Lay a hand on each and the line wakes.",
 	},
+	# --- Hidden-class quests (scripts/hidden_classes.gd). "hidden": never
+	# listed or hinted at until the NPC opens them (the log only shows
+	# started quests; this flag keeps any future "available" view honest).
+	"stillblade_rite": {
+		"title": "The Unmoving Edge",
+		"giver": "Quartermaster Dain",
+		"where": "The Talven camp",
+		"objective": "Parry strikes the way Dain showed you",
+		"unit": "parries",
+		"reward": "Hidden class: Stillblade",
+		"story": "Dain watched you turn eight blows without a scratch. The old camp drill has a name for that, and a last lesson: ten more, and the edge stops moving.",
+		"hidden": true,
+	},
+	"hearth_rite": {
+		"title": "The Wandering Pot",
+		"giver": "Innkeeper Rook",
+		"where": "The Hollowbrook tavern",
+		"objective": "Bring Rook a trail supper: Grilled Trout, Turnip Soup and Harvest Bread",
+		"unit": "dishes",
+		"reward": "Hidden class: Hearthwright",
+		"story": "Rook has heard about your fires from the fishers and the field hands. The cooks who walk the Spire with a pot on their back had a name once; prove you can feed a road and he will give it to you.",
+		"hidden": true,
+	},
 	"gravelmaw_bounty": {
 		"title": "The Town's Bounty",
 		"giver": "Captain Rhys",

@@ -422,6 +422,8 @@ static func _op_harvest(rdb, gs, holder: String, i: int, b: int) -> Dictionary:
 		return _err("Nothing is ripe yet." if b == -1 else "That bed is not ripe yet.")
 	_set_meta(rdb, i, holder, meta)
 	var skill_up: bool = gs.add_life_xp("farming", xp)
+	if gs.has_method("note_hidden"):
+		gs.note_hidden("harvest")  # Hearthwright deed (HiddenClasses)
 	var parts: Array = []
 	for c in got:
 		parts.append("%d %s" % [got[c], str(LifeData.CROPS[c]["name"])])

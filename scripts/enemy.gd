@@ -314,7 +314,13 @@ func _parried(t: Node3D) -> void:
 	Net.note_hidden(t.peer_id, "parry")
 	if brain != null and brain.has_method("stagger_immune") and brain.stagger_immune():
 		return  # the parry deflected, but a roaring Guardian builds no posture
-	_posture += 1
+	_build_posture(1)
+
+
+## Posture from a parry or a posture-breaking art (Breaking Wave): a full
+## bar staggers the mob (one count on a normal mob, three on a Guardian).
+func _build_posture(n: int) -> void:
+	_posture += n
 	if _posture >= (3 if is_boss else 1):
 		_posture = 0
 		_stagger = STAGGER_TIME_BOSS if is_boss else STAGGER_TIME
@@ -517,9 +523,22 @@ func net_hit(kind: int, from_dir: Vector3, swing: int = 0) -> void:
 			return
 		var mult := 1.0
 		var cooldown := Player.ATTACK_COOLDOWN
+		var class_art := {}
 		if kind >= 0 and kind < Player.SKILLS.size():
 			mult = Player.SKILLS[kind]["mult"]
 			cooldown = Player.SKILLS[kind]["cooldown"]
+		elif HiddenClasses.is_art_kind(kind):
+			# Hidden-class arts: the caster must hold the class on its record,
+			# and a counter (Still Water) must follow a parry this server judged.
+			class_art = HiddenClasses.art_for_kind(kind)
+			if class_art.is_empty() or Net.srv_hidden_class(sender) != str(class_art["class"]):
+				return
+			if bool(class_art.get("after_parry", false)):
+				var since_parry: int = Time.get_ticks_msec() - int(p.last_parry_ms)
+				if since_parry > int((HiddenClasses.COUNTER_WINDOW + HiddenClasses.COUNTER_LATENCY) * 1000.0):
+					return
+			mult = float(class_art["mult"])
+			cooldown = float(class_art["cooldown"])
 		elif UniqueSkills.is_unique_kind(kind):
 			# Unique Sword Arts: only the realm's holder may land them.
 			var art := UniqueSkills.art_for_kind(kind)
@@ -543,6 +562,8 @@ func net_hit(kind: int, from_dir: Vector3, swing: int = 0) -> void:
 		# The server uses the attack the owner reported, already clamped to
 		# what a legit player of that level could reach (Player.attack_cap).
 		take_hit(float(p.srv_attack) * mult, from_dir, sender, kind)
+		if class_art.has("buff"):
+			Net.srv_class_buff(sender, str(class_art["buff"]), HiddenClasses.HEARTH_GLOW)
 		return
 
 
@@ -552,6 +573,10 @@ func take_hit(amount: float, from_dir: Vector3, hitter := 1, kind := -1) -> void
 	if _stagger > 0.0:
 		amount *= RIPOSTE_MULT  # riposte on a staggered mob
 		kind = maxi(kind, 0)    # reads as a heavy (crit) hit
+	elif HiddenClasses.is_art_kind(kind) and int(HiddenClasses.art_for_kind(kind).get("posture", 0)) > 0:
+		# Breaking Wave (Stillblade): the blow itself builds posture, so the
+		# follow-up hits land as ripostes.
+		_build_posture(int(HiddenClasses.art_for_kind(kind)["posture"]))
 	hp -= amount
 	_last_hitter = hitter
 	# Offline, and for the listen-server host, the popup is drawn here; clients

@@ -629,6 +629,96 @@ func boss_slam_impact(enemy: Node3D, pos: Vector3, radius: float) -> void:
 		me.call("shake", 0.35)
 
 
+## Rockfall: a marked ring on the ground, and a stone from the broken crown
+## above the summit that drops to land exactly when the warning runs out.
+func boss_rockfall_warning(enemy: Node3D, pos: Vector3, radius: float, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	var g := Vector3(pos.x, _ground_y(pos), pos.z)
+	_telegraph(enemy, 0, g, Vector2.ONE * radius * 2.0, Vector3.FORWARD, secs)
+	var rock := MeshInstance3D.new()
+	rock.mesh = WorldArt.boulder_mesh()
+	if _rock_mat == null:
+		_rock_mat = StandardMaterial3D.new()
+		_rock_mat.albedo_color = Color(0.46, 0.43, 0.4)
+		_rock_mat.roughness = 0.95
+	rock.material_override = _rock_mat
+	rock.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	add_child(rock)
+	var sz := radius * 0.55
+	rock.global_transform = Transform3D(Basis.from_euler(Vector3(randf() * TAU, randf() * TAU, 0.0)).scaled(Vector3(sz, sz * 0.8, sz)), g + Vector3(0, 16.0, 0))
+	# Track it with the telegraphs so boss_reset clears it too.
+	var id := enemy.get_instance_id()
+	var list: Array = _telegraphs.get(id, [])
+	list.append(rock)
+	_telegraphs[id] = list
+	var fall := minf(0.55, secs)
+	var tw := rock.create_tween()
+	tw.tween_interval(maxf(secs - fall, 0.0))
+	tw.tween_property(rock, "global_position", g + Vector3(0, sz * 0.35, 0), fall).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(rock, "rotation", rock.rotation + Vector3(2.5, 1.2, 0.0), fall)
+	tw.tween_interval(0.9)
+	tw.tween_property(rock, "global_position", g - Vector3(0, sz, 0), 0.6)
+	tw.tween_callback(rock.queue_free)
+	# A trickle of grit from above as the warning starts.
+	_fire(g + Vector3(0, 9.0, 0), "dirt_02", false, Color(0.5, 0.45, 0.4, 0.8), 0.5, 1.2, 0.5, 2.0, Vector3.DOWN, 15.0, -9.0, 0.08, 0.2, radius * 0.3, false)
+
+
+func boss_rockfall_impact(enemy: Node3D, pos: Vector3, radius: float) -> void:
+	var g := Vector3(pos.x, _ground_y(pos), pos.z)
+	dust_ring(g, radius * 0.8)
+	_fire(g + Vector3(0, 0.3, 0), "dirt_02", false, Color(0.55, 0.47, 0.38, 1.0), 0.7, 0.8, 3.0, 7.0, Vector3.UP, 50.0, -18.0, 0.2, 0.5, radius * 0.35, false)
+	_shock_ring(g + Vector3(0, 0.4, 0), Color(1.0, 0.75, 0.5), radius * 1.2, 0.25)
+	var me := get_tree().get_first_node_in_group("player") as Node3D
+	if me and me.has_method("shake") and me.global_position.distance_to(g) < radius * 3.0:
+		me.call("shake", 0.2)
+
+
+var _rock_mat: StandardMaterial3D
+
+
+## Chest opened: the lid's light spills out as a pillar of motes and a star
+## in the item's rank colour (Crafting ranks; -1 = no gear, warm gold).
+func chest_open(pos: Vector3, rank := -1) -> void:
+	var col := Color(1.0, 0.82, 0.4) if rank < 0 else Crafting.rank_color(clampi(rank, 0, 5))
+	var top := pos + Vector3(0, 0.8, 0)
+	flash(top, col.lightened(0.3), 1.4)
+	_glint(top + Vector3(0, 0.3, 0), col, 1.6 + 0.35 * maxi(rank, 0), 0.9, true)
+	ring(pos + Vector3(0, 0.05, 0), col, 2.6, 0.5)
+	_fire(top, "star_06", false, col, 0.6, 1.4, 1.0, 3.0, Vector3.UP, 18.0, 1.5, 0.08, 0.18, 0.35, false)
+	flash_light(top, col, 3.0 + maxi(rank, 0))
+	if rank >= 2:
+		# Rare and above: a second, slower bloom so a good drop feels special.
+		get_tree().create_timer(0.25).timeout.connect(func():
+			if is_inside_tree():
+				_glint(top + Vector3(0, 0.6, 0), col.lightened(0.25), 2.4, 1.1, true)
+				_shock_ring(top, col, 3.0, 0.4))
+
+
+## Idle twinkle on an unopened chest: a small star glints somewhere on it
+## every second or so. Call with on = false to stop (e.g. while it refills).
+func chest_sparkle(node: Node3D, on := true, color := Color(1.0, 0.88, 0.5)) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var old := node.get_node_or_null("VFXSparkle")
+	if not on:
+		if old:
+			old.queue_free()
+		return
+	if old:
+		return
+	var t := Timer.new()
+	t.name = "VFXSparkle"
+	t.wait_time = 1.1 + randf() * 0.5
+	t.autostart = true
+	node.add_child(t)
+	t.timeout.connect(func():
+		if not is_inside_tree() or not node.is_visible_in_tree():
+			return
+		var off := Vector3(randf_range(-0.45, 0.45), randf_range(0.35, 0.85), randf_range(-0.3, 0.3))
+		_glint(node.global_position + node.global_transform.basis * off, color, 0.35, 0.5, true))
+
+
 ## An HP bar emptied: a ring of glass shards bursts off the boss with a cold
 ## flash, like the bar itself breaking.
 func boss_bar_break(enemy: Node3D, bar_left: int, bars: int) -> void:

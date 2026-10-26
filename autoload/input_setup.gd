@@ -38,6 +38,10 @@ const DEFAULTS := {
 	"parry": {"kb": [KEY_F, ["mouse", MOUSE_BUTTON_RIGHT]], "pad": [JOY_BUTTON_RIGHT_STICK]},
 	"skill_5": {"kb": [KEY_5], "pad": []},
 	"skill_6": {"kb": [KEY_6], "pad": []},
+	# Hidden-class arts (HiddenClasses): R / C, or on a pad hold Target (LT)
+	# and press Attack (X) / Dash (B). See docs/HIDDEN_CLASSES.md.
+	"class_1": {"kb": [KEY_R], "pad": []},
+	"class_2": {"kb": [KEY_C], "pad": []},
 	"target": {"kb": [["mouse", MOUSE_BUTTON_MIDDLE]], "pad": [[JOY_AXIS_TRIGGER_LEFT, 1]]},
 	"interact": {"kb": [KEY_E], "pad": [JOY_BUTTON_Y]},
 	"stats_menu": {"kb": [KEY_TAB], "pad": [JOY_BUTTON_BACK]},
@@ -57,7 +61,7 @@ const DEFAULTS := {
 const REMAPPABLE := [
 	["move_forward", "Move forward"], ["move_back", "Move back"], ["move_left", "Move left"], ["move_right", "Move right"],
 	["jump", "Jump"], ["sprint", "Sprint"], ["dash", "Dash"], ["attack", "Attack"],
-	["skill_1", "Sword Art 1"], ["skill_2", "Sword Art 2"], ["skill_3", "Sword Art 3"], ["parry", "Parry / guard"], ["skill_4", "Unique Art 1"], ["skill_5", "Unique Art 2"], ["skill_6", "Unique Art 3"], ["target", "Target enemy"],
+	["skill_1", "Sword Art 1"], ["skill_2", "Sword Art 2"], ["skill_3", "Sword Art 3"], ["parry", "Parry / guard"], ["skill_4", "Unique Art 1"], ["skill_5", "Unique Art 2"], ["skill_6", "Unique Art 3"], ["class_1", "Class Art 1"], ["class_2", "Class Art 2"], ["target", "Target enemy"],
 	["interact", "Interact"], ["inventory", "Inventory"], ["quest_log", "Quest log"], ["map", "Map"],
 	["nearby", "Party & nearby"], ["stats_menu", "Character"], ["chat", "Chat"], ["pause", "Pause / back"],
 	["quick_save", "Quick save"], ["map_zoom_in", "Minimap zoom in"], ["map_zoom_out", "Minimap zoom out"],

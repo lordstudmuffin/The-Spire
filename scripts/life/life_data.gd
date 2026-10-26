@@ -188,6 +188,8 @@ static func land_fish(fish_id: String, gs = GameState) -> Dictionary:
 		return {"error": "No such fish."}
 	gs.add_material(fish_id, 1)
 	gs.fish_caught += 1
+	if gs.has_method("note_hidden"):
+		gs.note_hidden("fish")
 	gs.advance_quest("pond_catch")
 	if fish_id == "mire_eel":
 		gs.advance_quest("mere_catch")
@@ -238,6 +240,8 @@ static func cook(id: String, gs = GameState) -> Dictionary:
 	gs.spend_materials(r["cost"])
 	gs.add_material(id, 1)
 	var up := gs.add_life_xp("cooking", int(r["xp"]))
+	if gs.has_method("note_hidden"):
+		gs.note_hidden("cook:" + id)  # Hearthwright deed (HiddenClasses)
 	return {"name": r["name"], "skill_up": up, "id": id}
 
 
@@ -251,7 +255,8 @@ static func eat(id: String, gs = GameState) -> bool:
 		return Net.request_action("eat", {"id": id})
 	gs.spend_materials({id: 1})
 	var r: Dictionary = RECIPES[id]
-	var b: Dictionary = r["buff"].duplicate()
+	# A Hearthwright's food lasts longer and works harder (HiddenClasses).
+	var b: Dictionary = HiddenClasses.food_buff(str(gs.hidden_class), r["buff"])
 	b["name"] = r["name"]
 	b["color"] = r["color"]
 	gs.add_buff(id, float(b["dur"]), b)

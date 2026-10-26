@@ -26,6 +26,11 @@ func _ready() -> void:
 		print("== Done: %d failure(s)" % _fails)
 		get_tree().quit(1 if _fails > 0 else 0)
 		return
+	if OS.get_environment("SMOKE_ONLY") == "classes":
+		await _test_hidden_classes()
+		print("== Done: %d failure(s)" % _fails)
+		get_tree().quit(1 if _fails > 0 else 0)
+		return
 	print("== GameState")
 	GameState.reset()
 	GameState.character["name"] = "Tester"
@@ -1063,6 +1068,7 @@ func _ready() -> void:
 	await _test_farms_guilds()
 	_test_farming_skill()
 	await _test_labyrinth()
+	await _test_hidden_classes()
 	await _test_boss()
 
 	print("== Done: %d failure(s)" % _fails)
@@ -1641,6 +1647,198 @@ func _test_labyrinth() -> void:
 	GameState.chests = keep_chests
 	if keys0 > 0:
 		GameState.materials[L.KEY] = keys0
+	world.queue_free()
+	await get_tree().process_frame
+
+
+## Hidden classes Stillblade and Hearthwright (scripts/hidden_classes.gd):
+## hidden deeds, the NPC rites, the arts' cast rules, the perks, and the
+## server-side record path. SMOKE_ONLY=classes runs just this block.
+func _test_hidden_classes() -> void:
+	print("== Hidden classes: Stillblade and Hearthwright")
+	var keep_class := GameState.hidden_class
+	var keep_hidden: Dictionary = GameState.hidden_stats.duplicate(true)
+	var keep_quests: Dictionary = GameState.quests.duplicate(true)
+	var keep_stats: Dictionary = GameState.stats.duplicate()
+	var keep_mats: Dictionary = GameState.materials.duplicate()
+	var keep_buffs: Dictionary = GameState.buffs.duplicate(true)
+	GameState.hidden_class = ""
+	GameState.hidden_stats = {}
+	GameState.buffs = {}
+	GameState.floor = 1
+	GameState.has_position = false
+	GameState.heal_full()
+	var H = HiddenClasses
+	_check(GameState.HIDDEN_CLASSES.has(H.STILLBLADE) and GameState.HIDDEN_CLASSES.has(H.HEARTHWRIGHT) and GameState.HIDDEN_CLASSES.size() == 3, "three hidden classes on Floor 1")
+	_check(H.arts_of(H.STILLBLADE).size() == 2 and H.arts_of(H.HEARTHWRIGHT).size() == 1 and H.arts_of("Forgeborn").is_empty(), "Stillblade has two arts, Hearthwright one, Forgeborn none")
+	_check(H.is_art_kind(H.KIND_BASE) and not H.is_art_kind(H.KIND_BASE + H.ARTS.size()) and not UniqueSkills.is_unique_kind(H.KIND_BASE) and H.KIND_BASE >= UniqueSkills.KIND_BASE + 10, "class art kinds sit in their own range above the unique kinds")
+	_check(H.kind_of(H.STILLBLADE, 1) == H.KIND_BASE + 1 and H.kind_of(H.HEARTHWRIGHT, 0) == H.KIND_BASE + 2 and H.kind_of(H.HEARTHWRIGHT, 1) == -1, "kind_of maps a class slot to its net kind")
+	for a in H.ARTS:
+		_check(not str(a["name"]).to_lower().contains("sword art online") and not str(a["name"]).to_lower().contains("overgeared"), "art '%s' uses an original name" % a["name"])
+	# Hidden deeds: eight clean parries, a hit resets the streak.
+	for i in 5:
+		GameState.note_hidden("parry")
+	GameState.note_hidden("hurt")
+	_check(int(GameState.hidden_stats.get("clean_parries", 0)) == 0 and int(GameState.hidden_stats.get("best_streak", 0)) == 5 and not H.still_ready(GameState), "a hit ends the clean parry streak (best 5, not ready)")
+	for i in H.STILL_STREAK:
+		GameState.note_hidden("parry")
+	_check(H.still_ready(GameState) and int(GameState.hidden_stats.get("best_streak", 0)) == H.STILL_STREAK, "%d clean parries in a row set the Stillblade deed" % H.STILL_STREAK)
+	_check(GameState.to_dict()["hidden"].has("still_ready") and not GameState.to_dict().has("still_ready"), "the deed lives in the save's hidden block")
+	# The rite: Dain opens it only once the deed is done, never before.
+	var world: Node3D = load("res://scenes/world.tscn").instantiate()
+	add_child(world)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var world_npcs := 0
+	var npc_names := {}
+	for c in world.get_children():
+		if c is NPC:
+			world_npcs += 1
+			npc_names[c.npc_name] = true
+	_check(world_npcs == 13 and npc_names.has("Quartermaster Dain") and npc_names.has("Innkeeper Rook"), "no new NPCs: Dain and Rook carry the rites (%d NPCs in the world)" % world_npcs)
+	GameState.hidden_stats = {}
+	GameState.quests.erase(H.STILL_QUEST)
+	var line: String = world._dain_talk()
+	_check(not GameState.quests.has(H.STILL_QUEST) and (line.begins_with("Sit by the fire") or line.begins_with("You did it")), "Dain says nothing of the rite before the deed")
+	_check(bool(QuestData.info(H.STILL_QUEST).get("hidden", false)) and bool(QuestData.info(H.HEARTH_QUEST).get("hidden", false)) and not QuestData.active_ids().has(H.STILL_QUEST), "the rites are flagged hidden and absent from the log until opened")
+	for i in H.STILL_STREAK:
+		GameState.note_hidden("parry")
+	line = world._dain_talk()
+	_check(GameState.quests.has(H.STILL_QUEST) and int(GameState.quests[H.STILL_QUEST]["goal"]) == H.STILL_QUEST_GOAL and line.contains("Eight blows"), "the deed done, Dain opens The Unmoving Edge")
+	_check(QuestData.active_ids().has(H.STILL_QUEST) and QuestData.title(H.STILL_QUEST) == "The Unmoving Edge", "the opened rite now shows in the quest log")
+	for i in H.STILL_QUEST_GOAL - 1:
+		GameState.note_hidden("parry")
+	line = world._dain_talk()
+	_check(GameState.hidden_class == "" and line.begins_with("9 of 10"), "parries move the rite; one short, no class yet")
+	GameState.note_hidden("parry")
+	var str0: int = GameState.stats["agility"]
+	line = world._dain_talk()
+	_check(GameState.hidden_class == H.STILLBLADE and GameState.quest_done(H.STILL_QUEST) and GameState.stats["agility"] == str0 + 2 and GameState.class_title() == "Stillblade", "ten parries later Dain names you Stillblade (+2 AGI)")
+	_check(world._dain_talk().begins_with("Stillblade."), "Dain greets a Stillblade")
+	# Perks and arts on the player.
+	var pl: Player = world.player
+	pl.global_position = Vector3(0, 1, 40)  # clear of the spawn's mobs: the casts below hit nothing
+	pl.velocity = Vector3.ZERO
+	_check(is_equal_approx(pl._guard_regen(), Player.GUARD_REGEN * H.GUARD_REGEN_MULT), "Stillblade guard recovers %.1fx faster" % H.GUARD_REGEN_MULT)
+	pl.last_parry_ms = -100000
+	pl.class_cd = [0.0, 0.0]
+	_check(not pl.use_class_art(0) and pl.class_cd[0] == 0.0, "Still Water refuses without a recent parry")
+	pl.last_parry_ms = Time.get_ticks_msec()
+	_check(pl.use_class_art(0) and pl.class_cd[0] > 0.0, "Still Water casts right after a parry and starts its cooldown")
+	_check(not pl.use_class_art(0), "Still Water honours its cooldown")
+	_check(pl.use_class_art(1) and pl.class_cd[1] > 0.0 and not pl.use_class_art(2), "Breaking Wave casts; there is no third class art")
+	await get_tree().create_timer(0.25, false).timeout  # let the two hit cones resolve (on nothing)
+	# Breaking Wave builds posture on the mob it lands on (offline: take_hit).
+	var mob: Enemy = null
+	for e in get_tree().get_nodes_in_group("enemies"):
+		if e is Enemy and not e.is_boss and e.visible and not e.is_staggered():
+			mob = e
+			break
+	if mob != null:
+		mob._posture = 0
+		var hp0: float = mob.hp
+		mob.take_hit(1.0, Vector3.FORWARD, 1, H.KIND_BASE + 1)
+		_check(mob.is_staggered() and mob.hp < hp0, "Breaking Wave staggers a normal mob outright")
+		mob._stagger = 0.0
+		mob._posture = 0
+	else:
+		_check(false, "a living mob to test Breaking Wave on")
+	# Server side: the class and the buff come from the record, never the client.
+	var rec: Dictionary = Net.record_defaults()
+	rec.merge({"name": "RecTester", "level": 3, "stats": {"strength": 3, "agility": 2, "endurance": 2, "spirit": 1},
+		"character": {"name": "RecTester", "origin": "Swordsman"}}, true)
+	Net.srv_records[7101] = rec
+	var bogus: Dictionary = Net.record_defaults()
+	bogus["hidden_class"] = "Bladewraith"
+	Net.srv_records[7102] = bogus
+	_check(Net.srv_hidden_class(7101) == "" and Net.srv_hidden_class(7102) == "" and Net.srv_hidden_class(1) == H.STILLBLADE, "srv_hidden_class reads the record (unknown classes read as none; offline peer 1 is GameState)")
+	var rs = Net.RecordState.new(rec)
+	H.note(rs, "parry")
+	H.note(rs, "parry")
+	Net.srv_damage(7101, 1.0)  # a hit resets the streak on the record
+	_check(int(rec["hidden"]["clean_parries"]) == 0 and int(rec["hidden"]["best_streak"]) == 2, "srv_damage ends a record's parry streak")
+	for i in H.STILL_STREAK:
+		H.note(rs, "parry")
+	_check(H.still_ready(rs) and int(rec["hidden"]["clean_parries"]) == H.STILL_STREAK, "the record path tracks the streak (srv_damage resets, parries build)")
+	line = world._dain_talk(rs)
+	_check(rec["quests"].has(H.STILL_QUEST) and str(rec.get("hidden_class", "")) == "", "Dain opens the rite on a record")
+	for i in H.STILL_QUEST_GOAL:
+		H.note(rs, "parry")
+	line = world._dain_talk(rs)
+	_check(str(rec["hidden_class"]) == H.STILLBLADE and rs.events.size() > 0 and rs.events[-1].has("class") and Net.srv_hidden_class(7101) == H.STILLBLADE, "the rite completes on the record and the server now sees the class")
+	_check(not Net.snapshot_for_client(rec).has("hidden") and Net.snapshot_for_client(rec).get("hidden_class", "") == H.STILLBLADE, "the client snapshot carries the class but never the hidden deeds")
+	Net.srv_class_buff(7101, "hearth_glow", H.HEARTH_GLOW)
+	_check(rec["buffs"].has("hearth_glow") and float(rec["buffs"]["hearth_glow"]["regen"]) == 3.0, "srv_class_buff puts an art's buff on the record")
+	Net.srv_records.erase(7101)
+	Net.srv_records.erase(7102)
+	# Hearthwright: the life deeds, Rook's rite, and the food perk.
+	GameState.hidden_class = ""
+	GameState.stats = keep_stats.duplicate()
+	GameState.hidden_stats = {}
+	GameState.quests.erase(H.HEARTH_QUEST)
+	GameState.quests["tavern_stew"] = {"progress": 1, "goal": 1, "done": true}
+	for i in 3:
+		GameState.note_hidden("cook:grilled_trout")
+		GameState.note_hidden("cook:turnip_soup")
+		GameState.note_hidden("cook:harvest_bread")
+	for i in 3:
+		GameState.note_hidden("cook:boar_stew")
+	for i in H.HEARTH_FISH:
+		GameState.note_hidden("fish")
+	_check(int(GameState.hidden_stats.get("dishes", 0)) == 12 and GameState.hidden_stats["recipes"].size() == 4 and not H.hearth_ready(GameState), "twelve dishes over four recipes and five fish: not yet, the plots are missing")
+	line = world._rook_talk()
+	_check(not GameState.quests.has(H.HEARTH_QUEST), "Rook keeps quiet before the deed")
+	for i in H.HEARTH_HARVESTS:
+		GameState.note_hidden("harvest")
+	_check(H.hearth_ready(GameState), "three harvests complete the Hearthwright deed")
+	GameState.materials["grilled_trout"] = 0
+	GameState.materials["turnip_soup"] = 0
+	GameState.materials["harvest_bread"] = 0
+	line = world._rook_talk()
+	_check(GameState.quests.has(H.HEARTH_QUEST) and line.contains("trail supper"), "Rook opens The Wandering Pot")
+	GameState.materials["grilled_trout"] = 1
+	line = world._rook_talk()
+	_check(GameState.hidden_class == "" and line.begins_with("1 of 3"), "progress mirrors the supper dishes carried")
+	GameState.materials["turnip_soup"] = 1
+	GameState.materials["harvest_bread"] = 1
+	line = world._rook_talk()
+	_check(GameState.hidden_class == H.HEARTHWRIGHT and GameState.quest_done(H.HEARTH_QUEST) and int(GameState.materials["grilled_trout"]) == 0 and int(GameState.materials["harvest_bread"]) == 0, "the supper served, Rook names you Hearthwright and takes the dishes")
+	_check(world._rook_talk().begins_with("Hearthwright!"), "Rook greets a Hearthwright")
+	_check(world._dain_talk().begins_with("Sit by the fire") or world._dain_talk().begins_with("You did it"), "Dain offers no second class to a Hearthwright")
+	# Food perk: longer and stronger buffs, server and offline alike.
+	GameState.materials["grilled_trout"] = 1
+	GameState.buffs = {}
+	_check(LifeData.eat("grilled_trout") and is_equal_approx(float(GameState.buffs["grilled_trout"]["left"]), 90.0 * H.FOOD_DURATION_MULT) and is_equal_approx(float(GameState.buffs["grilled_trout"]["regen"]), 2.0 * H.FOOD_POWER_MULT), "a Hearthwright's trout lasts %.0f%% longer and heals %.0f%% harder" % [(H.FOOD_DURATION_MULT - 1.0) * 100.0, (H.FOOD_POWER_MULT - 1.0) * 100.0])
+	_check(world._srv_near_fire(Vector3(1e6, 0, 1e6), GameState), "the server lets a Hearthwright cook far from any fire")
+	GameState.hidden_class = ""
+	_check(not world._srv_near_fire(Vector3(1e6, 0, 1e6), GameState), "...and nobody else")
+	GameState.hidden_class = H.HEARTHWRIGHT
+	# Hearth Flare: wide arc, and landing it leaves the caster glowing.
+	pl.class_cd = [0.0, 0.0]
+	GameState.buffs = {}
+	if mob != null:
+		pl.global_position = Vector3(0, 1, 40)
+		pl.velocity = Vector3.ZERO
+		pl.model.rotation.y = 0.0
+		var fwd: Vector3 = -pl.model.global_transform.basis.z
+		mob.global_position = pl.global_position + fwd * 1.6
+		var mhp0: float = mob.hp
+		_check(pl.use_class_art(0), "Hearth Flare casts")
+		await get_tree().create_timer(0.35, false).timeout
+		_check(mob.hp < mhp0 and GameState.has_buff("hearth_glow"), "Hearth Flare lands and grants Hearth Glow")
+		pl.global_position = GameState.spawn_point()
+	_check(not pl.use_class_art(1), "a Hearthwright has no second art")
+	# Bindings: the arts have keys, and the pad reaches them through the LT chord.
+	_check(InputMap.has_action("class_1") and InputMap.has_action("class_2") and not InputSetup.events("class_1", "kb").is_empty() and not InputSetup.events("class_2", "kb").is_empty(), "class arts have keyboard bindings (R / C)")
+	_check(not InputSetup.events("target", "pad").is_empty() and not InputSetup.events("attack", "pad").is_empty() and not InputSetup.events("dash", "pad").is_empty(), "the pad chord (LT + X / B) has all three buttons bound")
+	# Restore.
+	GameState.hidden_class = keep_class
+	GameState.hidden_stats = keep_hidden
+	GameState.quests = keep_quests
+	GameState.stats = keep_stats
+	GameState.materials = keep_mats
+	GameState.buffs = keep_buffs
+	GameState.heal_full()
 	world.queue_free()
 	await get_tree().process_frame
 

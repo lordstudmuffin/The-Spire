@@ -75,6 +75,12 @@ func class_title() -> String:
 	return str(rec.get("hidden_class", "")) if str(rec.get("hidden_class", "")) != "" else str(rec["character"].get("origin", ""))
 
 
+## A hidden-class deed on the record (LifeData.cook / land_fish, Farms
+## harvest). Combat deeds come through Net.srv_note_hidden instead.
+func note_hidden(event: String) -> void:
+	HiddenClasses.note(self, event)
+
+
 func unlock_hidden_class(cls: String) -> void:
 	if str(rec.get("hidden_class", "")) == cls or not GameState.HIDDEN_CLASSES.has(cls):
 		return

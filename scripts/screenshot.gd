@@ -297,7 +297,7 @@ func _ready() -> void:
 					if qfx:
 						var at: Vector3 = pl.global_position + Vector3(0, 1.2, 0) - pl.model.global_transform.basis.z * 0.7
 						qfx.parry_flash(at, demo == "guard_break")
-				"boss_sweep", "boss_slam", "boss_charge", "boss_enrage", "boss_bar", "boss_engage", "boss_plate":
+				"boss_sweep", "boss_slam", "boss_charge", "boss_enrage", "boss_bar", "boss_engage", "boss_plate", "boss_rockfall":
 					var bfx := VFX.get_for(pl)
 					if demo_boar and bfx:
 						var bp: Vector3 = demo_boar.global_position
@@ -314,9 +314,18 @@ func _ready() -> void:
 								bfx.boss_bar_break(demo_boar, 2, 4)
 							"boss_engage":
 								bfx.boss_engage(demo_boar)
+							"boss_rockfall":
+								var pp: Vector3 = pl.global_position
+								var offs := [Vector3(1.5, 0, -2.5), Vector3(-3.5, 0, -4.0), Vector3(3.0, 0, -6.0)]
+								for k in offs.size():
+									bfx.boss_rockfall_warning(demo_boar, pp + pl.model.global_transform.basis * offs[k], 2.2, 0.25 + 0.35 * k)
 							"boss_plate":
 								demo_boar.hp = demo_boar.max_hp * 0.62
 								demo_boar._update_label()
+				"chest_open":
+					var cfx := VFX.get_for(pl)
+					if cfx:
+						cfx.chest_open(pl.global_position - pl.model.global_transform.basis.z * 2.5, 4)
 				"stagger":
 					if demo_boar:
 						demo_boar.net_staggered(2.0)

@@ -401,6 +401,10 @@ func _on_interact() -> void:
 			hud.show_dialogue(near[0].npc_name, near[0].talk())
 	elif near[0] != null and near[0].is_in_group("ore_veins"):
 		_mine(near[0])
+	elif near[0] == null and HiddenClasses.cooks_anywhere(GameState.hidden_class) and player.is_on_floor():
+		# A Hearthwright's field kitchen: interact with nothing near and the
+		# pot comes out (the server accepts the cook without a fire too).
+		_open_cooking("Field kitchen")
 
 
 func _try_enter_labyrinth() -> void:
@@ -1004,6 +1008,8 @@ func _srv_near(pos: Vector3, target: Vector3, range_: float) -> bool:
 
 
 func _srv_near_fire(pos: Vector3, rs) -> bool:
+	if HiddenClasses.cooks_anywhere(str(rs.hidden_class)):
+		return true  # a Hearthwright carries the fire
 	for cf in _campfires:
 		if _srv_near(pos, cf["pos"], float(cf["range"])):
 			return true
@@ -1568,6 +1574,9 @@ func _hesper_talk(gs = GameState) -> String:
 
 
 func _rook_talk(gs = GameState) -> String:
+	var hearth := _hearth_talk(gs)
+	if hearth != "":
+		return hearth
 	return _gather_talk(gs, "tavern_stew", "boar_stew", 1, 300, 180, "field_herbs", {
 		"locked": "Hesper sends me every stray with a strong back. Help her first; I will still be short a cook when you are done.",
 		"offer": "My cook walked out and the field hands want boar stew. Trimmings from one boar hide, two of Hesper's herbs, and a fire: the Talven camp fire will do, or your own hearth. Bring me one pot that would not shame this house and the job is yours, in spirit at least.",
@@ -1577,6 +1586,35 @@ func _rook_talk(gs = GameState) -> String:
 	}, func(g):
 		g.add_material("koi_sashimi", 1)
 		return ", +1 Koi Sashimi")
+
+
+## Innkeeper Rook's hidden rite (HiddenClasses): once his stew is served and
+## the fishers and field hands have talked about your fires (twelve dishes
+## over four recipes, five fish, three harvests), he asks for a trail supper.
+## Returns "" when the plain stew talk should run instead.
+func _hearth_talk(gs) -> String:
+	var qid := HiddenClasses.HEARTH_QUEST
+	if str(gs.hidden_class) == HiddenClasses.HEARTHWRIGHT:
+		return "Hearthwright! Pull up a stool; no, the other way round, you feed me for once. The road is lucky to have you."
+	if not gs.quest_done("tavern_stew") or gs.quest_done(qid):
+		return ""
+	if gs.quests.has(qid):
+		var have := HiddenClasses.supper_count(gs)
+		gs.quests[qid]["progress"] = mini(have, 3)
+		if gs == GameState:
+			GameState.quest_changed.emit()
+		if HiddenClasses.has_supper(gs):
+			gs.spend_materials(HiddenClasses.HEARTH_SUPPER)
+			gs.complete_quest(qid)
+			gs.unlock_hidden_class(HiddenClasses.HEARTHWRIGHT)
+			return "Trout off the coals, soup still steaming, bread that has not had time to cool. That is a supper for a road. The cooks who walked the Spire with a pot on their back were called Hearthwrights, and you are one now: your food will hold longer and do more, you will not need a fire to cook on, and when the coals fly, keep them. Hearth Flare, they called that."
+		return "%d of 3 dishes. Grilled Trout from the pond, Turnip Soup from the plots, Harvest Bread from the sunwheat. Cooked by you, mind, at any fire you like." % have
+	if str(gs.hidden_class) != "":
+		return ""  # one hidden class per character
+	if HiddenClasses.hearth_ready(gs):
+		gs.start_quest(qid, 3)
+		return "Tam says you fish like you mean it, the plots west of here know your boots, and the field hands come in smelling of your cooking instead of mine. There was a name for cooks like that once. Bring me a trail supper, Grilled Trout, Turnip Soup and Harvest Bread, all three at once, and I will tell you what it was."
+	return ""
 
 
 func _fen_talk(gs = GameState) -> String:
@@ -1994,16 +2032,24 @@ func _add_pad(pos: Vector3, label: String, dest, color: Color, toast := "") -> v
 	cm.bottom_radius = 1.5
 	cm.height = 0.15
 	cm.radial_segments = 24
-	cm.material = WorldArt.mat(color.darkened(0.5), 0.0, color, 1.2)
+	cm.material = WorldArt.ruin_mat("trim")
 	pad.mesh = cm
 	pad.position = pos + Vector3(0, 0.08, 0)
 	add_child(pad)
+	# Glowing inlay inside a stone rim, instead of a solid lit slab.
+	var inlay := CylinderMesh.new()
+	inlay.top_radius = 1.15
+	inlay.bottom_radius = 1.15
+	inlay.height = 0.02
+	inlay.radial_segments = 24
+	WorldArt.mesh_node(self, inlay, pos + Vector3(0, 0.165, 0), WorldArt.mat(color.darkened(0.35), 0.0, color, 0.7))
 	WorldArt.rune_ring(self, pos + Vector3(0, 0.18, 0), 1.25, color, 0.18)
-	var crystal := CylinderMesh.new()
-	crystal.top_radius = 0.0
-	crystal.bottom_radius = 0.35
+	# Floating octahedral crystal (both points), a classic waypoint marker.
+	var crystal := SphereMesh.new()
+	crystal.radius = 0.32
 	crystal.height = 1.2
 	crystal.radial_segments = 4
+	crystal.rings = 1
 	var c := WorldArt.mesh_node(self, crystal, pos + Vector3(0, 1.6, 0), WorldArt.mat(color.lightened(0.3), 0.0, color, 3.0))
 	var tw := c.create_tween().set_loops()
 	tw.tween_property(c, "position:y", pos.y + 2.0, 1.6).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
@@ -2065,8 +2111,7 @@ func _build_labyrinth() -> void:
 		for k in 5:
 			var a := TAU * k / 5.0 + 1.1 + i
 			var s := 0.6 + 0.3 * k
-			var boulder := WorldArt.sphere(self, s, base + Vector3(cos(a) * 10, s * 0.4, sin(a) * 10), Color("8a8398"), Vector3(1, 0.6, 1))
-			boulder.material_override = WorldArt.ruin_mat("trim")
+			WorldArt.mesh_node(self, WorldArt.boulder_mesh(k + 3 * i), base + Vector3(cos(a) * 10, s * 0.35, sin(a) * 10), WorldArt.ruin_mat("trim"), Vector3(0, a, 0), Vector3(2.0, 1.1, 2.0) * s)
 		_add_pad(base + Vector3(0, 0, 9), home_label, GameState.spawn_point(), down_color, GameState.floor_name())
 		if i + 1 < LAB_LEVELS.size():
 			var next: Vector3 = LAB_LEVELS[i + 1]
@@ -2455,12 +2500,42 @@ func _build_talven() -> void:
 	qm.appearance = {"hair_color": "2b2b2b", "outfit_color": "2f4858", "hair_style": 1, "eye_color": "f6ae2d"}
 	qm.position = TALVEN + Vector3(0, 0, 3)
 	qm.rotation.y = PI
-	_set_talk(qm, func(gs):
-		gs.heal_full()
-		if gs.floors_cleared >= 1:
-			return "You did it. The whole camp is talking about the Guardian's fall."
-		return "Sit by the fire, you're patched up. The Guardian hits like a landslide; bring armor and don't stand in the slam.")
+	_set_talk(qm, _dain_talk)
 	add_child(qm)
+
+
+## Quartermaster Dain patches you up; and if he has seen you turn eight
+## blows in a row without a scratch (hidden stat, HiddenClasses), he opens
+## the Stillblade rite nobody is told about.
+func _dain_talk(gs = GameState) -> String:
+	gs.heal_full()
+	var still := _still_talk(gs)
+	if still != "":
+		return still
+	if gs.floors_cleared >= 1:
+		return "You did it. The whole camp is talking about the Guardian's fall."
+	return "Sit by the fire, you're patched up. The Guardian hits like a landslide; bring armor and don't stand in the slam."
+
+
+func _still_talk(gs) -> String:
+	var qid := HiddenClasses.STILL_QUEST
+	if str(gs.hidden_class) == HiddenClasses.STILLBLADE:
+		return "Stillblade. Keep the edge where it is and let them come to it. The fire is yours whenever you want it."
+	if gs.quest_done(qid):
+		return ""
+	if gs.quests.has(qid):
+		if gs.quest_ready(qid):
+			gs.complete_quest(qid)
+			gs.unlock_hidden_class(HiddenClasses.STILLBLADE)
+			return "Ten, and not one of them moved you. The old drill has a name for that: Stillblade. Your guard will come back faster now, and you will feel two cuts the rest of us never learn. Still Water, in the breath after a parry; Breaking Wave, when something needs putting on its knees."
+		var q: Dictionary = gs.quests[qid]
+		return "%d of %d. Turn the blow, do not chase it. The mob tells you when it swings; you only have to be there." % [int(q["progress"]), int(q["goal"])]
+	if str(gs.hidden_class) != "":
+		return ""  # one hidden class per character
+	if HiddenClasses.still_ready(gs):
+		gs.start_quest(qid, HiddenClasses.STILL_QUEST_GOAL)
+		return "I watched you from the fire. Eight blows turned, not a scratch taken. The camp had a drill for that once, before the Guardian woke, and a name at the end of it. Ten more parries, anywhere on this floor, and come back to me. Tell nobody; the ones who go looking for it never find it."
+	return ""
 
 
 func _spawn_ore_veins(count := 10) -> void:

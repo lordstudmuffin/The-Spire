@@ -65,6 +65,13 @@ var _swing_serial := 0
 var skill_cd := [0.0, 0.0, 0.0]
 ## Cooldowns of the held unique skill's Sword Arts (keys 4-6).
 var unique_cd := [0.0, 0.0, 0.0]
+## Cooldowns of the hidden class's arts (HiddenClasses.arts_of; keys R / C,
+## pad LT+X / LT+B).
+var class_cd := [0.0, 0.0]
+## When this player's last parry was judged (this machine's clock: the
+## server's for a remote player, so Still Water's "right after a parry" rule
+## is checked against server time in Enemy.net_hit).
+var last_parry_ms := -100000
 var _recovery := 0.0
 
 # --- Parry and guard ------------------------------------------------------
@@ -415,7 +422,7 @@ func _physics_process(delta: float) -> void:
 			if _stun > 0.0:
 				_stun = maxf(_stun - delta, 0.0)
 			elif not blocking:
-				guard = minf(guard + GUARD_REGEN * delta, GUARD_MAX)
+				guard = minf(guard + _guard_regen() * delta, GUARD_MAX)
 		return
 	level = GameState.level
 	srv_attack = GameState.attack_damage()
@@ -430,6 +437,8 @@ func _physics_process(delta: float) -> void:
 		skill_cd[i] = max(skill_cd[i] - delta, 0.0)
 	for i in unique_cd.size():
 		unique_cd[i] = max(unique_cd[i] - delta, 0.0)
+	for i in class_cd.size():
+		class_cd[i] = max(class_cd[i] - delta, 0.0)
 
 	if not is_on_floor():
 		velocity.y -= gravity * delta
@@ -458,7 +467,14 @@ func _physics_process(delta: float) -> void:
 		var fx := VFX.get_for(self)
 		if fx:
 			fx.puff(global_position, 0.9)
-	if input_enabled and Input.is_action_just_pressed("dash") and _dash_cd == 0.0:
+	# Hidden-class arts on a pad: hold Target (LT) and press Attack (X) for
+	# class art 1 or Dash (B) for class art 2; keyboard also has R / C.
+	var class_arts: Array = HiddenClasses.arts_of(GameState.hidden_class) if GameState.hidden_class != "" else []
+	var class_chord := not class_arts.is_empty() and Input.is_action_pressed("target")
+	var can_act := input_enabled and not _dying and _stun == 0.0 and not blocking and _recovery == 0.0
+	if class_chord and class_arts.size() > 1 and can_act and Input.is_action_just_pressed("dash"):
+		use_class_art(1)
+	elif input_enabled and Input.is_action_just_pressed("dash") and _dash_cd == 0.0:
 		_dash_timer = DASH_TIME
 		_dash_cd = DASH_COOLDOWN
 		Audio.play("dash")
@@ -473,9 +489,15 @@ func _physics_process(delta: float) -> void:
 	if _stun > 0.0:
 		_stun = maxf(_stun - delta, 0.0)
 	elif not blocking:
-		guard = minf(guard + GUARD_REGEN * delta, GUARD_MAX)
-	if input_enabled and not _dying and _stun == 0.0 and not blocking and Input.is_action_just_pressed("attack") and _attack_cd == 0.0 and _recovery == 0.0:
+		guard = minf(guard + _guard_regen() * delta, GUARD_MAX)
+	if class_chord and can_act and Input.is_action_just_pressed("attack"):
+		use_class_art(0)
+	elif input_enabled and not _dying and _stun == 0.0 and not blocking and Input.is_action_just_pressed("attack") and _attack_cd == 0.0 and _recovery == 0.0:
 		_attack()
+	if can_act and not class_arts.is_empty():
+		for i in mini(class_arts.size(), class_cd.size()):
+			if Input.is_action_just_pressed("class_%d" % (i + 1)):
+				use_class_art(i)
 	if input_enabled and not _dying and _stun == 0.0 and not blocking and _recovery == 0.0:
 		# Gamepad: hold the target trigger (LT) and press a Sword Art button
 		# for the matching unique art (keys 4-6 on keyboard).
@@ -884,6 +906,7 @@ func defend(from_pos: Vector3) -> String:
 		_parry_open_ms = -100000
 		_parry_ready_ms = now  # a clean parry can chain into the next one
 		parries += 1
+		last_parry_ms = now
 		return "parry"
 	if front and blocking:
 		guard -= GUARD_PER_BLOCK
@@ -945,6 +968,7 @@ func net_defended(outcome: String, from_pos: Vector3, guard_left: float, stun: f
 			_vrm.play_guard(false)
 	if outcome == "parry":
 		parries += 1
+		last_parry_ms = Time.get_ticks_msec()
 	defend_fx(outcome, from_pos)
 
 
@@ -979,6 +1003,62 @@ func use_unique(i: int) -> bool:
 	get_tree().create_timer(0.12 + hits * 0.08, false).timeout.connect(func():
 		if is_inside_tree():
 			_hit_cone(GameState.attack_damage() * float(art["mult"]), float(art["range"]), float(art["arc"]), UniqueSkills.KIND_BASE + i))
+	return true
+
+
+## Guard regeneration per second: Stillblades recover faster. The class comes
+## from the server's view of this peer (the record for remote players).
+func _guard_regen() -> float:
+	return GUARD_REGEN * HiddenClasses.guard_regen_mult(Net.srv_hidden_class(peer_id))
+
+
+## Still Water may be cast this long after the last parry (client side).
+func counter_open() -> bool:
+	return Time.get_ticks_msec() - last_parry_ms <= int(HiddenClasses.COUNTER_WINDOW * 1000.0)
+
+
+## A hidden-class Sword Art (HiddenClasses.arts_of(GameState.hidden_class),
+## slot `i`). Offline the class check is GameState's; online the server
+## re-checks class, cooldown and the after-parry rule on every hit
+## (Enemy.net_hit). Returns false if refused. VFX hook: class_art_cast(player,
+## class, art_id) behind has_method.
+func use_class_art(i: int) -> bool:
+	var cls := GameState.hidden_class
+	var arts := HiddenClasses.arts_of(cls)
+	if i < 0 or i >= arts.size() or i >= class_cd.size() or class_cd[i] > 0.0:
+		return false
+	var art: Dictionary = arts[i]
+	if bool(art.get("after_parry", false)) and not counter_open():
+		if is_local:
+			Audio.play("ui_error", null, 0.0, -6.0)
+		return false
+	class_cd[i] = float(art["cooldown"])
+	_recovery = float(art["recovery"])
+	Audio.play("skill_charge", null if is_local else global_position, 0.05)
+	InputSetup.rumble(0.35, 0.8, 0.22)
+	var fx := VFX.get_for(self)
+	if fx and fx.has_method("class_art_cast"):
+		fx.call("class_art_cast", self, cls, str(art["id"]))
+	if float(art["lunge"]) > 0.0:
+		var fwd := -model.global_transform.basis.z
+		velocity.x = fwd.x * float(art["lunge"])
+		velocity.z = fwd.z * float(art["lunge"])
+	_play_swing_fx(i % SKILLS.size())
+	if Net.online:
+		net_swing.rpc(i % SKILLS.size())
+	var kind := HiddenClasses.kind_of(cls, i)
+	get_tree().create_timer(0.12, false).timeout.connect(func():
+		if not is_inside_tree():
+			return
+		var hits := _hit_cone(GameState.attack_damage() * float(art["mult"]), float(art["range"]), float(art["arc"]), kind)
+		# Offline / host the hits landed here (take_hit), so the art's
+		# self-buff is granted here too; a remote client's comes from the
+		# server with the validated hit (Enemy.net_hit).
+		if hits > 0 and art.has("buff") and (not Net.online or multiplayer.is_server()):
+			Net.srv_class_buff(peer_id, str(art["buff"]), HiddenClasses.HEARTH_GLOW)
+			var fx2 := VFX.get_for(self)
+			if fx2 and fx2.has_method("hearth_glow"):
+				fx2.call("hearth_glow", self))
 	return true
 
 
@@ -1017,6 +1097,7 @@ func take_damage(amount: float) -> void:
 	if not is_local or _dying:
 		return
 	GameState.take_damage(amount)
+	Net.note_hidden(peer_id, "hurt")  # a hit ends a clean parry streak (HiddenClasses)
 	Audio.play("player_hit", null, 0.1)
 	shake(clampf(0.15 + amount / 60.0, 0.15, 0.4))
 	InputSetup.rumble(0.5, clampf(0.3 + amount / 40.0, 0.3, 1.0), 0.25)
