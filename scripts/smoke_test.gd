@@ -368,7 +368,7 @@ func _ready() -> void:
 	Social.unignore("Troll")
 	_check(not Social.is_ignored("Troll") and Settings.data["ignored"].is_empty(), "unignore clears it from settings")
 	# Server-side party state machine on fake records (no peers to rpc to).
-	var members := ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]
+	var members := ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf"]
 	for i in members.size():
 		Net.srv_records[5001 + i] = Net._new_record(Net.sanitize_character({"name": members[i]}), "0123456789abcdef0123456789abcdef", {})
 	_check(Net.srv_peer_by_name("bravo") == 5002 and Net.srv_peer_by_name("Nobody") == 0, "names resolve to peers, case-insensitive")
@@ -380,17 +380,17 @@ func _ready() -> void:
 	var pid: int = Net.srv_party_of[5001]
 	_check(Net.srv_parties[pid]["leader"] == 5001, "inviter leads")
 	_check(Net._srv_invite(5002, 5003) != "", "only the leader invites")
-	for peer in [5003, 5004]:
+	for peer in [5003, 5004, 5005, 5006]:
 		_check(Net._srv_invite(5001, peer) == "", "leader invites %d" % peer)
 		Net._srv_respond(peer, true)
-	_check(Net.srv_parties[pid]["members"].size() == 4, "party fills to four")
-	_check(Net._srv_invite(5001, 5005) != "", "fifth member refused (cap %d)" % Net.PARTY_MAX)
-	Net._srv_invite(5005, 5001)
+	_check(Net.srv_parties[pid]["members"].size() == 6, "party fills to six")
+	_check(Net._srv_invite(5001, 5007) != "", "seventh member refused (cap %d)" % Net.PARTY_MAX)
+	Net._srv_invite(5007, 5001)
 	_check(not Net.srv_invites.has(5001), "members of a party cannot be invited elsewhere")
 	Net._srv_leave_party(5001)
 	_check(not Net.srv_party_of.has(5001) and Net.srv_parties[pid]["leader"] == 5002, "leader leaving hands over to the oldest member")
-	Net._srv_leave_party(5003)
-	Net._srv_leave_party(5004)
+	for peer in [5003, 5004, 5005, 5006]:
+		Net._srv_leave_party(peer)
 	_check(not Net.srv_parties.has(pid) and not Net.srv_party_of.has(5002), "party disbands when one member is left")
 	_check(Net._srv_invite(5001, 5002) == "", "re-invite after disband")
 	Net._srv_respond(5002, false)

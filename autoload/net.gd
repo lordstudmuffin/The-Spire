@@ -979,7 +979,7 @@ signal party_invited(from_name: String)
 signal chat_received(sender: String, text: String, channel: String)
 signal who_received(list: Array)
 
-const PARTY_MAX := 4
+const PARTY_MAX := 6   # Aincrad parties are up to six
 const PARTY_BONUS_PER_MEMBER := 0.10
 const PARTY_SHARE_RANGE := 60.0
 const PARTY_TICK := 0.5
