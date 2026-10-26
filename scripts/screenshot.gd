@@ -48,6 +48,9 @@ func _ready() -> void:
 	get_tree().root.add_child(scene)
 	if which == "loading":
 		scene.preview(GameState.floor)
+	if which == "menu" and "--servers" in OS.get_cmdline_user_args():
+		await get_tree().process_frame
+		scene._open_servers()
 	for i in 5:
 		await get_tree().process_frame
 	if cam_spec != "" and which == "world":

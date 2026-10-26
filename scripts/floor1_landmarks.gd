@@ -35,13 +35,18 @@ static func build(w: Node3D) -> Dictionary:
 	return {"keep": keep, "fire": _v(WorldArt.HUNTERS_CAMP, Vector3(0, 0, 2.5))}
 
 
+## Kenney castle walls are sandstone-tan; weather them toward old grey stone.
+static func _stone(w: Node3D, name: String, pos: Vector3, rot: float) -> void:
+	WorldProps.tinted_prop(w, "castle", name, pos, rot, C, "box", Color(0.66, 0.68, 0.76))
+
+
 ## A watchtower that fell in some old war: the base still stands, its walls
 ## lie broken round it, a wrecked trebuchet in the grass.
 static func _ruined_watch(w: Node3D, c: Vector2) -> void:
-	WorldProps.prop(w, "castle", "tower-square-base-border", _v(c), 0.3, C)
-	WorldProps.prop(w, "castle", "wall-half", _v(c, Vector3(6.5, 0, 1.0)), 1.9, C)
-	WorldProps.prop(w, "castle", "wall-corner-half", _v(c, Vector3(-5.5, 0, 4.5)), -0.6, C)
-	WorldProps.prop(w, "castle", "wall-half", _v(c, Vector3(-2.0, 0, -7.0)), 0.1, C)
+	_stone(w, "tower-square-base-border", _v(c), 0.3)
+	_stone(w, "wall-half", _v(c, Vector3(6.5, 0, 1.0)), 1.9)
+	_stone(w, "wall-corner-half", _v(c, Vector3(-5.5, 0, 4.5)), -0.6)
+	_stone(w, "wall-half", _v(c, Vector3(-2.0, 0, -7.0)), 0.1)
 	WorldProps.prop(w, "castle", "siege-trebuchet-demolished", _v(c, Vector3(9.0, 0, -6.5)), 2.4, C * 0.9)
 	WorldProps.prop(w, "castle", "rocks-large", _v(c, Vector3(-8.5, 0, -3.5)), 1.1, C * 0.8, "none")
 	WorldProps.prop(w, "castle", "rocks-small", _v(c, Vector3(4.0, 0, 7.0)), 0.4, C, "none")
@@ -96,5 +101,6 @@ static func _siege_camp(w: Node3D, c: Vector2) -> void:
 
 ## A plank bridge over the mill stream, east of the pond.
 static func _bridge(w: Node3D, c: Vector2) -> void:
-	# The stream runs east-west here; the bridge spans it north-south.
-	WorldProps.prop(w, "nature", "bridge_wood", _v(c, Vector3(0, 0.05, 0)), PI / 2, N, "none")
+	# The stream runs east-west here; unturned, the kit bridge spans it
+	# north-south (a quarter turn laid it along the water).
+	WorldProps.prop(w, "nature", "bridge_wood", _v(c, Vector3(0, 0.05, 0)), 0.0, N, "none")

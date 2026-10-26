@@ -551,8 +551,14 @@ static func chunk_foliage() -> void:
 			cm.use_custom_data = mm.use_custom_data
 			cm.mesh = mm.mesh
 			cm.instance_count = ids.size()
+			# Each chunk node sits at its cell's centre (instances relative to
+			# it): the visibility range is measured to the node, so chunks
+			# left at the world origin vanished past ~95 m from the plaza.
+			var centre := Vector3((key.x + 0.5) * FOLIAGE_CHUNK, 0.0, (key.y + 0.5) * FOLIAGE_CHUNK)
 			for j in ids.size():
-				cm.set_instance_transform(j, mm.get_instance_transform(ids[j]))
+				var t := mm.get_instance_transform(ids[j])
+				t.origin -= centre
+				cm.set_instance_transform(j, t)
 				if mm.use_colors:
 					cm.set_instance_color(j, mm.get_instance_color(ids[j]))
 			var c := MultiMeshInstance3D.new()
@@ -560,7 +566,7 @@ static func chunk_foliage() -> void:
 			c.multimesh = cm
 			c.material_override = mmi.material_override
 			c.cast_shadow = mmi.cast_shadow
-			c.transform = mmi.transform
+			c.transform = mmi.transform.translated(centre)
 			parent.add_child(c)
 			RenderProfile.register_foliage(c)
 			RenderProfile.register_lod(c, lod_base)
