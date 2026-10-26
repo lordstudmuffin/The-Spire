@@ -39,40 +39,53 @@ const MOVES := ["sweep", "charge", "slam"]
 ## Windups are seconds of telegraph; "mult" scales Enemy.damage; "cooldown"
 ## is the [min, max] pause between moves; "chain" is the chance a sweep is
 ## followed at once by a second one.
+##
+## "warlord" is the Floor 1 Guardian, a kobold warlord in the mould of the
+## first floor's boss in the old stories: four bars; a guard of armored
+## halberdiers at the start and three more on every bar break; axe and
+## buckler for three bars (a 180-degree cleave to parry, a buckler rush, a
+## leaping smash that lands where you stood); at the last bar he throws both
+## away and draws a long curved blade ("weapon_swap"): twice as fast, a full
+## spinning cut that chains, longer leaps. No arena hazards: the room is
+## bare stone, the fight is him and his guard.
+## Optional keys: "start_adds" (spawned on engage), "max_adds" (living cap),
+## "leap" per phase {"min","max","recover"}: the slam becomes a leap onto the
+## target's spot, "rockfall" (see _hazard_tick), "swap" (event on enrage).
 const PRESETS := {
-	"gravelmaw": {
+	"warlord": {
 		"bars": 4,
 		"reset_grace": 4.0,
 		"break_time": 1.2,
-		"enrage_time": 1.8,
-		"adds": [2, 3],
-		# Arena hazard: from this bar on, stones fall from the summit's broken
-		# crown. Rings are marked `secs` ahead; one always lands on a fighter.
-		# Not parryable; a held guard blocks it like the slam.
-		"rockfall": {"from_bar": 2, "cd": [5.0, 7.5], "count": 3, "radius": 2.4, "secs": 1.4, "mult": 1.3},
+		"enrage_time": 2.0,
+		"start_adds": 3,
+		"adds": [3, 3],
+		"max_adds": 6,
+		"swap": {"from": "axe and buckler", "to": "curved longblade"},
 		"phases": [
 			{
-				"windup": {"sweep": 0.6, "charge": 0.8, "slam": 1.0},
+				"windup": {"sweep": 0.6, "charge": 0.7, "slam": 1.0},
 				"cooldown": [1.6, 2.6],
-				"sweep_reach": 1.6, "sweep_arc": 150.0, "sweep_mult": 1.0,
-				"charge_min": 5.0, "charge_max": 16.0, "charge_speed": 14.0, "charge_mult": 1.6,
-				"slam_radius": 5.0, "slam_mult": 2.5, "slam_cd": 7.0,
+				"sweep_reach": 1.6, "sweep_arc": 180.0, "sweep_mult": 1.0,
+				"charge_min": 4.0, "charge_max": 9.0, "charge_speed": 12.0, "charge_mult": 1.3,
+				"slam_radius": 4.0, "slam_mult": 2.4, "slam_cd": 7.0,
+				"leap": {"min": 6.0, "max": 14.0, "recover": 2.0},
 				"chain": 0.0,
 			},
 			{
-				"windup": {"sweep": 0.42, "charge": 0.55, "slam": 0.72},
-				"cooldown": [0.9, 1.6],
-				"sweep_reach": 2.0, "sweep_arc": 200.0, "sweep_mult": 1.15,
-				"charge_min": 4.0, "charge_max": 22.0, "charge_speed": 20.0, "charge_mult": 1.8,
-				"slam_radius": 6.5, "slam_mult": 2.2, "slam_cd": 5.0,
-				"chain": 0.5,
+				"windup": {"sweep": 0.45, "charge": 0.5, "slam": 0.75},
+				"cooldown": [0.7, 1.3],
+				"sweep_reach": 1.9, "sweep_arc": 360.0, "sweep_mult": 1.15, "style": "whirl",
+				"charge_min": 4.0, "charge_max": 18.0, "charge_speed": 22.0, "charge_mult": 1.7,
+				"slam_radius": 4.5, "slam_mult": 2.2, "slam_cd": 5.0,
+				"leap": {"min": 5.0, "max": 18.0, "recover": 1.4},
+				"chain": 0.55,
 			},
 		],
 	},
 }
 
-@export var preset := "gravelmaw"
-var tuning: Dictionary = PRESETS["gravelmaw"]
+@export var preset := "warlord"
+var tuning: Dictionary = PRESETS["warlord"]
 var enemy: Enemy
 ## Leash: the fight happens inside this circle (world.ARENA_POS / ARENA_RADIUS).
 var arena_center := Vector3.ZERO
@@ -97,6 +110,8 @@ var _target: Node3D
 var _charge_end := Vector3.ZERO
 var _charge_hit := {}
 var _charge_line: Array = []   # players on the line when the charge started
+var _slam_at := Vector3.ZERO   # where the slam lands (a leap's target spot)
+var swapped := false           # the last-bar weapon swap happened
 var _threatened: Array = []    # players inside the slam ring at the warning
 var _home_set := false
 var _hazards: Array = []       # pending rockfalls: {pos, radius, t}
@@ -106,7 +121,7 @@ var _report := {"adds_spawned": 0, "breaks": 0, "resets": 0, "slams": 0, "charge
 
 func _ready() -> void:
 	enemy = get_parent() as Enemy
-	tuning = PRESETS.get(preset, PRESETS["gravelmaw"])
+	tuning = PRESETS.get(preset, PRESETS["warlord"])
 	bars = int(tuning.get("bars", 4))
 	_bar_seen = bars  # a boss spawns full; the first hit may already break a bar
 	rng.seed = hash(preset) + int(Time.get_ticks_msec())
@@ -208,6 +223,8 @@ func tick(delta: float, _nearest: Node3D) -> Dictionary:
 			state = State.ENGAGE
 			_cooldown = 0.8
 			_emit("engage", {})
+			if int(tuning.get("start_adds", 0)) > 0:
+				_spawn_adds(_add_count(int(tuning["start_adds"])))
 			return _hold(pos)
 		State.ENGAGE:
 			var t := _pick_target(fighters)
@@ -312,6 +329,9 @@ func _pick_target(fighters: Array) -> Node3D:
 func _choose(d: float) -> String:
 	var ph := _ph()
 	var reach := _reach()
+	var leap: Dictionary = ph.get("leap", {})
+	if _slam_cd <= 0.0 and not leap.is_empty() and d >= float(leap["min"]) and d <= float(leap["max"]) and rng.randf() < 0.55:
+		return "slam"  # leaping smash onto the target's spot
 	if d <= float(ph["slam_radius"]) * 0.8 and _slam_cd <= 0.0 and rng.randf() < 0.6:
 		return "slam"
 	if d <= reach * float(ph["sweep_reach"]):
@@ -337,6 +357,7 @@ func _begin(m: String, t: Node3D) -> void:
 		"sweep":
 			data["reach"] = _reach() * float(ph["sweep_reach"])
 			data["arc"] = float(ph["sweep_arc"])
+			data["style"] = str(ph.get("style", "cleave"))
 		"charge":
 			var tp := _pos_of(t)
 			var dir := tp - pos
@@ -347,10 +368,21 @@ func _begin(m: String, t: Node3D) -> void:
 			_charge_line = _players_on_line(pos, _charge_end, _reach() + 1.0)
 			data["to"] = _charge_end
 		"slam":
+			# Close in: a ground smash where he stands. From range: a leap that
+			# lands on the spot the target held when he crouched (step off it).
+			_slam_at = pos
+			var leap: Dictionary = ph.get("leap", {})
+			var td := _pos_of(t).distance_to(pos)
+			if not leap.is_empty() and td >= float(leap["min"]):
+				_slam_at = _clamp(_pos_of(t))
+				_slam_at.y = pos.y
+				data["leap"] = true
+				data["from"] = pos
+			data["pos"] = _slam_at
 			data["radius"] = float(ph["slam_radius"])
 			_threatened = []
 			for p in get_tree().get_nodes_in_group("players"):
-				if _alive(p) and _pos_of(p).distance_to(pos) < float(ph["slam_radius"]) * 1.8:
+				if _alive(p) and _pos_of(p).distance_to(_slam_at) < float(ph["slam_radius"]) * 1.8:
 					_threatened.append(p)
 	_emit("telegraph", data)
 
@@ -393,6 +425,11 @@ func _resolve() -> void:
 		"slam":
 			_report["slams"] += 1
 			var radius := float(ph["slam_radius"])
+			var leapt := _slam_at.distance_to(pos) > 1.0
+			if leapt:
+				e.global_position = Vector3(_slam_at.x, pos.y, _slam_at.z)
+				e.velocity = Vector3.ZERO
+				pos = e.global_position
 			for p in get_tree().get_nodes_in_group("players"):
 				if not _alive(p):
 					continue
@@ -412,8 +449,9 @@ func _resolve() -> void:
 					Net.note_hidden(p.peer_id, "dodge")
 			_threatened.clear()
 			_slam_cd = float(ph["slam_cd"])
-			_emit("impact", {"move": "slam", "pos": pos, "radius": radius})
-			_after_move(0.7)
+			_emit("impact", {"move": "slam", "pos": pos, "radius": radius, "leap": leapt})
+			# A leap leaves him open on landing: the party's window to punish.
+			_after_move(float(ph.get("leap", {}).get("recover", 0.7)) if leapt else 0.7)
 		"charge":
 			_report["charges"] += 1
 			state = State.CHARGE
@@ -588,19 +626,30 @@ func _on_bar_break(broke: int, left: int) -> void:
 	e._posture = 0
 	e._stagger = 0.0
 	var cnt: Array = tuning.get("adds", [2, 3])
-	_spawn_adds(rng.randi_range(int(cnt[0]), int(cnt[1])))
+	_spawn_adds(_add_count(rng.randi_range(int(cnt[0]), int(cnt[1]))))
 	_emit("bar_break", {"bar": left, "bars": bars, "broke": broke})
 	if left == 1 and phase < 2:
 		state = State.ENRAGE
 		_timer = float(tuning.get("enrage_time", 1.8))
 		_emit("enrage", {"secs": _timer})
+		if tuning.has("swap"):
+			_emit("weapon_swap", tuning["swap"])
 	else:
 		state = State.BREAK
 		_timer = float(tuning.get("break_time", 1.2))
 	_cooldown = 0.6
 
 
+## Guards called for a wave: the wave size, trimmed for a small party (a solo
+## climber faces two, a group the full wave) and to the living cap.
+func _add_count(wave: int) -> int:
+	var n := mini(wave, 1 + _fighters().size())
+	return clampi(mini(n, int(tuning.get("max_adds", 99)) - living_adds()), 0, wave)
+
+
 func _spawn_adds(count: int) -> void:
+	if count <= 0:
+		return
 	_prune_adds()
 	if not spawn_adds.is_valid():
 		return
@@ -613,7 +662,7 @@ func _spawn_adds(count: int) -> void:
 
 
 func _prune_adds() -> void:
-	adds = adds.filter(func(a): return a is Node and is_instance_valid(a) and a.is_inside_tree() and a.visible)
+	adds = adds.filter(func(a): return is_instance_valid(a) and a is Node and a.is_inside_tree() and a.visible)
 
 
 func living_adds() -> int:
@@ -624,7 +673,7 @@ func living_adds() -> int:
 ## Adds vanish (no rewards) on boss death or reset.
 func clear_adds() -> void:
 	for a in adds:
-		if a is Node and is_instance_valid(a):
+		if is_instance_valid(a) and a is Node:
 			if a.has_method("vanish"):
 				a.vanish()
 			else:
@@ -650,6 +699,7 @@ func reset(reason := "leash") -> void:
 		e.global_position = e.home
 	e._update_label()
 	phase = 1
+	swapped = false
 	_bar_seen = bars
 	state = State.IDLE
 	_engaged = false
@@ -773,10 +823,23 @@ func net_event(kind: String, data: Dictionary) -> void:
 				fx.call("boss_rockfall_impact", e, pos, float(data.get("radius", 2.4)))
 			elif fx:
 				fx.dust_ring(pos, float(data.get("radius", 2.4)))
+		"weapon_swap":
+			# He casts down the axe and buckler and draws the long blade.
+			# Model hook: Enemy.swap_weapon(data); VFX hook boss_weapon_swap.
+			swapped = true
+			Audio.play("anvil", pos, 0.05, 2.0, 0.6)
+			Audio.play("skill_charge", pos, 0.05, 0.0, 1.3)
+			if e.has_method("swap_weapon"):
+				e.call("swap_weapon", data)
+			if fx and fx.has_method("boss_weapon_swap"):
+				fx.call("boss_weapon_swap", e, data)
+			elif fx:
+				fx.flash(pos + Vector3(0, e.size.y * 0.7, 0), Color(1.0, 0.85, 0.5), 3.0)
 		"phase":
 			phase = int(data.get("phase", 2))
 		"reset":
 			phase = 1
+			swapped = false
 			state = State.IDLE
 			if fx and fx.has_method("boss_reset"):
 				fx.call("boss_reset", e)

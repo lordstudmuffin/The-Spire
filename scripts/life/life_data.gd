@@ -71,7 +71,8 @@ const CROPS := {
 		"seed_desc": "Honeymelon seed. Ripens in about an hour of wet soil."},
 }
 ## Food ids are the recipe ids (they stack in GameState.materials).
-const GATHER := {"wild_herb": {"name": "Wild Herb", "color": "8fd36a", "desc": "Grows in clumps on the open grass. Cooks love it."}}
+const GATHER := {"wild_herb": {"name": "Wild Herb", "color": "8fd36a", "desc": "Grows in clumps on the open grass. Cooks love it."},
+	"snaptrap_bloom": {"name": "Snaptrap Bloom", "color": "ff8fb4", "desc": "The pink crown of a flowering Snaptrap. Herbalist Hesper wants its sap for Haldor's steel."}}
 const TOOLS := {"willow_rod": {"name": "Willow Rod", "color": "a9815a", "desc": "A limber willow pole, line and bone hook. Cast it at any fishing spot."}}
 
 ## Crystals: one-use, instant effects, bought from Trader Pell and found in
@@ -92,7 +93,7 @@ const DECOR := {
 	"bookshelf": {"name": "Bookshelf", "col": 120, "desc": "Three shelves of climbers' journals."},
 	"plant": {"name": "Potted Fern", "col": 45, "desc": "Something green from the fields."},
 	"lantern": {"name": "Brass Lantern", "col": 80, "desc": "Warm light for the long nights."},
-	"trophy": {"name": "Gravelmaw Trophy", "col": 250, "requires_clear": 1, "desc": "A shard of the Floor 1 Guardian on a plinth. Only sold to those who felled it."},
+	"trophy": {"name": "Warlord's Trophy", "col": 250, "requires_clear": 1, "desc": "A shard of the Floor 1 Guardian on a plinth. Only sold to those who felled it."},
 }
 const REST_BUFF := {"name": "Well Rested", "regen": 1.5, "atk": 0.05, "speed": 0.05, "dur": 240.0, "color": "4cc9f0"}
 

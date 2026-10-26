@@ -93,6 +93,8 @@ var _boss_card: PanelContainer
 var _boss_name: Label
 var _boss_lv: Label
 var _boss_bar: ProgressBar
+var _boss_pips: HBoxContainer
+var _boss_band := -1
 var _boss_hp: Label
 var _boss: Node3D
 var _boss_poll := 0.0
@@ -451,6 +453,14 @@ func _build_boss_bar(root: Control) -> void:
 	_boss_hp.add_theme_constant_override("outline_size", 4)
 	wrap.add_child(_boss_hp)
 	v.add_child(wrap)
+	# SAO-style stacked gauges: the main bar shows the bar being chipped (in
+	# the green / yellow / red bands); the pips below are the bars still in
+	# reserve behind it.
+	_boss_pips = HBoxContainer.new()
+	_boss_pips.add_theme_constant_override("separation", 4)
+	_boss_pips.alignment = BoxContainer.ALIGNMENT_END
+	_boss_pips.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(_boss_pips)
 	_boss_card.modulate.a = 0.0
 	_boss_card.hide()
 
@@ -1220,6 +1230,7 @@ func _poll_boss(delta: float) -> void:
 					break
 		if found != _boss:
 			_boss = found
+			_boss_band = -1
 			_set_boss_visible(_boss != null)
 			if _boss != null:
 				var bn := str(_boss.display_name)
@@ -1230,8 +1241,39 @@ func _poll_boss(delta: float) -> void:
 				_boss_bar.max_value = maxf(float(_boss.max_hp), 1.0)
 	if _boss != null and is_instance_valid(_boss) and _boss_card.visible:
 		var hp: float = maxf(float(_boss.hp), 0.0)
-		_boss_bar.value = hp
 		_boss_hp.text = "%d / %d" % [ceili(hp), int(_boss.max_hp)]
+		var br: Node = _boss.get("brain")
+		if br and br.has_method("bar_count"):
+			var n: int = br.bar_count()
+			var cur: int = br.current_bar()
+			var frac: float = br.bar_fraction()
+			_boss_bar.max_value = 1.0
+			_boss_bar.value = frac
+			_set_boss_band(frac)
+			if _boss_pips.get_child_count() != n:
+				for c in _boss_pips.get_children():
+					c.queue_free()
+				for k in n:
+					var pip := ColorRect.new()
+					pip.custom_minimum_size = Vector2(26, 5)
+					pip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+					_boss_pips.add_child(pip)
+			for k in n:
+				# Pip k (from the right) is a reserve bar while k < cur - 1.
+				var pip := _boss_pips.get_child(n - 1 - k) as ColorRect
+				pip.color = Color(0.45, 0.95, 0.5, 0.95) if k < cur - 1 else Color(1, 1, 1, 0.14)
+		else:
+			_boss_bar.max_value = maxf(float(_boss.max_hp), 1.0)
+			_boss_bar.value = hp
+
+
+func _set_boss_band(frac: float) -> void:
+	var band := 2 if frac <= 0.2 else (1 if frac <= 0.5 else 0)
+	if band == _boss_band:
+		return
+	_boss_band = band
+	var cols: Array = PlayerStatus.band_colors(frac)
+	_boss_bar.add_theme_stylebox_override("fill", UITheme.gradient_fill_box([(cols[0] as Color).darkened(0.25), cols[0], cols[1]]))
 
 
 func _set_boss_visible(on: bool) -> void:

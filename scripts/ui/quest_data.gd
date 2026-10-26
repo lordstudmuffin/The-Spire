@@ -48,7 +48,7 @@ const QUESTS := {
 		"objective": "Defeat the Floor Guardian atop the Labyrinth",
 		"unit": "guardian",
 		"reward": "Floor 1 cleared  ·  3 Spirit Shards",
-		"story": "Climb the terraces, cross the summit and face Gravelmaw. Don't stand in the slam.",
+		"story": "Climb the terraces, cross the summit and face Vargash the Kobold Warlord. Parry his cleave, step off his leap.",
 	},
 	"stag_hunt": {
 		"title": "Horns of Thornwick",
@@ -124,6 +124,15 @@ const QUESTS := {
 		"reward": "260 XP  ·  160 Col  ·  2 Beast Hide",
 		"story": "The dire wolves have come down off the tower slope and nobody sets a snare north of the gate. Vesna wants four pelts: proof, and winter boots.",
 	},
+	"grove_bloom": {
+		"title": "A Bloom from the Grove",
+		"giver": "Herbalist Hesper",
+		"where": "Hollowbrook",
+		"objective": "Take the bloom from the flowering Snaptrap in the north-east grove",
+		"unit": "blooms",
+		"reward": "320 XP  ·  120 Col  ·  Verdant Edge (Epic sword)",
+		"story": "Hesper wants the sap of the one Snaptrap in flower; Haldor will temper a blade with it. Leave the fruit-bearers alone: one burst draws the whole grove.",
+	},
 	"field_herbs": {
 		"title": "Fog-Root and Feverleaf",
 		"giver": "Herbalist Hesper",
@@ -178,10 +187,10 @@ const QUESTS := {
 		"title": "The Town's Bounty",
 		"giver": "Captain Rhys",
 		"where": "Town of First Light",
-		"objective": "Defeat Gravelmaw atop the Labyrinth and report to Captain Rhys",
+		"objective": "Defeat Vargash the Kobold Warlord atop the Labyrinth and report to Captain Rhys",
 		"unit": "guardian",
 		"reward": "600 XP  ·  400 Col  ·  Rare Spirit Blade  ·  Title: Warden of Talven",
-		"story": "The town has posted a bounty on the Floor Guardian. Climb the Labyrinth, bring Gravelmaw down, and the town names you one of its own.",
+		"story": "The town has posted a bounty on the Floor Guardian. Climb the Labyrinth, bring the Kobold Warlord down, and the town names you one of its own.",
 	},
 }
 

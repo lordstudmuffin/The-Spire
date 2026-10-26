@@ -28,7 +28,7 @@ const TIPS := [
 	[1, "Captain Rhys counts the Dire Wolves every dawn. The count has never gone down."],
 	[1, "Smith Haldor says a blade remembers the hand that forged it. Craft enough and it may remember yours."],
 	[1, "Talven camp sits where the woods thin. Quartermaster Dain insists that is a coincidence."],
-	[1, "Gravelmaw guards the summit of the first Labyrinth. Watch the ground before you watch him."],
+	[1, "The Kobold Warlord holds the summit of the first Labyrinth. At his last bar he throws down his axe; that is when he is fastest."],
 	[1, "The Labyrinth's terraces hang in open air. Do not look down. Then look down."],
 	[2, "The Mirewood never dries. Waykeeper Bran says the mist is the floor breathing."],
 	[2, "Thornwick's hunters leave an antler on every trophy post. Huntmaster Sable keeps the tally."],

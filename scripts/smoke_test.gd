@@ -509,7 +509,7 @@ func _ready() -> void:
 	_check(GameState.quest_done("wolf_hunt"), "wolf hunt turned in through Rhys's handler")
 	rhys.talk()
 	_check(GameState.quests.has("gravelmaw_bounty") and not GameState.quest_ready("gravelmaw_bounty"), "Rhys posts the town's bounty once the chain is done")
-	_check(rhys.talk().begins_with("Gravelmaw waits"), "bounty in-progress line")
+	_check(rhys.talk().begins_with("Vargash waits"), "bounty in-progress line")
 
 	print("== Hollowbrook quest chain (server records)")
 	var rec2 := Net._new_record(Net.sanitize_character({"name": "Hollow"}), "0123456789abcdef0123456789abcdef", {})
@@ -1727,6 +1727,59 @@ func _test_labyrinth() -> void:
 	var res_data: Dictionary = br.close()
 	_check(int(res_data.get("kills", 0)) == 2 and int(res_data["xp"]) == 24 and int(res_data["col"]) == 4 and int(res_data["foes"]["Meadow Slime"]) == 2 and int(res_data["items"]["beast_hide"]) == 1 and br.close().is_empty(), "battle results sum the fight's kills, EXP, Col and items")
 	_check(load("res://scripts/battle_results.gd").summary(res_data).contains("+24 EXP") and load("res://scripts/battle_results.gd").summary(res_data).contains("Beast Hide x1"), "the results summary reads +24 EXP / Beast Hide x1")
+	# Field mobs (Aincrad's first floor): the grove, lures, packs, boar rushes.
+	var vines: Array = []
+	var boar: Enemy = null
+	var wolf: Enemy = null
+	for e in get_tree().get_nodes_in_group("enemies"):
+		if not world.is_ancestor_of(e):
+			continue  # mobs of another test's world still freeing
+		if e.pack == "vine":
+			vines.append(e)
+		elif e.display_name == "Field Boar" and boar == null:
+			boar = e
+		elif e.display_name == "Dire Wolf" and wolf == null and not Duels.in_safe_zone(e.global_position + Vector3(0, 0, 4)):
+			wolf = e
+	var lures := vines.filter(func(v): return v.lure)
+	var blooms := vines.filter(func(v): return v.display_name == "Blossoming Snaptrap")
+	_check(vines.size() == 8 and lures.size() == 2 and blooms.size() == 1 and blooms[0].drops.get("snaptrap_bloom", 0.0) == 1.0 and blooms[0].respawn_time >= 200.0, "the Snaptrap Grove: 8 vines, 2 fruit-bearers, 1 slow-regrowing bloom")
+	var pl_f: Player = world.player
+	var keep_pos: Vector3 = pl_f.global_position
+	pl_f.global_position = world.GROVE + Vector3(0, 1, 14)
+	var fruit_vine: Enemy = lures[0]
+	fruit_vine.take_hit(1.0, Vector3.FORWARD, pl_f.peer_id)
+	var called := vines.filter(func(v): return v != fruit_vine and v._called_by != null and v._called_t > 0.0)
+	_check(not fruit_vine.lure and called.size() >= 6, "striking the fruit bursts it and draws the grove onto you (%d answered)" % called.size())
+	var wolves: Array = get_tree().get_nodes_in_group("enemies").filter(func(e): return world.is_ancestor_of(e) and e.pack == "wolf" and e != wolf and e.global_position.distance_to(wolf.global_position) <= Enemy.PACK_RANGE)
+	pl_f.global_position = wolf.global_position + Vector3(0, 0, 4)
+	wolf._call_pack(pl_f, Enemy.PACK_RANGE)
+	_check(wolves.all(func(e): return e._called_by == pl_f), "a wolf calls its packmates in range (%d)" % wolves.size())
+	_check(boar.rush and not wolf.rush, "boars charge; wolves do not")
+	GameState.heal_full()
+	boar.global_position = pl_f.global_position + Vector3(0, 0, -7)
+	boar._rush_cd = 0.0
+	boar._begin_rush(pl_f, 7.0)
+	_check(is_equal_approx(boar._rush_wind, Enemy.RUSH_WINDUP), "the boar paws the ground first (telegraph)")
+	boar._start_rush()
+	boar.global_position = pl_f.global_position + Vector3(0, 0, -1.0)
+	var hp_r := GameState.hp
+	boar._rush_contact()
+	_check(GameState.hp < hp_r and boar._rush_t == 0.0 and boar._rush_cd > 0.0, "a boar's charge lands on the player in its path")
+	GameState.heal_full()
+	pl_f.global_position = keep_pos
+	# Hesper's grove errand pays the Verdant Edge.
+	var q_keep: Dictionary = GameState.quests.duplicate(true)
+	GameState.quests["field_herbs"] = {"progress": 6, "goal": 6, "done": true}
+	GameState.quests["tavern_stew"] = {"progress": 1, "goal": 1, "done": true}
+	GameState.quests.erase("grove_bloom")
+	GameState.materials["snaptrap_bloom"] = 0
+	_check(world._hesper_talk().contains("snaptraps") and GameState.quests.has("grove_bloom"), "Hesper sends you to the Snaptrap Grove after the stew")
+	GameState.add_material("snaptrap_bloom", 1)
+	var inv_n := GameState.inventory.size()
+	world._hesper_talk()
+	_check(GameState.quest_done("grove_bloom") and GameState.inventory.size() == inv_n + 1 and GameState.inventory[inv_n]["name"] == "Verdant Edge" and int(GameState.inventory[inv_n]["rank"]) == 2, "the bloom buys the Verdant Edge")
+	GameState.inventory.pop_back()
+	GameState.quests = q_keep
 	var L = load("res://scripts/labyrinth_features.gd")
 	var now := Time.get_unix_time_from_system()
 	var keep_chests: Dictionary = GameState.chests.duplicate()
@@ -2001,7 +2054,7 @@ func _test_hidden_classes() -> void:
 
 
 func _test_boss() -> void:
-	print("== Floor Guardian: Gravelmaw (BossBrain)")
+	print("== Floor Guardian: the Kobold Warlord (BossBrain)")
 	GameState.floor = 1
 	GameState.has_position = false
 	GameState.heal_full()
@@ -2012,11 +2065,11 @@ func _test_boss() -> void:
 	var pl: Player = w.player
 	w._spawn_boss()
 	var boss: Enemy = w._boss
-	_check(boss != null and boss.brain is BossBrain and boss.get_node_or_null("BossBrain") == boss.brain, "Gravelmaw spawns with a BossBrain child")
+	_check(boss != null and boss.brain is BossBrain and boss.get_node_or_null("BossBrain") == boss.brain, "the Warlord spawns with a BossBrain child")
 	var b: BossBrain = boss.brain
 	_check(b.bar_count() == 4 and b.current_bar() == 4 and is_equal_approx(b.bar_fraction(), 1.0) and b.phase == 1 and b.state_name() == "idle", "four full HP bars, phase 1, idle")
-	var P0: Dictionary = BossBrain.PRESETS["gravelmaw"]["phases"][0]
-	var P1: Dictionary = BossBrain.PRESETS["gravelmaw"]["phases"][1]
+	var P0: Dictionary = BossBrain.PRESETS["warlord"]["phases"][0]
+	var P1: Dictionary = BossBrain.PRESETS["warlord"]["phases"][1]
 	var events: Array = []
 	b.boss_event.connect(func(k, _d): events.append(k))
 	# Engage: a player stands on the summit.
@@ -2024,6 +2077,7 @@ func _test_boss() -> void:
 	pl.velocity = Vector3.ZERO
 	var ctl: Dictionary = b.tick(0.05, pl)
 	_check(b.state == BossBrain.State.ENGAGE and events.has("engage") and ctl.has("target") and ctl.has("spd"), "a player on the summit wakes the Guardian (engage event, brain drives movement)")
+	_check(b.living_adds() == 2, "his guard steps out on engage: two halberdiers for a lone climber (%d)" % b.living_adds())
 	# Bar breaks fire on the hit that crosses the threshold.
 	var bar_hp: float = b.bar_hp()
 	var adds0: int = b.living_adds()
@@ -2032,11 +2086,23 @@ func _test_boss() -> void:
 	boss.take_hit(bar_hp * 0.6, Vector3.FORWARD, 1)
 	_check(b.current_bar() == 3 and events.has("bar_break") and b.state == BossBrain.State.BREAK and b.stagger_immune(), "crossing the threshold breaks the bar: event and a break beat")
 	var n_adds: int = b.living_adds()
-	_check(n_adds >= 2 and n_adds <= 3, "2-3 adds answer the bar break (%d)" % n_adds)
+	_check(n_adds == adds0 + 2, "a wave of guards answers the bar break (%d alive)" % n_adds)
 	var add_names := {}
 	for a in b.adds:
 		add_names[a.display_name] = true
-	_check(add_names.has("Ruin Sentinel") and add_names.has("Kobold Scout"), "adds reuse the Floor 1 guard types (%s)" % ", ".join(add_names.keys()))
+	_check(add_names.size() == 1 and add_names.has("Kobold Halberdier") and is_equal_approx((b.adds[0] as Enemy).armor, 0.5), "the guard is armored Kobold Halberdiers (%s)" % ", ".join(add_names.keys()))
+	var hal: Enemy = b.adds[0]
+	var hal_hp: float = hal.hp
+	hal.take_hit(10.0, Vector3.FORWARD, 1)
+	var plated: float = hal_hp - hal.hp
+	hal._stagger = 1.0
+	hal_hp = hal.hp
+	hal.take_hit(10.0, Vector3.FORWARD, 1)
+	_check(is_equal_approx(plated, 5.0) and hal_hp - hal.hp > 10.0, "halberdier plate halves blows until a parry opens it (%.0f vs %.0f)" % [plated, hal_hp - hal.hp])
+	hal._stagger = 0.0
+	b._spawn_adds(b._add_count(3))
+	b._spawn_adds(b._add_count(3))
+	_check(b.living_adds() <= 6, "the guard never grows past six (%d)" % b.living_adds())
 	b._timer = 0.0
 	b.tick(0.05, pl)
 	_check(b.state == BossBrain.State.ENGAGE and not b.stagger_immune(), "the break beat ends and the fight resumes")
@@ -2101,7 +2167,7 @@ func _test_boss() -> void:
 	pl.global_position = boss.global_position + Vector3(0, 0, 10.0)
 	b._cooldown = 0.0
 	b._slam_cd = 999.0
-	_check(b._choose(10.0) == "charge" and b._choose(3.0) == "sweep", "move choice: charge at range, sweep up close")
+	_check(b._choose(8.0) == "charge" and b._choose(3.0) == "sweep", "move choice: buckler rush at range, cleave up close")
 	b._begin("charge", pl)
 	_check(b.move == "charge" and b._charge_end.distance_to(pl.global_position) < 4.0 and events[-1] == "telegraph", "charge aims a line at the target")
 	b._resolve()
@@ -2127,6 +2193,7 @@ func _test_boss() -> void:
 	boss.hp = bar_hp * 1.05
 	boss.take_hit(bar_hp * 0.1, Vector3.FORWARD, 1)
 	_check(b.current_bar() == 1 and b.state == BossBrain.State.ENRAGE and events.has("enrage") and b.stagger_immune() and b.phase == 1, "breaking into the last bar starts the enrage roar (stagger-immune warning beat)")
+	_check(events.has("weapon_swap") and b.swapped, "at the last bar he casts down axe and buckler for the long blade (weapon_swap)")
 	boss._posture = 0
 	pl._parry_ready_ms = 0
 	pl.press_parry()
@@ -2138,25 +2205,21 @@ func _test_boss() -> void:
 	b.tick(0.05, pl)
 	_check(b.phase == 2 and b.is_enraged() and events.has("phase") and b.state == BossBrain.State.ENGAGE, "the roar ends: phase 2")
 	_check(float(b._ph()["windup"]["sweep"]) < float(P0["windup"]["sweep"]) and float(b._ph()["slam_radius"]) > float(P0["slam_radius"]) and float(b._ph()["charge_speed"]) > float(P0["charge_speed"]) and b._ph() == P1, "phase 2 moveset: faster wind-ups, wider slam, faster charge")
-	# Arena hazard: from bar 2 down, stones fall on marked rings.
-	b._hazards.clear()
-	b._hazard_cd = 0.0
+	_check(float(b._ph()["sweep_arc"]) >= 359.0 and str(b._ph()["style"]) == "whirl" and float(b._ph()["chain"]) > 0.0, "the long blade spins a full circle and chains")
+	# Leaping smash: from range he lands on the spot the target held.
 	b._cooldown = 99.0
 	GameState.heal_full()
-	pl.global_position = boss.global_position + Vector3(0, 0, 8)
+	pl.global_position = boss.global_position + Vector3(0, 0, 10)
 	pl.velocity = Vector3.ZERO
-	b.tick(0.01, pl)
-	var on_me := false
-	for h in b._hazards:
-		if ((h["pos"] as Vector3) - pl.global_position).length() < 1.5:
-			on_me = true
-	_check(b.pending_hazards() == 3 and events.has("hazard") and on_me, "rockfall marks three stones, one on a fighter")
+	b._slam_cd = 0.0
+	var mark: Vector3 = pl.global_position
+	b._begin("slam", pl)
+	_check(Vector2(b._slam_at.x - mark.x, b._slam_at.z - mark.z).length() < 0.5 and b._threatened.has(pl), "the leap is marked on the target's spot")
+	pl.global_position = mark + Vector3(7, 0, 0)  # step off the mark
 	hp0 = GameState.hp
-	b.tick(1.5, pl)
-	_check(GameState.hp < hp0 and b.pending_hazards() == 0 and events.has("hazard_land"), "a landing stone hurts the fighter under it")
-	b._hazard_cd = 0.0
-	b.tick(0.01, pl)
-	_check(b.pending_hazards() == 3, "the next volley is marked")
+	b._resolve()
+	_check(Vector2(boss.global_position.x - mark.x, boss.global_position.z - mark.z).length() < 1.0 and GameState.hp == hp0 and is_equal_approx(b._timer, float(P1["leap"]["recover"])), "he lands where you stood; stepping off dodges, and the landing leaves him open")
+	_check(b.pending_hazards() == 0 and not BossBrain.PRESETS["warlord"].has("rockfall"), "no arena hazards: the fight is him and his guard")
 	GameState.heal_full()
 	# Leash: nobody alive on the summit -> full reset, adds gone.
 	_check(b.living_adds() >= 2, "adds alive before the reset (%d)" % b.living_adds())

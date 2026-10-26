@@ -259,7 +259,7 @@ func _spawn_mob_fn(data: Dictionary) -> Node:
 		brain.arena_center = ARENA_POS
 		brain.arena_radius = ARENA_RADIUS
 		if Net.is_authority():
-			brain.spawn_adds = _gravelmaw_adds
+			brain.spawn_adds = _guardian_adds
 		e.add_child(brain)
 		e.brain = brain
 	if data.get("boss", false) and Net.is_authority():
@@ -1495,7 +1495,7 @@ func _send_cheat_probes() -> void:
 ## Five Floor 1 quests, each NPC pointing to the next: Vesna's wolf pelts
 ## (gather, from the Dire Wolves by the tower), Hesper's herbs (the field
 ## clumps), Rook's stew (cooking), Fen's three waystones around Talven
-## (visit) and Captain Rhys's bounty on Gravelmaw (kill), which pays a Rare
+## (visit) and Captain Rhys's bounty on the Kobold Warlord (kill), which pays a Rare
 ## Spirit Blade and the "Warden of Talven" title. Every handler takes `gs`
 ## so the server runs it on the record (srv_action "talk").
 
@@ -1691,6 +1691,8 @@ func _vesna_talk(gs = GameState) -> String:
 
 
 func _hesper_talk(gs = GameState) -> String:
+	if gs.quest_done("field_herbs") and (gs.quests.has("grove_bloom") or gs.quest_done("tavern_stew")):
+		return _bloom_talk(gs)
 	return _gather_talk(gs, "field_herbs", "wild_herb", 6, 220, 140, "wolf_pelts", {
 		"locked": "Vesna's wolves first, if you would. I patch up what they bite, and my shelves are bare. Come back when the snares are safe to set.",
 		"offer": "Feverleaf and fog-root, the pale clumps on the open grass between here and the town. I need 6 before the next field hand limps in. Pick them clean and they grow back within the hour.",
@@ -1700,6 +1702,24 @@ func _hesper_talk(gs = GameState) -> String:
 	}, func(g):
 		g.add_material("grilled_trout", 2)
 		return ", +2 Grilled Trout")
+
+
+## Hesper's second errand (after Rook's stew): a bloom from the one Snaptrap
+## in flower in the north-east grove. Pays the Verdant Edge, a blade forged
+## by Haldor and tempered in the bloom's sap: a strong first-floor sword.
+func _bloom_talk(gs = GameState) -> String:
+	return _gather_talk(gs, "grove_bloom", "snaptrap_bloom", 1, 320, 120, "field_herbs", {
+		"locked": "",
+		"offer": "Past the pond, in the woods north-east of town, the snaptraps have taken root: pitcher-mouthed vines that spit. One of them is in flower. Its bloom's sap, pressed and boiled, tempers steel like nothing else on this floor. Bring me the bloom and Haldor will forge you a blade with it. Do not strike the ones with a swollen fruit; the burst draws every vine in the grove.",
+		"in_progress": "%d of %d blooms. The flowering one is pink-crowned and wary; if someone beat you to it, it blooms again in a few minutes. Mind the fruit-bearers.",
+		"turn_in": "Still fragrant. Haldor has had the steel ready for a week; he'll fold the sap in tonight. Here. It is light, and it will not dull on kobold plate.",
+		"done": "Keep the Verdant Edge oiled. The sap remembers being alive.",
+	}, func(g):
+		var blade := Crafting.make_item("Iron Sword", 2, "Smith Haldor")
+		blade["name"] = "Verdant Edge"
+		blade["atk"] = int(ceil(Crafting.RECIPES["Iron Sword"]["base"] * Crafting.RANK_MULT[2] * 1.1))
+		g.add_item(blade)
+		return ", Verdant Edge (Epic sword)")
 
 
 func _rook_talk(gs = GameState) -> String:
@@ -1782,7 +1802,7 @@ func _rhys_talk(npc: NPC, gs) -> String:
 		if int(gs.floors_cleared) >= 1:
 			gs.advance_quest("gravelmaw_bounty")  # the Guardian already fell to you
 			return "You have already done it? Then I owe you the bounty before the words are out. Say so again and it is yours."
-		return "Then hear it: the town has posted a bounty on the Floor Guardian. Gravelmaw, at the summit of the Labyrinth, past the gate that only opens at level %d. Bring it down and come back to me. The town names its own." % GATE_LEVEL
+		return "Then hear it: the town has posted a bounty on the Floor Guardian. Vargash, the kobold warlord, at the summit of the Labyrinth, past the gate that only opens at level %d. Bring it down and come back to me. The town names its own." % GATE_LEVEL
 	if gs.quest_ready("gravelmaw_bounty"):
 		gs.title = "Warden of Talven"
 		gs.complete_quest("gravelmaw_bounty")
@@ -1790,7 +1810,7 @@ func _rhys_talk(npc: NPC, gs) -> String:
 		gs.add_money(400)
 		gs.add_item(Crafting.make_item("Spirit Blade", 1, "Captain Rhys"))
 		return "The Guardian is down and the fields are ours again. Haldor forged this for whoever did it; it is yours. And the name: Warden of Talven. Wear it where the next floor can see it.\n(+600 XP, +400 Col, Rare Spirit Blade, title: Warden of Talven)"
-	return "Gravelmaw waits at the summit of the Labyrinth. Don't stand in the slam. We will be here when it is done."
+	return "Vargash waits at the summit of the Labyrinth with his halberdiers. When he crouches, he is about to leap: move. We will be here when it is done."
 
 
 # --- Blacksmith ----------------------------------------------------------
@@ -2274,27 +2294,30 @@ func _spawn_boss() -> void:
 			"drops": {"spirit_shard": 1.0, "wisp_essence": 1.0, "stag_horn": 1.0}, "pos": [bp.x, bp.y, bp.z]})
 		_boss_summon(null)
 		return
-	# Gravelmaw: four stacked HP bars, adds on every bar break, a second
-	# moveset on the last bar (BossBrain.PRESETS["gravelmaw"]).
-	_spawn_mob({"name": "Floor Guardian: Gravelmaw", "level": 7, "hp": 650, "dmg": 18, "xp": 600, "money": 400,
-		"color": "806b8c", "size": [4.2, 4.0, 4.8], "speed": 2.6, "aggro": 40, "boss": true, "respawns": false,
-		"brain": "gravelmaw", "drops": {"spirit_shard": 1.0, "iron_ore": 1.0}, "pos": [bp.x, bp.y, bp.z]})
-	# Two sentinels guard the Guardian; they do not respawn.
-	for side in [-1, 1]:
-		var sp := ARENA_POS + Vector3(6 * side, 1, -2)
-		_spawn_mob(_sentinel_data(sp))
+	# The Kobold Warlord: four stacked HP bars, a guard of halberdiers on
+	# engage and on every bar break, the weapon swap and second moveset on
+	# the last bar (BossBrain.PRESETS["warlord"]). Twice a man's height.
+	_spawn_mob({"name": BOSS_NAME, "level": 7, "hp": 650, "dmg": 18, "xp": 600, "money": 400,
+		"color": "8a6a4a", "size": [2.2, 3.4, 2.2], "speed": 3.0, "aggro": 40, "boss": true, "respawns": false,
+		"brain": "warlord", "drops": {"spirit_shard": 1.0, "iron_ore": 1.0}, "pos": [bp.x, bp.y, bp.z]})
 
 
-func _sentinel_data(sp: Vector3) -> Dictionary:
-	return {"name": "Ruin Sentinel", "level": 5, "hp": 120, "dmg": 10, "xp": 90, "money": 30,
-		"color": "667380", "size": [1.0, 1.6, 1.0], "speed": 3.6, "aggro": 40, "respawns": false,
+const BOSS_NAME := "Floor Guardian: Vargash the Kobold Warlord"
+
+
+## The Warlord's guard: plated kobolds with halberds. Their plate halves any
+## blow until a parry staggers them (then the gaps are open), so a party
+## parries and Switches through them.
+func _halberdier_data(sp: Vector3) -> Dictionary:
+	return {"name": "Kobold Halberdier", "level": 6, "hp": 130, "dmg": 11, "xp": 90, "money": 30,
+		"color": "667380", "size": [1.0, 1.7, 1.0], "speed": 3.6, "aggro": 40, "respawns": false, "armor": 0.5,
 		"drops": {"iron_ore": 0.8}, "pos": [sp.x, sp.y, sp.z]}
 
 
-## Gravelmaw's call (BossBrain.spawn_adds, authority only): `count` guards
-## rise in a ring around the Guardian when one of its HP bars breaks, Ruin
-## Sentinels and Kobold Scouts in turn. They vanish with the boss or on reset.
-func _gravelmaw_adds(brain: Node, count: int) -> Array:
+## The Warlord's call (BossBrain.spawn_adds, authority only): `count`
+## halberdiers step out in a ring around him, on engage and when one of his
+## HP bars breaks. They vanish with the boss or on reset.
+func _guardian_adds(brain: Node, count: int) -> Array:
 	var out: Array = []
 	var boss: Node3D = brain.get_parent() as Node3D
 	var at := boss.global_position if boss else ARENA_POS + Vector3(0, 1, -6)
@@ -2304,14 +2327,7 @@ func _gravelmaw_adds(brain: Node, count: int) -> Array:
 		if sp.distance_to(ARENA_POS) > ARENA_RADIUS - 1.0:
 			sp = ARENA_POS + (sp - ARENA_POS).normalized() * (ARENA_RADIUS - 1.0)
 		sp.y = ARENA_POS.y + 1.0
-		var d: Dictionary
-		if i % 2 == 0:
-			d = _sentinel_data(sp)
-		else:
-			d = {"name": "Kobold Scout", "level": 6, "hp": 140, "dmg": 13, "xp": 90, "money": 20, "color": "6b7a3a",
-				"size": [0.9, 1.5, 0.9], "speed": 3.6, "aggro": 40, "respawns": false,
-				"drops": {"iron_ore": 0.6, "spirit_shard": 0.2}, "pos": [sp.x, sp.y, sp.z]}
-		var e := _spawn_mob(d)
+		var e := _spawn_mob(_halberdier_data(sp))
 		if e != null:
 			out.append(e)
 	return out
@@ -2789,10 +2805,17 @@ func _spawn_mobs() -> void:
 	for i in 8:
 		var a := _rng.randf_range(0.2, PI - 0.2)
 		var r := _rng.randf_range(48, 75)
-		_add_mob("Field Boar", 1, 40, 6, 25, 5, "8c5940", Vector3(cos(a) * r, 1, sin(a) * r), "boar_trouble", {"beast_hide": 0.7})
+		# Boars paw the ground and charge (telegraphed, parryable, sidestep it).
+		_spawn_mob({"name": "Field Boar", "level": 1, "hp": 40, "dmg": 6, "xp": 25, "money": 5, "color": "8c5940",
+			"pos": [cos(a) * r, 1, sin(a) * r], "quest": "boar_trouble", "drops": {"beast_hide": 0.7}, "rush": true})
+	# Wolves hunt as a pack: strike one and the others come running.
 	for i in 7:
 		var p := TOWER_POS + Vector3(_rng.randf_range(-25, 25), 1, _rng.randf_range(16, 30))
-		_add_mob("Dire Wolf", 4, 90, 14, 70, 15, "59596b", p, "wolf_hunt", {"beast_hide": 0.8, "wolf_pelt": 0.7, "spirit_shard": 0.35})
+		if Duels.in_safe_zone(p) or p.distance_to(TALVEN) < 18.0:
+			p.x = absf(p.x - TOWER_POS.x) + TOWER_POS.x + 6.0  # never den inside the Talven camp's Inner Area
+		_spawn_mob({"name": "Dire Wolf", "level": 4, "hp": 90, "dmg": 14, "xp": 70, "money": 15, "color": "59596b",
+			"pos": [p.x, p.y, p.z], "quest": "wolf_hunt", "drops": {"beast_hide": 0.8, "wolf_pelt": 0.7, "spirit_shard": 0.35}, "pack": "wolf"})
+	_spawn_grove()
 	# Cliff Bats flit along the tower's foot, between the wolves and the gate.
 	for i in 4:
 		var p := TOWER_POS + Vector3(-30 + 20 * i, 1, _rng.randf_range(10, 14))
@@ -2804,8 +2827,11 @@ func _spawn_mobs() -> void:
 		var base: Vector3 = LAB_LEVELS[lvl]
 		for i in 3:
 			var a := TAU * i / 3.0 + lvl
-			_add_mob("Kobold Scout", 5 + lvl, 110 + 30 * lvl, 12 + 3 * lvl, 80 + 20 * lvl, 20, "6b7a3a",
-				base + Vector3(cos(a) * 5, 1, sin(a) * 5), "", {"iron_ore": 0.6, "spirit_shard": 0.2, "terrace_key": 0.12}, [0.9, 1.5, 0.9])
+			# Kobold Scouts patrol in threes and answer each other.
+			var kp := base + Vector3(cos(a) * 5, 1, sin(a) * 5)
+			_spawn_mob({"name": "Kobold Scout", "level": 5 + lvl, "hp": 110 + 30 * lvl, "dmg": 12 + 3 * lvl, "xp": 80 + 20 * lvl, "money": 20,
+				"color": "6b7a3a", "size": [0.9, 1.5, 0.9], "pos": [kp.x, kp.y, kp.z], "pack": "kobold",
+				"drops": {"iron_ore": 0.6, "spirit_shard": 0.2, "terrace_key": 0.12}})
 		# Tunnel Rats scurry round the terrace rim (quick, weak).
 		for i in 2:
 			var a := TAU * i / 2.0 + lvl + 1.0
@@ -2813,8 +2839,38 @@ func _spawn_mobs() -> void:
 				"color": "6e6258", "size": [0.6, 0.5, 1.0], "speed": 4.2, "aggro": 7, "drops": {"beast_hide": 0.3},
 				"model": {"pack": "creatures", "name": "Rat", "fit": 1.3}, "pos": [base.x + cos(a) * 8, base.y + 1, base.z + sin(a) * 8]})
 	_spawn_mob({"name": "Kobold Sergeant", "level": 7, "hp": 260, "dmg": 16, "xp": 220, "money": 80, "color": "8a5a2b",
-		"size": [1.3, 1.4, 1.5], "speed": 3.4, "aggro": 12, "drops": {"iron_ore": 1.0, "spirit_shard": 0.6, "terrace_key": 1.0},
+		"size": [1.3, 1.4, 1.5], "speed": 3.4, "aggro": 12, "pack": "kobold", "armor": 0.7, "drops": {"iron_ore": 1.0, "spirit_shard": 0.6, "terrace_key": 1.0},
 		"pos": [LAB_LEVELS[1].x, LAB_LEVELS[1].y + 1, LAB_LEVELS[1].z - 4]})
+
+
+## The Snaptrap Grove, in the woods north-east of town: carnivorous vines
+## rooted among the trees (slow, a whip up close and an acid spit at range).
+## Most are plain; two bear a swollen fruit that bursts when struck and
+## draws every vine in the grove onto the striker; one is in bloom and drops
+## the Snaptrap Bloom (Herbalist Hesper's errand).
+const GROVE := Vector3(38, 0, -48)
+const GROVE_SPOTS := [Vector3(0, 0, 0), Vector3(6, 0, 3), Vector3(-5, 0, 4), Vector3(4, 0, -6), Vector3(-6, 0, -4),
+	Vector3(9, 0, -2), Vector3(-2, 0, 8), Vector3(1, 0, -10)]
+
+
+func _spawn_grove() -> void:
+	for i in GROVE_SPOTS.size():
+		var p: Vector3 = GROVE + GROVE_SPOTS[i] + Vector3(0, 1, 0)
+		var d := {"name": "Snaptrap Vine", "level": 2, "hp": 48, "dmg": 7, "xp": 34, "money": 6, "color": "5f8a3a",
+			"size": [1.0, 1.5, 1.0], "speed": 1.1, "aggro": 8, "ranged": 6.0, "pack": "vine",
+			"drops": {"wild_herb": 0.5, "spirit_shard": 0.1}, "pos": [p.x, p.y, p.z]}
+		if i == 2 or i == 5:
+			d["name"] = "Fruiting Snaptrap"
+			d["lure"] = true
+			d["color"] = "7a8a3a"
+		elif i == 7:
+			d["name"] = "Blossoming Snaptrap"
+			d["color"] = "c26a8a"
+			d["hp"] = 60
+			d["xp"] = 60
+			d["drops"] = {"snaptrap_bloom": 1.0, "wild_herb": 1.0}
+			d["respawn"] = 240.0  # rarely in flower: four minutes to bloom again
+		_spawn_mob(d)
 
 
 func _add_mob(n: String, lvl: int, hp: float, dmg: float, xp: int, money: int, c: String, pos: Vector3, quest: String, drops: Dictionary, size: Array = []) -> void:

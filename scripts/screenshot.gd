@@ -197,7 +197,7 @@ func _ready() -> void:
 				var pl: Node3D = scene.player
 				var fwd: Vector3 = -pl.model.global_transform.basis.z
 				var bpos: Vector3 = pl.global_position + fwd * 6.0
-				scene._spawn_mob({"name": "Floor Guardian: Gravelmaw", "level": 8, "hp": 900, "dmg": 6, "xp": 0, "money": 0,
+				scene._spawn_mob({"name": "Floor Guardian: Vargash the Kobold Warlord", "level": 8, "hp": 900, "dmg": 6, "xp": 0, "money": 0,
 					"boss": true, "size": [2.2, 2.6, 2.0], "respawns": false, "pos": [bpos.x, bpos.y + 0.3, bpos.z]})
 				await get_tree().process_frame
 				for e in get_tree().get_nodes_in_group("enemies"):
@@ -244,9 +244,9 @@ func _ready() -> void:
 		var fwd: Vector3 = -pl.model.global_transform.basis.z
 		var boss := demo == "slam" or demo.begins_with("boss_")
 		var bpos: Vector3 = pl.global_position + fwd * (7.0 if demo.begins_with("boss_") else 1.7)
-		scene._spawn_mob({"name": "Floor Guardian: Gravelmaw" if boss else "Field Boar", "level": 1, "hp": 999999, "dmg": 6,
+		scene._spawn_mob({"name": "Floor Guardian: Vargash the Kobold Warlord" if boss else "Field Boar", "level": 1, "hp": 999999, "dmg": 6,
 			"boss": boss, "size": [2.2, 2.6, 2.0] if boss else [0.9, 0.8, 1.3], "respawns": false,
-			"pos": [bpos.x, bpos.y + 0.3, bpos.z], "brain": "gravelmaw" if demo == "boss_plate" else ""})
+			"pos": [bpos.x, bpos.y + 0.3, bpos.z], "brain": "warlord" if demo == "boss_plate" else ""})
 		await get_tree().process_frame
 		for e in get_tree().get_nodes_in_group("enemies"):
 			if e.global_position.distance_to(bpos) < 1.0:
@@ -329,6 +329,12 @@ func _ready() -> void:
 							hfx.hearth_glow(pl)
 						else:
 							hfx.class_art_cast(pl, "Hearthwright" if demo == "hearth_flare" else "Stillblade", demo)
+				"switch", "inner_area", "outer_field":
+					var wfx := VFX.get_for(pl)
+					if wfx and demo == "switch" and demo_boar:
+						wfx.switch_flash(demo_boar, 1, 2)
+					elif wfx:
+						wfx.inner_area_notice(demo == "inner_area")
 				"heal_crystal", "teleport_crystal":
 					GameState.materials["heal_crystal"] = 3
 					GameState.materials["teleport_crystal"] = 1
@@ -374,6 +380,9 @@ func _ready() -> void:
 			scene._fishing._drop_bobber()
 			scene._fishing._bite()
 			Engine.time_scale = 0.05
+		# --summit: stand on the Labyrinth summit (lights the arena braziers).
+		if i == 3 and "--summit" in args and scene.has_method("_enter_summit"):
+			scene._enter_summit()
 		# --spawn-boss: raise the floor boss in its arena (for a model check).
 		if i == 4 and "--spawn-boss" in args and scene.has_method("_spawn_boss"):
 			scene._spawn_boss()

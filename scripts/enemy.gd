@@ -26,6 +26,21 @@ signal died(enemy: Enemy)
 ## Rigged creature model override: {"pack", "name", "fit", "tint", "yaw",
 ## "lift", "scale"}; empty = the MODELS entry of this mob's rig kind.
 @export var model := {}
+## Field behaviours (accuracy pass: Aincrad's first floor):
+## rush - boars paw the ground (RUSH_WINDUP telegraph), then charge in a
+##        straight line; parryable on contact, dodge sideways.
+## pack - mobs sharing a pack tag answer each other: the first to spot or be
+##        struck by a player calls every packmate within PACK_RANGE.
+## armor - damage taken while NOT staggered is multiplied by this (plated
+##        guards: parry or Switch them open, then strike the gaps).
+## lure - a fruit-bearing plant: the first blow bursts the fruit and its
+##        scent calls every packmate within LURE_RANGE onto the striker.
+@export var rush := false
+@export var pack := ""
+@export var armor := 1.0
+@export var lure := false
+## Seconds before a slain mob returns (a rare variant waits much longer).
+@export var respawn_time := 8.0
 
 const SLAM_RANGE := 5.0
 const BOLT_PERIOD := 2.6
@@ -65,6 +80,22 @@ const RIPOSTE_MULT := 1.5
 const SWITCH_WINDOW_MS := 2000
 const SWITCH_MULT := 1.3
 const SWITCH_EXTEND := 0.6
+const RUSH_WINDUP := 0.75
+const RUSH_SPEED := 11.0
+const RUSH_TIME := 0.75
+const RUSH_MULT := 1.5
+const PACK_RANGE := 16.0
+const LURE_RANGE := 22.0
+const CALL_TIME := 8.0
+var _rush_cd := 3.0
+var _rush_wind := 0.0
+var _rush_t := 0.0
+var _rush_dir := Vector3.ZERO
+var _rush_target: Node3D
+var _called_by: Node3D
+var _called_t := 0.0
+var _was_chasing := false
+var _lure0 := false
 var _switch_from := -1
 var _switch_until := 0
 var _switched := false
@@ -123,6 +154,11 @@ static func from_data(d: Dictionary) -> Enemy:
 	e.size = Vector3(sz[0], sz[1], sz[2])
 	e.quest_id = d.get("quest", "")
 	e.ranged = float(d.get("ranged", 0))
+	e.rush = bool(d.get("rush", false))
+	e.pack = str(d.get("pack", ""))
+	e.armor = clampf(float(d.get("armor", 1.0)), 0.1, 1.0)
+	e.lure = bool(d.get("lure", false))
+	e.respawn_time = clampf(float(d.get("respawn", 8.0)), 1.0, 3600.0)
 	var md = d.get("model", {})
 	e.model = md if md is Dictionary else {}
 	var p: Array = d.get("pos", [0, 1, 0])
@@ -133,6 +169,7 @@ static func from_data(d: Dictionary) -> Enemy:
 func _ready() -> void:
 	add_to_group("enemies")
 	home = global_position
+	_lure0 = lure
 	hp = max_hp
 	# Layer 4 = mobs: collide with the world (1) and players (2), not each other.
 	collision_layer = 4
@@ -189,6 +226,10 @@ func _physics_process(delta: float) -> void:
 		# Client: mirror what the server sends. Dead mobs must not block anyone.
 		var was_dead := _dead
 		_dead = not visible
+		if was_dead and not _dead:
+			lure = _lure0  # respawned with its fruit
+			if _fruit():
+				_fruit().visible = lure
 		if _dead and not was_dead:
 			Audio.play("boss_death" if is_boss else "death", global_position, 0.15, 0.0, 0.8)
 			_death_fx()
@@ -226,17 +267,50 @@ func _physics_process(delta: float) -> void:
 	var target := _wander_target
 	var spd := speed * 0.4
 	var ctl: Dictionary = brain.tick(delta, player) if brain != null and brain.has_method("tick") else {}
+	var chasing := player != null and player.global_position.distance_to(global_position) < aggro_range \
+			and player.global_position.distance_to(home) < aggro_range * 2.5
+	# Called by a packmate (or a burst lure): hunt that player for a while,
+	# from further away, but never past a long leash from home.
+	_called_t = maxf(_called_t - delta, 0.0)
+	if _called_t > 0.0 and _hunt_ok(_called_by) and _called_by.global_position.distance_to(home) < maxf(aggro_range * 4.0, 30.0):
+		player = _called_by
+		chasing = true
+	if chasing and not _was_chasing and pack != "":
+		_call_pack(player, PACK_RANGE)
+	_was_chasing = chasing and ctl.is_empty()
 	if not ctl.is_empty():
 		# A boss brain decided this frame (leash, telegraphs, charge run).
 		target = ctl.get("target", global_position)
 		spd = float(ctl.get("spd", 0.0))
-	elif player and player.global_position.distance_to(global_position) < aggro_range \
-			and player.global_position.distance_to(home) < aggro_range * 2.5:
+	elif rush and _rush_t > 0.0:
+		# Mid-charge: straight on, whatever the target does.
+		_rush_t -= delta
+		target = global_position + _rush_dir * 6.0
+		spd = RUSH_SPEED
+		_rush_contact()
+		if _rush_t <= 0.0:
+			_end_rush()
+	elif rush and _rush_wind > 0.0:
+		_rush_wind -= delta
+		spd = 0.0
+		if _hunt_ok(_rush_target):
+			target = _rush_target.global_position
+			var to_t := _rush_target.global_position - global_position
+			to_t.y = 0.0
+			if to_t.length() > 0.05:
+				rotation.y = lerp_angle(rotation.y, atan2(-to_t.x, -to_t.z), 12.0 * delta)
+		if _rush_wind <= 0.0:
+			_start_rush()
+	elif chasing:
 		target = player.global_position
 		spd = speed
 		var reach := 1.3 + size.z * 0.5
 		var dist := player.global_position.distance_to(global_position)
-		if _stagger > 0.0:
+		if rush:
+			_rush_cd = maxf(_rush_cd - delta, 0.0)
+		if rush and _rush_cd == 0.0 and _stagger == 0.0 and _windup <= 0.0 and dist > 4.0 and dist < 10.0:
+			_begin_rush(player, dist)
+		elif _stagger > 0.0:
 			_stagger = maxf(_stagger - delta, 0.0)
 			spd = 0.0
 			target = global_position
@@ -283,6 +357,114 @@ func _physics_process(delta: float) -> void:
 	velocity.z = move.z + _knock.z
 	_knock = _knock.move_toward(Vector3.ZERO, 30 * delta)
 	move_and_slide()
+
+
+# --- Field behaviours: rush, pack calls, lures --------------------------------
+
+func _hunt_ok(p) -> bool:
+	return p != null and is_instance_valid(p) and p is Node3D and p.is_inside_tree() and not (p.has_method("is_dying") and p.is_dying()) \
+		and not (GameState.floor == 1 and Duels.in_safe_zone(p.global_position))
+
+
+## Authority: every living packmate within `radius` turns on `p`.
+func _call_pack(p: Node3D, radius: float) -> int:
+	if pack == "" or not _hunt_ok(p):
+		return 0
+	var n := 0
+	for e in get_tree().get_nodes_in_group("enemies"):
+		if e == self or not (e is Enemy) or e.pack != pack or e._dead or e.is_boss:
+			continue
+		if e.global_position.distance_to(global_position) <= radius:
+			e._called_by = p
+			e._called_t = CALL_TIME
+			n += 1
+	if Net.online:
+		net_pack_call.rpc(n)
+	else:
+		net_pack_call(n)
+	return n
+
+
+## Everyone: the howl / scent cue (VFX hook mob_pack_call(enemy, answered)).
+@rpc("authority", "call_local", "reliable")
+func net_pack_call(answered: int) -> void:
+	if _dead:
+		return
+	Audio.play("boss_roar" if pack == "wolf" else "grunt", global_position, 0.1, -6.0, 1.6 if pack == "wolf" else 1.2)
+	var fx := VFX.get_for(self)
+	if fx and fx.has_method("mob_pack_call"):
+		fx.call("mob_pack_call", self, answered)
+
+
+func _begin_rush(p: Node3D, dist: float) -> void:
+	_rush_target = p
+	_rush_wind = RUSH_WINDUP
+	var eta := RUSH_WINDUP + dist / RUSH_SPEED
+	if Net.online:
+		net_rush_warn.rpc(p.global_position, RUSH_WINDUP, eta)
+	else:
+		net_rush_warn(p.global_position, RUSH_WINDUP, eta)
+
+
+## Everyone: the paw-and-snort telegraph. Bots time their parry on `eta`
+## (when the charge reaches them); VFX hook mob_rush_warning(enemy, to, secs).
+@rpc("authority", "call_local", "reliable")
+func net_rush_warn(to: Vector3, secs: float, eta: float) -> void:
+	if _dead:
+		return
+	Audio.play("grunt", global_position, 0.1, 0.0, 0.8)
+	for p in get_tree().get_nodes_in_group("players"):
+		if p.get("bot") and p.get("is_local") and p.global_position.distance_to(to) < 3.0:
+			p.bot_incoming(eta)
+	var fx := VFX.get_for(self)
+	if fx and fx.has_method("mob_rush_warning"):
+		fx.call("mob_rush_warning", self, to, secs)
+	elif fx:
+		fx.ring(to + Vector3(0, 0.1, 0), Color(1.0, 0.55, 0.25), 2.0, secs)
+
+
+func _start_rush() -> void:
+	if not _hunt_ok(_rush_target):
+		_end_rush()
+		return
+	var to := _rush_target.global_position - global_position
+	to.y = 0.0
+	_rush_dir = to.normalized() if to.length() > 0.05 else -global_transform.basis.z
+	_rush_t = minf(RUSH_TIME, to.length() / RUSH_SPEED + 0.3)
+	if _rig != null:
+		var fx := VFX.get_for(self)
+		if fx:
+			fx.puff(global_position, 1.2)
+
+
+## The charge reaches whoever is in front of it: one parryable blow.
+func _rush_contact() -> void:
+	var reach := 1.0 + size.z * 0.5
+	for p in get_tree().get_nodes_in_group("players"):
+		if not _hunt_ok(p):
+			continue
+		var to: Vector3 = p.global_position - global_position
+		to.y = 0.0
+		if to.length() < reach and (to.length() < 0.5 or _rush_dir.dot(to.normalized()) > 0.2):
+			var outcome: String = p.defend(global_position) if p.has_method("defend") else ""
+			_show_defence(p, outcome)
+			match outcome:
+				"parry":
+					_parried(p)
+				"block":
+					_damage_player(p, damage * RUSH_MULT * (1.0 - Player.BLOCK_REDUCTION))
+				_:
+					_damage_player(p, damage * RUSH_MULT)
+			_end_rush()
+			return
+
+
+func _end_rush() -> void:
+	_rush_t = 0.0
+	_rush_wind = 0.0
+	_rush_target = null
+	_rush_cd = randf_range(5.0, 8.0)
+	_hit_cd = maxf(_hit_cd, 0.6)
 
 
 func _resolve_strike(reach: float) -> void:
@@ -625,6 +807,19 @@ func take_hit(amount: float, from_dir: Vector3, hitter := 1, kind := -1) -> void
 		# Breaking Wave (Stillblade): the blow itself builds posture, so the
 		# follow-up hits land as ripostes.
 		_build_posture(int(HiddenClasses.art_for_kind(kind)["posture"]))
+	if armor < 1.0 and _stagger <= 0.0:
+		amount *= armor  # plate turns the blade; staggered, the gaps are open
+	if pack != "" or lure:
+		var striker := _player_of(hitter)
+		if lure:
+			lure = false
+			_call_pack(striker, LURE_RANGE)
+			if Net.online:
+				net_lure_burst.rpc()
+			else:
+				net_lure_burst()
+		elif pack != "" and _called_t <= 0.0:
+			_call_pack(striker, PACK_RANGE)
 	hp -= amount
 	_last_hitter = hitter
 	# Offline, and for the listen-server host, the popup is drawn here; clients
@@ -643,6 +838,31 @@ func take_hit(amount: float, from_dir: Vector3, hitter := 1, kind := -1) -> void
 		tw.tween_property(_mesh, "scale", Vector3(1.2, 0.8, 1.2), 0.05)
 		tw.tween_property(_mesh, "scale", Vector3.ONE, 0.1)
 		_update_label()
+
+
+## The player node of `peer` (the nearest one, should two worlds overlap
+## for a moment, as in the smoke test).
+func _player_of(peer: int) -> Node3D:
+	var best: Node3D = null
+	for p in get_tree().get_nodes_in_group("players"):
+		if int(p.get("peer_id")) == peer and (best == null or p.global_position.distance_to(global_position) < best.global_position.distance_to(global_position)):
+			best = p
+	return best
+
+
+## Everyone: a lure fruit burst (VFX hook mob_lure_burst(enemy)).
+@rpc("authority", "call_local", "reliable")
+func net_lure_burst() -> void:
+	lure = false
+	var fr := _fruit()
+	if fr:
+		fr.visible = false
+	Audio.play("craft_pot", global_position, 0.1, -2.0, 1.5)
+	var fx := VFX.get_for(self)
+	if fx and fx.has_method("mob_lure_burst"):
+		fx.call("mob_lure_burst", self)
+	elif fx:
+		fx.sparkle(global_position + Vector3(0, size.y, 0), Color(1.0, 0.7, 0.3))
 
 
 func _die() -> void:
@@ -671,7 +891,7 @@ func _die() -> void:
 	process_mode = Node.PROCESS_MODE_DISABLED
 	remove_from_group("enemies")
 	if respawns:
-		get_tree().create_timer(8.0, false).timeout.connect(_respawn)
+		get_tree().create_timer(respawn_time, false).timeout.connect(_respawn)
 	else:
 		queue_free()
 
@@ -685,7 +905,7 @@ func _hit_sfx(amount: float) -> void:
 	var ev := "hit_flesh"
 	if is_boss:
 		ev = "hit_heavy"
-	elif "sentinel" in n or "golem" in n or "sergeant" in n or "gravelmaw" in n or "drowned" in n or "knight" in n:
+	elif "sentinel" in n or "halberdier" in n or "golem" in n or "sergeant" in n or "warlord" in n or "drowned" in n or "knight" in n:
 		ev = "hit_metal"
 	Audio.play(ev, global_position, 0.1, clampf(amount / 15.0, 0.0, 4.0))
 	if ev == "hit_flesh" and randf() < 0.5:
@@ -903,6 +1123,11 @@ func _respawn() -> void:
 		return
 	global_position = home
 	hp = max_hp
+	lure = _lure0
+	if _fruit():
+		_fruit().visible = lure
+	_called_t = 0.0
+	_end_rush()
 	_dead = false
 	visible = true
 	process_mode = Node.PROCESS_MODE_INHERIT
@@ -962,7 +1187,9 @@ func _rig_kind() -> String:
 		return "stag"
 	if "wisp" in n:
 		return "wisp"
-	if is_boss or "gravelmaw" in n:
+	if "snaptrap" in n or "vine" in n:
+		return "plant"
+	if is_boss or "warlord" in n:
 		return "king"
 	if "boar" in n:
 		return "boar"
@@ -972,7 +1199,7 @@ func _rig_kind() -> String:
 		return "sergeant"
 	if "kobold" in n:
 		return "kobold"
-	if "sentinel" in n or "golem" in n:
+	if "sentinel" in n or "halberdier" in n or "golem" in n:
 		return "sentinel"
 	for k in ["slime", "bat", "rat"]:
 		if k in n:
@@ -1000,6 +1227,8 @@ func _build_kind(kind: String) -> void:
 			_build_kobold(maxf(size.y * 1.3, 1.0), 0)
 		"sentinel":
 			_build_sentinel()
+		"plant":
+			_build_plant()
 		_:
 			_build_boar()
 
@@ -1192,6 +1421,60 @@ func _build_boar() -> void:
 	# Curly tail.
 	_pt(body, _cy(0.025, 0.018, l * 0.22), md, Vector3(0, w * 0.2, l * 0.5), Vector3(0.9, 0, 0))
 	_pt(body, _sph(0.045), md, Vector3(0, w * 0.27, l * 0.6))
+
+
+# -- Snaptrap Vine (carnivorous plant) ------------------------------------------
+# A rooted pitcher on a thick stalk with two whipping vines. Variants by name:
+# "Blossoming" wears a flower crown, "Fruiting" a swollen bulb (node "Fruit",
+# hidden once it bursts; see net_lure_burst).
+
+func _build_plant() -> void:
+	var w := size.x
+	var h := size.y
+	_visual_height = h * 1.05
+	var m := _pm(color)
+	var md := _pm(color.darkened(0.45))
+	var ml := _pm(color.lightened(0.25))
+	var maw := _pm(Color(0.55, 0.12, 0.16), 0.0, Color(0.6, 0.1, 0.1), 0.25)
+	# Leaf rosette on the ground.
+	for i in 6:
+		var a := TAU * i / 6.0
+		_pt(_rig, _sph(w * 0.3), md, Vector3(cos(a) * w * 0.38, 0.05, sin(a) * w * 0.38), Vector3(0, -a, 0), Vector3(1.0, 0.12, 0.45))
+	var stalk := _nd(_rig, Vector3(0, 0, 0))
+	_breath = stalk
+	_pt(stalk, _cy(w * 0.12, w * 0.2, h * 0.55), m, Vector3(0, h * 0.27, 0))
+	# The pitcher head, mouth forward (-Z), lid above.
+	var head := _nd(stalk, Vector3(0, h * 0.68, 0))
+	_pt(head, _cap(w * 0.32, h * 0.42), ml, Vector3.ZERO, Vector3(0.25, 0, 0))
+	_pt(head, _cy(w * 0.3, w * 0.24, 0.05), maw, Vector3(0, h * 0.06, -w * 0.12), Vector3(PI / 2 - 0.35, 0, 0))
+	_pt(head, _sph(w * 0.3), md, Vector3(0, h * 0.24, w * 0.05), Vector3(-0.5, 0, 0), Vector3(1.0, 0.25, 1.1))  # lid
+	for i in 5:
+		var a := -0.9 + i * 0.45
+		_pt(head, _cy(0.0, w * 0.04, w * 0.14), _pm(Color(0.95, 0.92, 0.8), 0.01), Vector3(sin(a) * w * 0.26, h * 0.1, -w * 0.12 - cos(a) * w * 0.12), Vector3(PI, 0, 0))  # teeth
+	_eye_pair(head, Vector3(w * 0.14, h * 0.16, -w * 0.24), w * 0.05, Color(1.0, 0.85, 0.3), 0.7, true)
+	# Two whip vines that sway.
+	for side: float in [-1.0, 1.0]:
+		var vine := _nd(stalk, Vector3(side * w * 0.16, h * 0.45, 0))
+		_pt(vine, _cy(w * 0.04, w * 0.07, h * 0.45), m, Vector3(side * w * 0.12, h * 0.15, -w * 0.05), Vector3(-0.4, 0, side * -0.9))
+		_pt(vine, _sph(w * 0.08), md, Vector3(side * w * 0.3, h * 0.3, -w * 0.12))
+		_limb(vine, 0.0 if side > 0 else PI, 0.0, 0.5)
+	var n := display_name.to_lower()
+	if "blossom" in n:
+		var crown := _nd(head, Vector3(0, h * 0.3, w * 0.05))
+		for i in 6:
+			var a := TAU * i / 6.0
+			_pt(crown, _sph(w * 0.12), _pm(Color(1.0, 0.62, 0.78), 0.0, Color(1.0, 0.5, 0.7), 0.35), Vector3(cos(a) * w * 0.16, 0, sin(a) * w * 0.16), Vector3.ZERO, Vector3(1.0, 0.3, 1.0))
+		_pt(crown, _sph(w * 0.08), _pm(Color(1.0, 0.9, 0.4), 0.0, Color(1.0, 0.85, 0.3), 0.5), Vector3(0, w * 0.03, 0))
+	elif "fruit" in n:
+		var fruit := _nd(stalk, Vector3(w * 0.05, h * 0.42, w * 0.28))
+		fruit.name = "Fruit"
+		_pt(fruit, _sph(w * 0.22), _pm(Color(0.95, 0.6, 0.2), 0.0, Color(1.0, 0.55, 0.15), 0.3), Vector3.ZERO, Vector3.ZERO, Vector3(1.0, 1.15, 1.0))
+		_pt(fruit, _cy(0.0, w * 0.04, w * 0.14), md, Vector3(0, w * 0.26, 0))
+
+
+## The fruit node on a Fruiting Snaptrap's rig (null on other mobs).
+func _fruit() -> Node3D:
+	return _rig.find_child("Fruit", true, false) as Node3D if _rig != null else null
 
 
 # -- Dire Wolf -----------------------------------------------------------------
@@ -1642,12 +1925,13 @@ func _build_drowned_knight() -> void:
 const MODELS := {
 	"boar": {"pack": "animals", "name": "Pig", "tint": "4fa4d4", "fit": 1.15},
 	"wolf": {"pack": "animals", "name": "Wolf", "tint": "9a9aae", "fit": 1.25, "yaw": 90},
-	"kobold": {"pack": "skeletons", "name": "Skeleton_Minion", "tint": "cfd0a4", "fit": 1.5},
-	"sergeant": {"pack": "skeletons", "name": "Skeleton_Warrior", "tint": "d8bf92", "fit": 1.35},
-	"sentinel": {"pack": "adventurers", "name": "Knight", "tint": "9aa4b0", "fit": 1.2},
-	# min_value lifts the pack's near-black paints so the boss reads as
-	# weathered stone-and-scale in daylight instead of a silhouette.
-	"king": {"pack": "creatures", "name": "Dragon", "tint": "b4a6bc", "fit": 1.35, "yaw": 0, "min_value": 0.5},
+	# Kobolds: KayKit bodies tinted to red-brown fur, dressed by MobDress with
+	# a kobold head, long ears, a tail and their weapons (Aincrad's Ruin Kobolds).
+	"kobold": {"pack": "adventurers", "name": "Barbarian", "tint": "d0715a", "fit": 1.55, "dress": "kobold"},
+	"sergeant": {"pack": "adventurers", "name": "Barbarian", "tint": "b86a50", "fit": 1.3, "dress": "sergeant"},
+	"sentinel": {"pack": "adventurers", "name": "Knight", "tint": "c98a78", "fit": 1.2, "dress": "sentinel"},
+	# Floor Guardian: a kobold lord (after Aincrad's first boss), not the old dragon.
+	"king": {"pack": "adventurers", "name": "Barbarian", "tint": "c06048", "fit": 1.0, "dress": "lord"},
 	"slime": {"pack": "creatures", "name": "Slime", "tint": "", "fit": 1.0},
 	"rat": {"pack": "creatures", "name": "Rat", "tint": "", "fit": 1.0},
 	"bat": {"pack": "creatures", "name": "Bat", "tint": "", "fit": 1.0, "lift": 1.2, "yaw": 0},
@@ -1749,6 +2033,8 @@ func _build_model(spec: Dictionary) -> bool:
 			mi.set_surface_override_material(s, _creature_material(src, tint, float(spec.get("min_value", 0.0))).duplicate())
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		RenderProfile.register_lod(mi, MOB_LOD_RANGE)
+	if spec.has("dress"):
+		MobDress.apply(inst, str(spec["dress"]))
 	_set_anim("idle")
 	return true
 

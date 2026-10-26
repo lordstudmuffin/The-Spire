@@ -971,6 +971,86 @@ void fragment() {
 	tw.chain().tween_callback(mi.queue_free)
 
 
+## Switch (SAO party tactic): one player's parry opened the mob and another
+## cut in. Two crossing streaks over the mob, a shock ring and "SWITCH"
+## rising off it, in the party's cool white-teal.
+const SWITCH_COLOR := Color(0.55, 1.0, 0.9)
+
+
+func switch_flash(enemy: Node3D, _from: int, _to: int) -> void:
+	if not _valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var c := box.get_center()
+	var f := _forward(enemy)
+	var o := c - f * 0.2 - Vector3(0, 1.1, 0)  # _tinted_slash lifts by 1.1
+	_tinted_slash(o, f, SWITCH_COLOR, 1.1, 0.75, 0.9, 0.32)
+	_tinted_slash(o, f, SWITCH_COLOR.lightened(0.3), 1.1, 0.75, -0.9, 0.32)
+	_shock_ring(c, SWITCH_COLOR, 2.6 + box.size.y * 0.4, 0.45)
+	_glint(c + Vector3(0, box.size.y * 0.25, 0), SWITCH_COLOR, 1.4, 0.4, true)
+	flash_light(c, SWITCH_COLOR, 5.0)
+	var l := Label3D.new()
+	l.text = "SWITCH"
+	l.font = UITheme.ui_bold()
+	l.font_size = 64
+	l.outline_size = 12
+	l.outline_modulate = Color(0.02, 0.12, 0.14, 0.9)
+	l.modulate = Color(SWITCH_COLOR.lightened(0.4), 1.0)
+	l.pixel_size = 0.006
+	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	l.no_depth_test = true
+	l.render_priority = 10
+	add_child(l)
+	l.global_position = Vector3(c.x, box.end.y + 1.2, c.z)
+	l.scale = Vector3.ONE * 0.6
+	var tw := l.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(l, "scale", Vector3.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(l, "global_position:y", l.global_position.y + 0.9, 1.1).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(l, "modulate:a", 0.0, 0.45).set_delay(0.65)
+	tw.tween_property(l, "outline_modulate:a", 0.0, 0.45).set_delay(0.65)
+	tw.chain().tween_callback(l.queue_free)
+
+
+## Crossing into a settlement's Inner Area (or back out): the screen edges
+## glow cool cyan (in) or amber (out) and a thin scan line sweeps down once,
+## like the system re-tagging the area. Screen-space; the toast is the HUD's.
+var _area_shader: Shader
+
+
+func inner_area_notice(inside: bool) -> void:
+	if _area_shader == null:
+		_area_shader = Shader.new()
+		_area_shader.code = """shader_type canvas_item;
+uniform vec4 tint : source_color = vec4(0.55, 0.9, 1.0, 1.0);
+uniform float fade = 1.0;
+uniform float scan = 0.0;
+void fragment() {
+	vec2 p = UV * 2.0 - 1.0;
+	float edge = smoothstep(0.55, 1.05, max(abs(p.x) * 0.92, abs(p.y)));
+	float line = exp(-pow((UV.y - scan) * 90.0, 2.0)) * 0.55 + exp(-pow((UV.y - scan) * 14.0, 2.0)) * 0.12;
+	COLOR = vec4(tint.rgb, clamp(edge * 0.32 + line, 0.0, 1.0) * fade);
+}
+"""
+	var layer := CanvasLayer.new()
+	layer.layer = 4
+	add_child(layer)
+	var r := ColorRect.new()
+	r.set_anchors_preset(Control.PRESET_FULL_RECT)
+	r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var m := ShaderMaterial.new()
+	m.shader = _area_shader
+	m.set_shader_parameter("tint", Color(0.55, 0.9, 1.0) if inside else Color(1.0, 0.7, 0.4))
+	m.set_shader_parameter("fade", 1.0)
+	m.set_shader_parameter("scan", -0.1)
+	r.material = m
+	layer.add_child(r)
+	var tw := layer.create_tween()
+	tw.tween_method(func(v: float): m.set_shader_parameter("scan", v), -0.1, 1.1, 0.7).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_method(func(v: float): m.set_shader_parameter("fade", v), 1.0, 0.0, 0.5)
+	tw.tween_callback(layer.queue_free)
+
+
 func _player_forward(player: Node3D) -> Vector3:
 	var m = player.get("model")
 	return _forward(m) if m is Node3D else _forward(player)

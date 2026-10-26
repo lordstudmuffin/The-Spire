@@ -13,7 +13,7 @@ extends RefCounted
 
 ## Gather quests whose progress mirrors what you carry (world._track_ore_quest).
 const GATHER_QUESTS := [["ore_delivery", "iron_ore"], ["shrine_rite", "wisp_essence"], ["wolf_pelts", "wolf_pelt"],
-	["field_herbs", "wild_herb"], ["tavern_stew", "boar_stew"], ["lantern_below", "spirit_shard"], ["old_watch_whispers", "wolf_pelt"]]
+	["field_herbs", "wild_herb"], ["tavern_stew", "boar_stew"], ["lantern_below", "spirit_shard"], ["old_watch_whispers", "wolf_pelt"], ["grove_bloom", "snaptrap_bloom"]]
 const FIELDS := ["character", "level", "xp", "stat_points", "stats", "money", "hp", "quests", "materials", "inventory", "equipped",
 	"smithing_level", "smithing_xp", "items_crafted", "hidden_class", "floors_cleared", "recipes_unlocked",
 	"fishing_level", "fishing_xp", "cooking_level", "cooking_xp", "farming_level", "farming_xp", "fish_caught", "home_owned", "home_storage",
