@@ -31,6 +31,11 @@ func _ready() -> void:
 		print("== Done: %d failure(s)" % _fails)
 		get_tree().quit(1 if _fails > 0 else 0)
 		return
+	if OS.get_environment("SMOKE_ONLY") == "permadeath":
+		await _test_permadeath()
+		print("== Done: %d failure(s)" % _fails)
+		get_tree().quit(1 if _fails > 0 else 0)
+		return
 	if OS.get_environment("SMOKE_ONLY") == "duels":
 		await _test_duels()
 		print("== Done: %d failure(s)" % _fails)
@@ -1214,6 +1219,7 @@ func _ready() -> void:
 	await _test_hidden_classes()
 	await _test_duels()
 	await _test_boss()
+	await _test_permadeath()
 
 	print("== Done: %d failure(s)" % _fails)
 	get_tree().quit(1 if _fails > 0 else 0)
@@ -2567,3 +2573,146 @@ func _test_duels() -> void:
 	GameState.heal_full()
 	world.queue_free()
 	await get_tree().process_frame
+
+
+## Permadeath climbers (scripts/permadeath.gd): slot rules, boosts and
+## penalties, the server-side fall (record, realm, refusal), the monument,
+## the stall split and the offline fall in a live world.
+func _test_permadeath() -> void:
+	print("== Permadeath")
+	var keep_char: Dictionary = GameState.character.duplicate()
+	GameState.character["name"] = "Tester"
+	GameState.character["permadeath"] = false
+	GameState.fallen = {}
+	# Slots: two standard climbers and one permadeath per account.
+	var n := {"exists": true, "permadeath": false}
+	var pd := {"exists": true, "permadeath": true}
+	var e := {"exists": false}
+	var k1: Dictionary = Permadeath.slot_kinds([n, n, e], 2)
+	var k2: Dictionary = Permadeath.slot_kinds([pd, e, n], 1)
+	var k3: Dictionary = Permadeath.slot_kinds([pd, n, n], 0)
+	_check(not k1["normal"] and k1["permadeath"] and k2["normal"] and not k2["permadeath"] and k3["permadeath"] and not k3["normal"],
+		"slots: at most %d standard and %d permadeath climber(s); overwriting a slot frees its kind" % [Permadeath.MAX_NORMAL, Permadeath.MAX_PERMADEATH])
+	# Boosts and penalties only for the permadeath character.
+	_check(Permadeath.xp_gain(GameState, 100) == 100 and is_equal_approx(Permadeath.drop_chance(GameState, 0.5), 0.5), "a standard climber gets no permadeath boost")
+	GameState.character["permadeath"] = true
+	var xp0 := GameState.xp
+	var lv0 := GameState.level
+	GameState.add_xp(100)
+	_check(Permadeath.xp_gain(GameState, 100) == 115 and (GameState.xp - xp0 == 115 or GameState.level > lv0), "permadeath: +15% EXP")
+	_check(is_equal_approx(Permadeath.drop_chance(GameState, 0.5), 0.55) and Permadeath.drop_chance(GameState, 1.0) == 1.0, "permadeath: +10% drop chance (capped at 100%)")
+	_check(LifeData.crystal_price("heal_crystal") == 300 and LifeData.crystal_price("teleport_crystal") == 90, "permadeath: Healing Crystals cost double")
+	var dsword := {"id": "pd_sword", "name": "Test Blade", "kind": "weapon", "rank": 0, "atk": 5, "def": 0}
+	Durability.stamp(dsword)
+	GameState.inventory.append(dsword)
+	GameState.equipped["weapon"] = dsword
+	var d0 := Durability.cur(dsword)
+	Durability.wear(GameState, "weapon", 1.0)
+	_check(is_equal_approx(d0 - Durability.cur(dsword), Permadeath.WEAR_MULT), "permadeath: gear wears %.1fx faster" % Permadeath.WEAR_MULT)
+	GameState.equipped["weapon"] = null
+	GameState.inventory.erase(dsword)
+	GameState.materials["heal_crystal"] = 2
+	GameState.materials["teleport_crystal"] = 1
+	Permadeath._last_heal.clear()
+	Permadeath._last_hurt.clear()
+	GameState.hp = 5.0
+	_check(LifeData.use_crystal("heal_crystal") == "", "permadeath: a Healing Crystal works")
+	GameState.hp = 5.0
+	var cd_msg := LifeData.use_crystal("heal_crystal")
+	_check("next Healing Crystal" in cd_msg and int(GameState.materials["heal_crystal"]) == 1, "permadeath: then a %d s cooldown (%s)" % [int(Permadeath.HEAL_CRYSTAL_CD), cd_msg])
+	GameState.take_damage(1.0)
+	_check("in combat" in LifeData.use_crystal("teleport_crystal") and int(GameState.materials["teleport_crystal"]) == 1, "permadeath: no Teleport Crystal in combat")
+	Permadeath._last_hurt.clear()
+	Permadeath._last_heal.clear()
+	GameState.materials["heal_crystal"] = 0
+	GameState.materials["teleport_crystal"] = 0
+	GameState.heal_full()
+	# Server: the fall is decided and written on the record.
+	var rdb = Net.get_realm()
+	var prec: Dictionary = Net._new_record(Net.sanitize_character({"name": "Pd Tester"}), "p".repeat(32), {})
+	prec["permadeath"] = true
+	prec["level"] = 4
+	var ph: String = Net.RealmDBScript.holder_of_record(prec)
+	rdb.claim("pd_test_item", 1, ph, "item")
+	Net.srv_records[7001] = prec
+	var fell: bool = Net.srv_damage(7001, 99999.0)
+	_check(fell and not (prec["fallen"] as Dictionary).is_empty() and float(prec["hp"]) == 0.0 and int(prec["fallen"]["level"]) == 4, "server: a permadeath record's HP at 0 is a fall (%s)" % Permadeath.fall_text(prec.get("fallen", {})))
+	_check(not rdb.is_holder("pd_test_item", ph), "server: the fall frees the climber's realm claims")
+	_check(not Net.srv_damage(7001, 10.0) and float(prec["hp"]) == 0.0, "server: a fallen body takes no more hits and never respawns")
+	var disk := Net.load_record("Pd Tester")
+	_check(not (disk.get("fallen", {}) as Dictionary).is_empty() and "has fallen" in Net.join_refusal(disk), "server: the fall is on disk first, and the name may never join again")
+	var nrec: Dictionary = Net._new_record(Net.sanitize_character({"name": "Std Tester"}), "q".repeat(32), {})
+	Net.srv_records[7002] = nrec
+	Net.srv_damage(7002, 99999.0)
+	_check((nrec.get("fallen", {}) as Dictionary).is_empty() and float(nrec["hp"]) > 0.0 and Net.join_refusal(nrec) == "", "server: a standard climber still respawns")
+	Net.srv_records.erase(7001)
+	Net.srv_records.erase(7002)
+	Net._death_grace.erase(7001)
+	Net._death_grace.erase(7002)
+	DirAccess.remove_absolute(Net.record_path("Pd Tester"))
+	DirAccess.remove_absolute(Net.record_path("Std Tester"))
+	# Monument: the fallen name is marked; permadeath climbers carry Undying.
+	var M = load("res://scripts/monument.gd")
+	var mon = M.new()
+	mon.entries = [M._entry("Ayla", 9, 0, true, true, {}), M._entry("Brann", 4, 0, false, true, prec["fallen"])]
+	var mt: String = mon.text()
+	_check("Ayla  ·  Lv 9  ·  Undying" in mt and "† Brann" in mt, "monument: Undying climbers and struck names (%s)" % mt.replace("\n", " | "))
+	mon.free()
+	# Stalls: permadeath and standard climbers do not trade.
+	var S = preload("res://scripts/life/stalls.gd")
+	const PDIR := "user://realm_test_pd"
+	var srdb = Net.RealmDBScript.open("pd", PDIR)
+	var keep := func(_r) -> bool: return true
+	var seller: Dictionary = Net._new_record(Net.sanitize_character({"name": "Seller"}), "s".repeat(32), {})
+	seller["permadeath"] = true
+	seller["money"] = 500
+	var sword := {"id": "pd_ware", "name": "Ware", "kind": "weapon", "rank": 0, "atk": 4, "def": 0}
+	seller["inventory"].append(sword)
+	var srs = Net.RecordState.new(seller)
+	S.run(srdb, srs, seller, 0, {"op": "rent"}, keep)
+	S.run(srdb, srs, seller, 0, {"op": "stock", "item": "pd_ware", "price": 20}, keep)
+	var buyer: Dictionary = Net._new_record(Net.sanitize_character({"name": "Buyer"}), "b".repeat(32), {})
+	buyer["money"] = 500
+	var bres: Dictionary = S.run(srdb, Net.RecordState.new(buyer), buyer, 0, {"op": "buy", "item": "pd_ware", "price": 20}, keep)
+	_check(bres.has("error") and int(buyer["money"]) == 500, "stalls: a permadeath stall does not sell to standard climbers")
+	buyer["permadeath"] = true
+	bres = S.run(srdb, Net.RecordState.new(buyer), buyer, 0, {"op": "buy", "item": "pd_ware", "price": 20}, keep)
+	_check(not bres.has("error") and int(buyer["money"]) == 480, "stalls: but it sells to permadeath climbers")
+	srdb.close()
+	var dd := DirAccess.open(PDIR)
+	if dd != null:
+		for f in dd.get_files():
+			DirAccess.remove_absolute(PDIR + "/" + f)
+	# Offline fall in a live world: the slot becomes a memorial.
+	GameState.floor = 1
+	GameState.has_position = false
+	GameState.heal_full()
+	SaveSystem.current_slot = 2
+	var w: Node3D = load("res://scenes/world.tscn").instantiate()
+	add_child(w)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	Player.menu_after_fall = false
+	var pl: Player = w.player
+	pl.last_attacker = "Dire Wolf"
+	pl.take_damage(99999.0)
+	await get_tree().process_frame
+	_check(not GameState.fallen.is_empty() and str(GameState.fallen.get("cause", "")) == "Dire Wolf" and pl.is_dying() and not pl.input_enabled, "offline: the permadeath climber falls to the Dire Wolf")
+	var ended := false
+	for h in get_tree().get_nodes_in_group("hud"):  # earlier test worlds may still hold a HUD
+		if h.is_dead_screen() and h._death_label.text == "YOUR JOURNEY HAS ENDED":
+			ended = true
+	_check(ended, "offline: the journey-ended screen, not the respawn countdown")
+	var info := SaveSystem.slot_info(2)
+	_check(info["permadeath"] and not (info["fallen"] as Dictionary).is_empty() and not SaveSystem.load_game(2), "offline: the slot is a memorial and refuses to load")
+	await get_tree().create_timer(Player.DEATH_SHATTER + Player.DEATH_TIME + 0.5).timeout
+	_check(pl.is_dying() and pl.global_position.distance_to(GameState.spawn_point()) > 0.5 or not pl.model.visible, "offline: no respawn after a fall")
+	w.queue_free()
+	await get_tree().process_frame
+	Player.menu_after_fall = true
+	SaveSystem.delete_slot(2)
+	SaveSystem.current_slot = 0
+	GameState.fallen = {}
+	GameState.character = keep_char
+	GameState.character["permadeath"] = false
+	GameState.heal_full()

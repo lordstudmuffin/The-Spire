@@ -240,7 +240,7 @@ func _physics_process(_delta: float) -> void:
 
 
 func hit_player(p: Node3D) -> void:
-	if not Net.online or int(p.get("peer_id")) == multiplayer.get_unique_id() or multiplayer.get_peers().has(int(p.get("peer_id"))):
+	if not Net.online or int(p.get("peer_id")) == multiplayer.get_unique_id() or multiplayer.get_peers().has(int(p.get("peer_id"))) or Net.is_lingering(int(p.get("peer_id"))):
 		p.take_damage(SPIKE_DMG)
 
 

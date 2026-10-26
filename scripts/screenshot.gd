@@ -329,7 +329,7 @@ func _ready() -> void:
 							hfx.hearth_glow(pl)
 						else:
 							hfx.class_art_cast(pl, "Hearthwright" if demo == "hearth_flare" else "Stillblade", demo)
-				"boss_swap", "boss_leap", "plated", "boss_whirl":
+				"boss_swap", "boss_leap", "plated", "boss_whirl", "boss_descend":
 					var bs: Node3D = null
 					for e in scene.get_tree().get_nodes_in_group("enemies"):
 						if (e.get("is_boss") and e.get("brain") != null) or (demo == "plated" and "halberdier" in str(e.get("display_name")).to_lower()):
@@ -350,6 +350,9 @@ func _ready() -> void:
 								sfx.boss_leap(bs, bs.global_position, bs.global_position + Vector3(0, 0, 8), 1.0)
 							"plated":
 								sfx.mob_plated_hit(bs, Vector3(0, 0, -1))
+							"boss_descend":
+								sfx.boss_leap(bs, bs.global_position, bs.global_position + Vector3(0, 0, 6), 1.1)
+								sfx.boss_descend(bs, bs.global_position, bs.global_position + Vector3(0, 0, 6), 1.1)
 							"boss_whirl":
 								sfx.boss_sweep_warning(bs, 4.2, 360.0, 0.9)
 								scene.get_tree().create_timer(0.9, false).timeout.connect(func(): sfx.boss_sweep_impact(bs, 4.2, 360.0))
@@ -417,6 +420,16 @@ func _ready() -> void:
 		# --summit: stand on the Labyrinth summit (lights the arena braziers).
 		if i == 3 and "--summit" in args and scene.has_method("_enter_summit"):
 			scene._enter_summit()
+		# --monument-demo: sample names on the Monument (permadeath, fallen).
+		if i == 36 and "--monument-demo" in args:
+			scene.get_tree().call_group("monument", "set_names", [
+				{"name": "Kirika", "level": 14, "floors": 1, "online": true, "permadeath": true},
+				{"name": "Asterion", "level": 12, "floors": 1, "online": true},
+				{"name": "Lowen", "level": 9, "floors": 0, "online": false},
+				{"name": "Diavel", "level": 9, "floors": 0, "online": false, "permadeath": true, "fallen": {"cause": "Vargash"}},
+				{"name": "Mira", "level": 7, "floors": 0, "online": true, "permadeath": true},
+				{"name": "Coper", "level": 5, "floors": 0, "online": false, "permadeath": true, "fallen": {"cause": "Dire Wolf"}},
+				{"name": "Sasha", "level": 4, "floors": 0, "online": true}])
 		# --stalls-open: every market stall rented and stocked (keepers, wares).
 		if i == 3 and "--stalls-open" in args and scene.get("_stalls") != null:
 			for st in scene._stalls.stalls:
@@ -452,6 +465,10 @@ func _ready() -> void:
 			if scene.get("player"):
 				scene.player.last_xp_lost = 37
 			scene.hud.show_death(8.0, "the Town of First Light")
+		if open_ui == "fallen" and i == 4 and "hud" in scene and scene.hud:
+			Engine.time_scale = 9.0  # let the whole fall sequence play out by the shot
+			FallenScreen.show_in(scene.hud._root, "Kirika", {"t": 1792900000, "cause": "Vargash the Kobold Warlord",
+				"where": "the Labyrinth", "level": 14, "floor": 1}, 9.0)
 		if open_ui == "realm" and i == 28 and "hud" in scene and scene.hud:
 			scene.hud.realm_announce("A player has claimed the unique skill «Starfall Edge»")
 		if demo == "guard" and i == 30 and "player" in scene and scene.player:

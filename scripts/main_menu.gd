@@ -54,6 +54,7 @@ func _ready() -> void:
 		GameState.reset()
 		var name_at := args.find("--name")
 		GameState.character["name"] = args[name_at + 1] if name_at != -1 and name_at + 1 < args.size() else "Bot"
+		GameState.character["permadeath"] = "--permadeath" in args  # soak: a one-life bot
 		if Net.join(args[join_at + 1], Net.port):
 			_enter_world_when_floor_known()
 		return
@@ -428,7 +429,7 @@ func _last_played() -> int:
 	var best_t := -1
 	for s in SaveSystem.SLOT_COUNT:
 		var i := _info(s)
-		if i["exists"] and not i["corrupt"] and int(i["last_played"]) > best_t:
+		if i["exists"] and not i["corrupt"] and (i.get("fallen", {}) as Dictionary).is_empty() and int(i["last_played"]) > best_t:
 			best = s
 			best_t = int(i["last_played"])
 	return best
@@ -577,8 +578,13 @@ func _slot_card(slot: int, mode: String) -> PanelContainer:
 		v.add_child(actions)
 		return card
 
-	v.add_child(UITheme.heading(str(info["name"]), 26, UITheme.PARCH))
+	var fallen: Dictionary = info.get("fallen", {})
+	v.add_child(UITheme.heading(str(info["name"]), 26, UITheme.MUTED if not fallen.is_empty() else UITheme.PARCH))
 	v.add_child(UITheme.label("%s  ·  Lv %d" % [info["class"], int(info["level"])], 15, UITheme.CYAN, true))
+	if bool(info.get("permadeath", false)):
+		var pdl := UITheme.label("FALLEN  ·  " + Permadeath.fall_text(fallen) if not fallen.is_empty() else "PERMADEATH  ·  one life", 12, UITheme.ROSE, true)
+		pdl.autowrap_mode = TextServer.AUTOWRAP_WORD
+		v.add_child(pdl)
 	var grid := GridContainer.new()
 	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 12)
@@ -595,7 +601,8 @@ func _slot_card(slot: int, mode: String) -> PanelContainer:
 	v.add_child(filler3)
 	match mode:
 		"play":
-			var play := UITheme.make_button("Play", "primary")
+			var play := UITheme.make_button("Play" if fallen.is_empty() else "Fallen", "primary" if fallen.is_empty() else "normal")
+			play.disabled = not fallen.is_empty()
 			play.pressed.connect(func(): _play_slot(slot))
 			actions.add_child(play)
 			var two := HBoxContainer.new()
@@ -608,7 +615,7 @@ func _slot_card(slot: int, mode: String) -> PanelContainer:
 			_delete_row(two, slot, str(info["name"]))
 		"pick":
 			var pick := UITheme.make_button("Select" if slot != _online_slot else "Selected", "primary" if slot != _online_slot else "normal")
-			pick.disabled = slot == _online_slot
+			pick.disabled = slot == _online_slot or not fallen.is_empty()
 			pick.pressed.connect(func():
 				_online_slot = slot
 				_refresh_online_label()

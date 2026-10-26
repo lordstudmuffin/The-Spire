@@ -17,7 +17,10 @@ const READ_RANGE := 4.0
 const SHOWN := 10            # lines in the reading panel
 
 var world: Node3D
-var entries: Array = []      # [{name, level, floors, online}]
+var entries: Array = []      # [{name, level, floors, online, permadeath, fallen, fall_text}]
+## permadeath: a one-life climber; fallen: false, or its fall info once it fell
+## (MonumentArt strikes the name through, as on Aincrad's Monument of Life);
+## fall_text: Permadeath.fall_text() for the reading panel.
 var _known := {}             # server: lower name -> entry
 var _t := 0.0
 
@@ -72,7 +75,13 @@ func _scan_disk() -> void:
 
 func _note(rec: Dictionary, online: bool) -> void:
 	var nm := str(rec.get("name", ""))
-	_known[nm.to_lower()] = {"name": nm, "level": int(rec.get("level", 1)), "floors": int(rec.get("floors_cleared", 0)), "online": online}
+	_known[nm.to_lower()] = _entry(nm, int(rec.get("level", 1)), int(rec.get("floors_cleared", 0)), online, Permadeath.rec_on(rec), rec.get("fallen", {}))
+
+
+static func _entry(nm: String, level: int, floors: int, online: bool, pd: bool, f) -> Dictionary:
+	var dead: bool = f is Dictionary and not f.is_empty()
+	return {"name": nm, "level": level, "floors": floors, "online": online and not dead, "permadeath": pd,
+		"fallen": (f as Dictionary).duplicate() if dead else false, "fall_text": Permadeath.fall_text(f) if dead else ""}
 
 
 ## Rebuilds `entries` and hands them to the monument art.
@@ -84,8 +93,8 @@ func refresh() -> void:
 			_note(Net.srv_records[peer], true)
 		entries = sorted(_known.values())
 	elif not Net.online:
-		entries = [{"name": str(GameState.character.get("name", "Nameless")), "level": GameState.level,
-			"floors": GameState.floors_cleared, "online": true}]
+		entries = [_entry(str(GameState.character.get("name", "Nameless")), GameState.level, GameState.floors_cleared, true,
+			Permadeath.is_on(GameState), GameState.fallen)]
 	_show()
 
 
@@ -108,8 +117,9 @@ func net_names(list: Array) -> void:
 	var clean: Array = []
 	for e in list.slice(0, MAX_ENTRIES):
 		if e is Dictionary:
-			clean.append({"name": str(e.get("name", "")).left(24), "level": int(e.get("level", 1)),
-				"floors": int(e.get("floors", 0)), "online": bool(e.get("online", false))})
+			var f = e.get("fallen", false)
+			clean.append(_entry(str(e.get("name", "")).left(24), int(e.get("level", 1)), int(e.get("floors", 0)),
+				bool(e.get("online", false)), bool(e.get("permadeath", false)), f if f is Dictionary else {}))
 	entries = clean
 	_show()
 
@@ -134,7 +144,11 @@ func text() -> String:
 	var lines: Array = []
 	for i in mini(entries.size(), SHOWN):
 		var e: Dictionary = entries[i]
-		lines.append("%d. %s  ·  Lv %d%s%s" % [i + 1, e["name"], int(e["level"]),
+		var fallen := str(e.get("fall_text", ""))
+		if fallen != "":
+			lines.append("%d. † %s  ·  %s" % [i + 1, e["name"], fallen])
+			continue
+		lines.append("%d. %s  ·  Lv %d%s%s%s" % [i + 1, e["name"], int(e["level"]), "  ·  Undying" if bool(e.get("permadeath", false)) else "",
 			"  ·  Floor 1 cleared" if int(e["floors"]) >= 1 else "", "  (in the realm)" if bool(e["online"]) else ""])
 	if entries.size() > SHOWN:
 		lines.append("...and %d more carved below." % (entries.size() - SHOWN))

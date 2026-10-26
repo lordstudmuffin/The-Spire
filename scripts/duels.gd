@@ -223,6 +223,14 @@ func srv_invite(from: int, target_name: String, mode := DEFAULT_MODE) -> Diction
 	mode = mode.to_lower()
 	if not MODES.has(mode):
 		return _err("Unknown duel mode. Modes: first, half, full.")
+	# Permadeath climbers fight First Strike only (either side).
+	var tpeer := -1
+	for p in Net.srv_records:
+		if str(Net.srv_records[p].get("name", "")).to_lower() == target_name.to_lower():
+			tpeer = p
+	for p in [from, tpeer]:
+		if Net.srv_records.has(p) and Permadeath.rec_on(Net.srv_records[p]) and mode != "first":
+			mode = "first"
 	var target := Net.srv_peer_by_name(target_name)
 	if target == 0 and not Net.online:
 		# Offline harness: find a player node by name.

@@ -105,6 +105,8 @@ var _knock := Vector3.ZERO
 var _mesh: MeshInstance3D
 var _label: Label3D
 var _plate: MobPlate
+## A named field elite (it carries a Last Attack bonus): the plate shows it in gold.
+var elite := false
 var _dead := false
 var _last_hitter := 1
 var _shown_hp := -1.0
@@ -157,6 +159,7 @@ static func from_data(d: Dictionary) -> Enemy:
 	e.rush = bool(d.get("rush", false))
 	e.pack = str(d.get("pack", ""))
 	e.armor = clampf(float(d.get("armor", 1.0)), 0.1, 1.0)
+	e.elite = d.get("la") is Dictionary and not bool(d.get("boss", false))  # named elite: gold plate
 	e.lure = bool(d.get("lure", false))
 	e.respawn_time = clampf(float(d.get("respawn", 8.0)), 1.0, 3600.0)
 	var md = d.get("model", {})
@@ -212,6 +215,8 @@ func _update_label() -> void:
 	_label.text = "%s  Lv%d\n%d / %d" % [display_name, mob_level, ceil(hp), max_hp]
 	if _plate:
 		_plate.set_info(display_name, mob_level, mob_level - GameState.level, is_boss)
+		if elite:
+			_plate.set_elite()
 		var brain := get_node_or_null("BossBrain")
 		if brain and brain.has_method("bar_count") and brain.bar_count() > 1:
 			_plate.set_hp(brain.bar_fraction())
@@ -587,7 +592,8 @@ func _nearest_player() -> Node3D:
 func _damage_player(p: Node3D, amount: float) -> void:
 	# Offline / host: the local GameState. Server, remote player: the record
 	# (Player.take_damage -> Net.srv_damage), which then informs the owner.
-	if not Net.online or p.peer_id == multiplayer.get_unique_id() or multiplayer.get_peers().has(p.peer_id):
+	if not Net.online or p.peer_id == multiplayer.get_unique_id() or multiplayer.get_peers().has(p.peer_id) or Net.is_lingering(p.peer_id):
+		p.set("last_attacker", display_name)
 		p.take_damage(amount)
 
 
@@ -1089,7 +1095,7 @@ func _grant_share(xp: int, money: int, killer: bool, party := 1) -> void:
 	if not killer or Net.remote_client():
 		return  # online, drops and quest credit are rolled on the server record (net_apply "loot")
 	for mat in drops:
-		if randf() < drops[mat]:
+		if randf() < Permadeath.drop_chance(GameState, float(drops[mat])):
 			GameState.add_material(mat)
 			if results:
 				results.note_item(mat)

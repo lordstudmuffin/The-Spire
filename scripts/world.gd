@@ -141,6 +141,11 @@ func _ready() -> void:
 		if multiplayer.is_server():
 			multiplayer.peer_connected.connect(_on_peer_joined)
 			multiplayer.peer_disconnected.connect(_on_peer_left)
+			Net.linger_ended.connect(func(peer: int):
+				Enemy.forget_peer(peer)
+				if is_instance_valid(_players) and _players.has_node(str(peer)):
+					_players.get_node(str(peer)).queue_free()
+					print("Lingering body left: peer %d" % peer))
 			# The Guardian wakes when the server sees a player on the summit
 			# (a client's request_boss can beat its teleported position here).
 			var st := Timer.new()
@@ -221,9 +226,17 @@ func _spawn_player_for(peer: int, character: Dictionary) -> void:
 
 func _on_peer_left(peer: int) -> void:
 	_last_chat_ms.erase(peer)
-	Enemy.forget_peer(peer)
 	if _duels != null:
 		_duels.on_peer_left(peer)
+	if Net.is_lingering(peer):
+		# Permadeath body left mid-fight: it stays, still and unguarded,
+		# until Net.linger_ended (Permadeath.LINGER_SECS).
+		var body := _players.get_node_or_null(str(peer))
+		if body:
+			body.set("blocking", false)
+			body.set("lingering", true)
+		return
+	Enemy.forget_peer(peer)
 	if _players.has_node(str(peer)):
 		_players.get_node(str(peer)).queue_free()
 		print("Player left: peer %d" % peer)
@@ -1219,6 +1232,9 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 		"respawn":
 			if player:
 				player.die(int(res.get("xp_lost", 0)))
+		"fallen":
+			if player and res.get("fallen") is Dictionary:
+				player.fall(res["fallen"])
 		"hp":
 			if player and float(res.get("hp", 0.0)) < float(res.get("prev", 0.0)):
 				var lost: float = float(res["prev"]) - float(res["hp"])
@@ -1670,9 +1686,11 @@ func _grant_last_attack(killer: int, la: Dictionary = {}, foe := "") -> Dictiona
 		if res.get("ok", false) and not res.get("already", false):
 			data["item"] = str(LimitedContent.ITEMS[lid]["name"])
 	if data["item"] == "":
-		data["xp"] = int(la.get("xp", 0))
-		data["col"] = int(la.get("col", 0))
+		var mult := 1.0 + (Permadeath.LA_BONUS if Permadeath.is_on(gs) else 0.0)
+		data["xp"] = int(round(int(la.get("xp", 0)) * mult))
+		data["col"] = int(round(int(la.get("col", 0)) * mult))
 		gs.add_xp(data["xp"])
+		data["xp"] = Permadeath.xp_gain(gs, data["xp"])  # what add_xp really paid
 		gs.add_money(data["col"])
 		var mats: Dictionary = la.get("mats", {})
 		for m in mats:

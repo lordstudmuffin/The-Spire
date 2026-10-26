@@ -815,6 +815,8 @@ func net_event(kind: String, data: Dictionary) -> void:
 						fx.call("boss_slam_warning", e, pos, float(data.get("radius", 5.0)), secs)
 					if fx and bool(data.get("leap", false)) and fx.has_method("boss_leap"):
 						fx.call("boss_leap", e, data.get("from", e.global_position), pos, secs)
+						if bool(data.get("descend", false)) and fx.has_method("boss_descend"):
+							fx.call("boss_descend", e, data.get("from", e.global_position), pos, secs)
 					elif fx:
 						fx.ring(pos + Vector3(0, 0.1, 0), Color(1.0, 0.35, 0.15), float(data.get("radius", 5.0)) * 2.0, secs)
 		"charge":

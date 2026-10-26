@@ -2027,6 +2027,7 @@ func show_death(seconds: float, where: String) -> void:
 		_death_cost.add_theme_font_override("font", UITheme.spaced(UITheme.ui_font(), 3))
 		v.add_child(_death_cost)
 		UITheme.death_screen(_death_overlay, _death_label, _death_sub)
+	_death_label.text = "YOU ARE DEAD"
 	_death_overlay.visible = true
 	_death_overlay.color.a = 0.0
 	_death_label.modulate.a = 0.0
@@ -2046,6 +2047,15 @@ func show_death(seconds: float, where: String) -> void:
 	_death_cost.modulate.a = 0.0
 	_death_tw.parallel().tween_property(_death_cost, "modulate:a", 1.0, 0.5).set_delay(1.3)
 	close_screens()
+
+
+## Permadeath: the last death screen (Player.fall). The countdown returns
+## to the title, not to town.
+func show_fallen(info: Dictionary, seconds: float) -> void:
+	show_death(seconds, "the title")  # under the FallenScreen: input stays blocked, tests read the label
+	_death_label.text = "YOUR JOURNEY HAS ENDED"
+	_death_cost.text = Permadeath.fall_text(info).to_upper() + "     ·     NAME STRUCK ON THE MONUMENT"
+	FallenScreen.show_in(_root, str(GameState.character.get("name", "")), info, seconds)
 
 
 func hide_death() -> void:

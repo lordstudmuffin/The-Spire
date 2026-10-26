@@ -32,6 +32,13 @@ signal skill_used(index: int, cooldown: float)
 
 ## EXP the last death cost (shown after the respawn).
 var last_xp_lost := 0
+## Display name of the last monster that hit this player (Enemy._damage_player);
+## a permadeath fall records it as the cause.
+var last_attacker := ""
+## Server: a permadeath body whose owner disconnected mid-fight (Net.srv_lingering).
+var lingering := false
+## Off in the smoke test: a fall stays in the world instead of leaving for the title.
+static var menu_after_fall := true
 ## Peer that owns this player (1 offline or for the host).
 var peer_id := 1
 ## Replicated look so other players see your character.
@@ -1272,6 +1279,12 @@ var _dying := false
 func die(xp_lost := -1) -> void:
 	if _dying:
 		return
+	if is_local and Permadeath.is_on(GameState):
+		if Net.remote_client():
+			return  # the server decides; its "fallen" event calls fall()
+		var info := Permadeath.make_fall(GameState, last_attacker, str(GameState.FLOOR_NAMES.get(GameState.floor, "Aincrad")))
+		fall(info)
+		return
 	_dying = true
 	if xp_lost < 0 and is_local and not Net.remote_client():
 		xp_lost = Net.death_penalty(GameState)
@@ -1311,6 +1324,49 @@ func die(xp_lost := -1) -> void:
 		hud.toast("Lost %d EXP" % last_xp_lost, "Your gear took a beating too  ·  repair at an anvil", "Death", UITheme.ROSE)
 	if fx and is_instance_valid(fx):
 		fx.sparkle(global_position + Vector3(0, 1.0, 0), Color(0.7, 0.95, 1.0))
+
+
+## Permadeath: the last death. The fall is written first (offline: into the
+## slot, and the realm lets go of the character), then the shatter and the
+## "journey has ended" screen, then back to the title. Online the server
+## already wrote it and sends "fallen"; it drops the connection after.
+func fall(info: Dictionary) -> void:
+	if _dying and not GameState.fallen.is_empty():
+		return
+	_dying = true
+	input_enabled = false
+	velocity = Vector3.ZERO
+	GameState.fallen = info.duplicate()
+	GameState.hp = 0.0
+	if not Net.remote_client():
+		Permadeath.release(Net.get_realm(), Net.local_holder())
+		GameState.unique_skill = ""
+		Net.srv_announce("%s has fallen. Their name is struck on the Monument of Climbers." % str(GameState.character.get("name", "Someone")))
+	SaveSystem.mark_fallen(info)
+	var fx := VFX.get_for(self)
+	var tint := Color(1.0, 0.45, 0.4)
+	if fx and fx.has_method("shatter"):
+		fx.call("shatter", null, model, [], tint, false, 0.0)
+	elif fx:
+		fx.flash(global_position + Vector3(0, 1.0, 0), tint, 1.6)
+	Audio.play("player_death")
+	InputSetup.rumble(1.0, 1.0, 0.8)
+	shake(0.5)
+	var hud := get_tree().get_first_node_in_group("hud")
+	if hud and hud.has_method("show_fallen"):
+		hud.show_fallen(info, Permadeath.FALL_SCREEN)
+	elif hud and hud.has_method("show_death"):
+		hud.show_death(Permadeath.FALL_SCREEN, Permadeath.fall_text(info))
+	input_enabled = false
+	await get_tree().create_timer(DEATH_SHATTER, true, false, true).timeout
+	if not is_instance_valid(self) or not is_inside_tree():
+		return
+	model.visible = false
+	await get_tree().create_timer(maxf(Permadeath.FALL_SCREEN - DEATH_SHATTER, 1.0), true, false, true).timeout
+	if not is_instance_valid(self) or not is_inside_tree() or not menu_after_fall:
+		return
+	Net.leave()
+	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
 
 
 func is_dying() -> bool:

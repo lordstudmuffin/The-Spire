@@ -1177,6 +1177,32 @@ func boss_leap(enemy: Node3D, from: Vector3, to: Vector3, secs: float) -> void:
 			m.position = base)
 
 
+## The Guardian's opening leap off its throne (telegraph "descend"): a roar
+## that rolls out as a shock ring, dust and grit shaken off the dais, a red
+## flash in the eyes' place, and a heavier landing (dust, shake).
+func boss_descend(enemy: Node3D, from: Vector3, to: Vector3, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var head := Vector3(box.get_center().x, box.end.y - box.size.y * 0.12, box.get_center().z)
+	Audio.play("boss_roar", head, 0.04, 2.0, 0.85)
+	_shock_ring(head, DANGER_COLOR.darkened(0.2), box.size.x * 3.0, 0.5)
+	_glint(head, DANGER_COLOR, 0.9, 0.45, true)
+	flash_light(head, DANGER_COLOR, 4.0)
+	var dais := Vector3(from.x, _ground_y(from), from.z)
+	dust_ring(dais, 2.6)
+	_fire(dais + Vector3(0, 0.6, 0), "dirt_02", false, Color(0.5, 0.45, 0.42, 1.0), 0.9, 0.8, 3.0, 5.0, Vector3.UP, 50.0, -12.0, 0.2, 0.45, 1.6, false)
+	var me := get_tree().get_first_node_in_group("player") as Node3D
+	if me and me.has_method("shake"):
+		me.call("shake", 0.2)
+	get_tree().create_timer(secs, false).timeout.connect(func():
+		var g := Vector3(to.x, _ground_y(to), to.z)
+		dust_ring(g, 5.0)
+		puff(g, 3.0)
+		if me and is_instance_valid(me) and me.has_method("shake"):
+			me.call("shake", 0.45))
+
+
 ## A blade turned by plate (armoured halberdiers before they are staggered):
 ## white-gold sparks off the armour and a short bright flash.
 func mob_plated_hit(enemy: Node3D, from_dir: Vector3) -> void:

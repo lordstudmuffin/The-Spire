@@ -35,6 +35,12 @@ var _preview_class: Label
 ## the title screen instead of entering the world.
 var _edit := false
 var _edit_slot := -1
+## Life: "Standard" or "Permadeath" (Permadeath.slot_kinds decides what the
+## slot may be: two standard climbers and one permadeath per account).
+var _life_chips := {}
+var _life_note: Label
+var _begin_btn: Button
+var _pd_confirm := false
 
 
 func _ready() -> void:
@@ -118,6 +124,25 @@ func _ready() -> void:
 	ident.add_child(grid)
 	_select_class(GameState.character["origin"])
 
+	# Life card: one life or the usual climb (new characters only).
+	if not _edit:
+		var life := UITheme.make_panel(form, "Life")
+		var kinds := SaveSystem.kinds_for(SaveSystem.current_slot)
+		var lrow := HBoxContainer.new()
+		lrow.add_theme_constant_override("separation", 8)
+		for k in [["standard", "Standard"], ["permadeath", "Permadeath  ·  one life"]]:
+			var lb := UITheme.make_button(k[1], "chip")
+			var key: String = k[0]
+			lb.disabled = not bool(kinds["normal" if key == "standard" else "permadeath"])
+			lb.pressed.connect(func(): _select_life(key))
+			lrow.add_child(lb)
+			_life_chips[key] = lb
+		life.add_child(lrow)
+		_life_note = UITheme.label("", 13, UITheme.PARCH)
+		_life_note.autowrap_mode = TextServer.AUTOWRAP_WORD
+		life.add_child(_life_note)
+		_select_life("standard" if bool(kinds["normal"]) else "permadeath")
+
 	# Appearance card.
 	var look := UITheme.make_panel(form, "Appearance")
 	look.add_child(_field_label("Body"))
@@ -192,6 +217,7 @@ func _ready() -> void:
 
 	# Big call to action under the scroll area.
 	var begin := UITheme.make_button("Save look" if _edit else "Enter the Spire", "primary")
+	_begin_btn = begin
 	begin.custom_minimum_size = Vector2(0, 56)
 	begin.add_theme_font_size_override("font_size", 21)
 	begin.pressed.connect(_begin)
@@ -560,6 +586,30 @@ func _unhandled_input(event: InputEvent) -> void:
 	get_viewport().set_input_as_handled()
 
 
+func _select_life(key: String) -> void:
+	var pd := key == "permadeath"
+	GameState.character["permadeath"] = pd
+	_pd_confirm = false
+	if _begin_btn:
+		_begin_btn.text = "Enter the Spire"
+	for k in _life_chips:
+		UITheme.set_chip(_life_chips[k], k == key)
+	if _life_note == null:
+		return
+	var kinds := SaveSystem.kinds_for(SaveSystem.current_slot)
+	if pd:
+		_life_note.text = ("One life, as in Aincrad. If this climber dies, they are gone for good: the name is struck on the Monument of Climbers and the slot becomes a memorial.\n"
+			+ "Boosts: +%d%% EXP, +%d%% drop chance, +%d%% Last Attack bonus rewards, the Undying title and the permadeath column on the Monument.\n"
+			+ "Penalties: no revive, Healing Crystals cost %dx with a %d s cooldown, no Teleport Crystal in combat, gear wears %.1fx faster, stalls trade only with other permadeath climbers, duels are First Strike only. Leaving mid-fight does not save you: the body stays %d s.") % [
+			int(Permadeath.XP_BONUS * 100), int(Permadeath.DROP_BONUS * 100), int(Permadeath.LA_BONUS * 100), Permadeath.CRYSTAL_PRICE_MULT,
+			int(Permadeath.HEAL_CRYSTAL_CD), Permadeath.WEAR_MULT, int(Permadeath.LINGER_SECS)]
+		_life_note.add_theme_color_override("font_color", UITheme.ROSE)
+	else:
+		_life_note.text = "Death costs some EXP and gear durability, and you return to town. Up to %d standard climbers per account%s." % [
+			Permadeath.MAX_NORMAL, "" if bool(kinds["permadeath"]) else "; your permadeath slot is taken"]
+		_life_note.add_theme_color_override("font_color", UITheme.PARCH)
+
+
 func _begin() -> void:
 	if _edit:
 		SaveSystem.save_game(_edit_slot)
@@ -569,6 +619,11 @@ func _begin() -> void:
 		_name_edit.placeholder_text = "Please enter a name first"
 		_name_hint.show()
 		_name_edit.grab_focus()
+		return
+	if Permadeath.is_on(GameState) and not _pd_confirm:
+		_pd_confirm = true
+		_begin_btn.text = "Begin with one life?"
+		Audio.play("ui_error")
 		return
 	for s in _bonus:
 		GameState.stats[s] += _bonus[s]

@@ -83,6 +83,10 @@ void fragment() {
 	vec3 g = mix(grass_a.rgb, grass_b.rgb, smoothstep(0.32, 0.68, n));
 	g = mix(g, g * 1.10, speck * 0.6);
 	g = mix(g, g * 0.92, step(0.72, n2) * 0.5);
+	// Broad meadow patches: sun-dried gold and deep lush green, on the same
+	// pattern as the grass blades (grass.gdshader) so tufts match the soil.
+	float pa = sin(p.x * 0.11 + sin(p.y * 0.07) * 2.0) * sin(p.y * 0.12 + sin(p.x * 0.06) * 1.7);
+	g *= mix(vec3(1.0), pa > 0.0 ? vec3(1.12, 1.04, 0.70) : vec3(0.80, 0.90, 0.82), smoothstep(0.1, 0.7, abs(pa)) * 0.6);
 
 	// Roads (segments) -> sand with a noisy edge.
 	float road = seg(p, vec2(0.0, -7.0), vec2(0.0, -57.0));

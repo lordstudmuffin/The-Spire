@@ -206,22 +206,42 @@ func _on_auth(peer: int, data: PackedByteArray) -> void:
 		return
 	for other in srv_records:
 		if srv_records[other]["name"].to_lower() == character["name"].to_lower():
-			_reject(peer, "%s is already online here." % character["name"])
+			if srv_lingering.has(other):
+				_reject(peer, "%s is still in the fight they left. Try again in %d s." % [character["name"],
+					maxi(int(ceil((int(srv_lingering[other]) - Time.get_ticks_msec()) / 1000.0)), 1)])
+			else:
+				_reject(peer, "%s is already online here." % character["name"])
 			return
 	var rec := load_record(character["name"])
 	if rec.is_empty():
 		rec = _new_record(character, token, v.get("stats", {}))
-		print("[db] new character '%s' (peer %d)" % [character["name"], peer])
+		rec["permadeath"] = bool(raw_char.get("permadeath", false)) if raw_char is Dictionary else false
+		print("[db] new %scharacter '%s' (peer %d)" % ["permadeath " if rec["permadeath"] else "", character["name"], peer])
 	elif rec.get("token", "") != token:
 		print("[db] token mismatch for '%s' from peer %d" % [character["name"], peer])
 		_reject(peer, "The name '%s' belongs to another player on this server." % character["name"])
 		return
+	var refusal := join_refusal(rec)
+	if refusal != "":
+		_reject(peer, refusal)
+		return
+	# The record's flag is the truth; the creator's choice only counts once.
+	character["permadeath"] = bool(rec.get("permadeath", false))
 	rec["character"] = character
 	rec["last_peer"] = peer
 	_realm_check_record(rec)
 	pending_characters[peer] = character
 	_pending_records[peer] = rec
 	multiplayer.complete_auth(peer)
+
+
+## Why a stored record may not join ("" when it may): a fallen permadeath
+## climber never comes back.
+static func join_refusal(rec: Dictionary) -> String:
+	var f = rec.get("fallen", {})
+	if f is Dictionary and not f.is_empty():
+		return "%s has fallen. %s." % [str(rec.get("name", "This climber")), Permadeath.fall_text(f)]
+	return ""
 
 
 func _reject(peer: int, reason: String) -> void:
@@ -367,6 +387,7 @@ static func record_defaults() -> Dictionary:
 		"fish_caught": 0, "home_owned": false, "home_storage": [], "home_furniture": ["", "", "", "", "", ""],
 		"decor_owned": {}, "buffs": {}, "hp": 100.0, "title": "", "visited": [], "chests": {},
 		"unique_skill": "", "hidden": {}, "duels": {"won": 0, "lost": 0}, "sword_prof": 0,
+		"permadeath": false, "fallen": {},
 	}
 
 
@@ -482,6 +503,14 @@ func _on_peer_disconnected(peer: int) -> void:
 	pending_characters.erase(peer)
 	_pending_records.erase(peer)
 	_last_snapshot_ms.erase(peer)
+	if _srv_should_linger(peer):
+		# A permadeath climber left mid-fight: the body stays (record, node
+		# and all) for Permadeath.LINGER_SECS, and a death there counts.
+		srv_lingering[peer] = Time.get_ticks_msec() + int(Permadeath.LINGER_SECS * 1000.0)
+		_srv_leave_party(peer, "disconnected from")
+		srv_invites.erase(peer)
+		print("[permadeath] '%s' left in combat; the body stays for %d s" % [srv_records[peer]["name"], int(Permadeath.LINGER_SECS)])
+		return
 	if online and multiplayer.is_server():
 		_srv_leave_party(peer, "disconnected from")
 		srv_invites.erase(peer)
@@ -496,6 +525,65 @@ func _on_peer_disconnected(peer: int) -> void:
 		if realm != null:
 			realm.touch(RealmDBScript.holder_of_record(rec))
 		print("[db] saved '%s' Lv %d on disconnect" % [rec["name"], rec["level"]])
+
+
+## Server: permadeath climbers who disconnected in combat, peer -> msec the
+## body leaves. world.gd keeps their player node while they linger.
+var srv_lingering := {}
+var _last_hurt_ms := {}  # peer -> msec of the last hit the server applied
+signal linger_ended(peer: int)
+
+
+func _srv_should_linger(peer: int) -> bool:
+	if not online or not multiplayer.is_server() or not srv_records.has(peer):
+		return false
+	var rec: Dictionary = srv_records[peer]
+	if not Permadeath.rec_on(rec) or not (rec.get("fallen", {}) as Dictionary).is_empty():
+		return false
+	return Time.get_ticks_msec() - int(_last_hurt_ms.get(peer, -1000000)) < int(Permadeath.COMBAT_SECS * 1000.0)
+
+
+func is_lingering(peer: int) -> bool:
+	return srv_lingering.has(peer)
+
+
+## Server: the lingering body survived (or fell): save and let it go.
+func _srv_end_linger(peer: int) -> void:
+	if not srv_lingering.has(peer):
+		return
+	srv_lingering.erase(peer)
+	_last_hurt_ms.erase(peer)
+	_death_grace.erase(peer)
+	srv_hp.erase(peer)
+	if srv_records.has(peer):
+		var rec: Dictionary = srv_records[peer]
+		srv_records.erase(peer)
+		save_record(rec)
+		if realm != null:
+			realm.touch(RealmDBScript.holder_of_record(rec))
+		print("[permadeath] '%s' left the world (%s)" % [rec["name"], "fallen" if not (rec.get("fallen", {}) as Dictionary).is_empty() else "survived"])
+	linger_ended.emit(peer)
+
+
+## Server: a permadeath record's HP reached 0. The fall is written and
+## saved before anyone is told; the realm and the guild let go of it.
+func _srv_fall(peer: int, rec: Dictionary, cause: String) -> void:
+	var rs = RecordState.new(rec)
+	rec["fallen"] = Permadeath.make_fall(rs, cause, str(GameState.FLOOR_NAMES.get(GameState.floor, "Aincrad")))
+	rec["hp"] = 0.0
+	rec["unique_skill"] = ""
+	_death_grace[peer] = Time.get_ticks_msec() + 3600000
+	var freed: Array = Permadeath.release(get_realm(), RealmDBScript.holder_of_record(rec))
+	save_record(rec)
+	print("[permadeath] '%s' has fallen: %s (released %d claim(s))" % [rec["name"], Permadeath.fall_text(rec["fallen"]), freed.size()])
+	srv_announce("%s has fallen. Their name is struck on the Monument of Climbers." % rec["name"])
+	if srv_lingering.has(peer):
+		_srv_end_linger(peer)
+		return
+	_srv_reply(peer, "fallen", {"fallen": rec["fallen"]})
+	get_tree().create_timer(Permadeath.FALL_SCREEN + 2.0, false).timeout.connect(func():
+		if srv_records.has(peer) and srv_records[peer] == rec:
+			kick(peer, "Your journey has ended.", true))
 
 
 func save_all_records() -> void:
@@ -843,13 +931,15 @@ func srv_apply_snapshot(peer: int, snap: Dictionary) -> void:
 
 
 ## Server: drop a peer with a reason it can show.
-func kick(peer: int, reason: String) -> void:
+func kick(peer: int, reason: String, force := false) -> void:
 	if not online or not multiplayer.is_server() or not multiplayer.get_peers().has(peer):
 		return
 	var who: String = srv_records[peer]["name"] if srv_records.has(peer) else "?"
-	print("[anticheat] kicked peer %d (%s): %s" % [peer, who, reason])
+	print("[%s] kicked peer %d (%s): %s" % ["net" if force else "anticheat", peer, who, reason])
 	net_kicked.rpc_id(peer, reason)
-	multiplayer.multiplayer_peer.disconnect_peer(peer)
+	# force: drop now (a client that already went silent, e.g. a fallen one
+	# that crashed out, would otherwise be sent to until ENet times it out).
+	multiplayer.multiplayer_peer.disconnect_peer(peer, force)
 	# The node lives until peer_disconnected; stop mobs and checks from
 	# sending to a peer that is already going away.
 	for p in get_tree().get_nodes_in_group("players"):
@@ -928,6 +1018,7 @@ func net_adopt_snapshot(snap: Dictionary) -> void:
 	# Looks come from our own creator; the record only sanitized them.
 	GameState.character.merge(keep_char, true)
 	GameState.character["name"] = str(snap.get("character", {}).get("name", keep_char.get("name", "")))
+	GameState.character["permadeath"] = bool(snap.get("permadeath", false))
 	GameState.has_position = false
 	GameState.heal_full()
 	GameState.stats_changed.emit()
@@ -1324,9 +1415,10 @@ func srv_reward_kill(killer: int, xp: int, money: int, pos: Vector3, drops: Dict
 	# with no record rolls its own drops (Enemy._grant_share).
 	if srv_records.has(killer):
 		var takers: Array = sharers.filter(func(m): return srv_records.has(m))
+		var krs = RecordState.new(srv_records[killer])
 		var got := {}
 		for mat in drops:
-			if GameState.MATERIAL_NAMES.has(mat) and randf() < float(drops[mat]):
+			if GameState.MATERIAL_NAMES.has(mat) and randf() < Permadeath.drop_chance(krs, float(drops[mat])):
 				var to: int = takers[randi() % takers.size()]
 				if not got.has(to):
 					got[to] = {}
@@ -1973,8 +2065,16 @@ func srv_damage(peer: int, amount: float) -> bool:
 	var rs = RecordState.new(rec)
 	var prev := float(rec["hp"])
 	var died: bool = rs.take_damage(clampf(amount, 0.0, 1000.0))
+	if Permadeath.rec_on(rec) and Time.get_ticks_msec() - int(_last_hurt_ms.get(peer, -1000000)) > int(Permadeath.COMBAT_SECS * 1000.0):
+		print("[permadeath] '%s' is in combat" % rec["name"])
+	_last_hurt_ms[peer] = Time.get_ticks_msec()
+	Permadeath.note_hurt(rs)
 	srv_wear(peer, "armor", Durability.WEAR_HIT)
 	HiddenClasses.note(rs, "hurt")  # a hit ends a clean parry streak
+	if died and Permadeath.rec_on(rec):
+		var node := _srv_player_node(peer)
+		_srv_fall(peer, rec, str(node.get("last_attacker")) if node != null and node.get("last_attacker") != null else "")
+		return true
 	if died:
 		var lost := death_penalty(rs)
 		rs._sync_weapon()
@@ -1993,6 +2093,12 @@ func net_hp(hp: float, max_hp: float, prev: float = -1.0) -> void:
 	if not _from_server() or multiplayer.is_server():
 		return
 	var before := GameState.hp
+	if hp < before and "--leave-in-combat" in OS.get_cmdline_user_args():
+		# Soak hook: a permadeath bot that walks out the moment it is hit.
+		print("[bot] hit; leaving mid-fight")
+		leave()
+		get_tree().quit()
+		return
 	GameState.hp = clampf(hp, 0.0, maxf(GameState.max_hp(), max_hp))
 	GameState.health_changed.emit(GameState.hp, GameState.max_hp())
 	action_applied.emit("hp", {"hp": GameState.hp, "max": max_hp, "prev": prev if prev >= 0.0 else before})
@@ -2003,6 +2109,9 @@ func net_hp(hp: float, max_hp: float, prev: float = -1.0) -> void:
 func _on_life_tick() -> void:
 	if not online or not multiplayer.is_server():
 		return
+	for peer in srv_lingering.keys():
+		if Time.get_ticks_msec() >= int(srv_lingering[peer]):
+			_srv_end_linger(peer)
 	var online_holders: Array = []
 	for peer in srv_records:
 		var rec: Dictionary = srv_records[peer]

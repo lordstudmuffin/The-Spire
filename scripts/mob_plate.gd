@@ -28,6 +28,7 @@ var _built := false
 static var _bar_shader: Shader
 static var _pips_shader: Shader
 var _pips: MeshInstance3D
+var _halo: MeshInstance3D
 var _pips_mat: ShaderMaterial
 static var _cursor_mesh: ArrayMesh
 
@@ -137,6 +138,35 @@ func set_info(display_name: String, level: int, threat_gap := 0, boss := false) 
 		scale = Vector3.ONE * 1.6
 
 
+## Named field elite (a monster with a Last Attack bonus): a gold name, a
+## slowly turning gold ring round the threat crystal, a slightly larger plate.
+func set_elite() -> void:
+	if not _built:
+		return
+	_name.modulate = UITheme.GOLD
+	_name.outline_modulate = Color(0.18, 0.1, 0.0, 0.95)
+	if _halo == null:
+		var t := TorusMesh.new()
+		t.inner_radius = 0.105
+		t.outer_radius = 0.125
+		t.rings = 24
+		t.ring_segments = 4
+		_halo = MeshInstance3D.new()
+		_halo.mesh = t
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.albedo_color = UITheme.GOLD
+		m.no_depth_test = true
+		m.render_priority = 9
+		_halo.material_override = m
+		_halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_halo.position = _cursor.position + Vector3(0, -0.02, 0)
+		_halo.rotation.x = 0.35
+		_halo.visibility_range_end = SHOW_RANGE
+		add_child(_halo)
+		scale = Vector3.ONE * 1.2
+
+
 ## Boss HP bar stack: `count` pips under the bar, the `current` one (count
 ## down to 1) lit amber. The main bar then shows the current bar's fill.
 func set_bars(count: int, current: int) -> void:
@@ -183,6 +213,9 @@ func _process(dt: float) -> void:
 	_t += dt
 	_cursor.position.y = BAR_H * 0.5 + 0.48 + sin(_t * 2.4) * 0.03
 	_cursor.rotation.y += dt * 1.6
+	if _halo:
+		_halo.position.y = _cursor.position.y - 0.02
+		_halo.rotation.y -= dt * 0.9
 	if _chip > _hp:
 		if _chip_wait > 0.0:
 			_chip_wait -= dt

@@ -112,6 +112,11 @@ static func is_life_item(id: String) -> bool:
 	return FISH.has(id) or RECIPES.has(id) or GATHER.has(id) or TOOLS.has(id) or CROPS.has(id) or CRYSTALS.has(id) or seed_crop(id) != ""
 
 
+## A crystal's price for this character (Permadeath: Healing Crystals x2).
+static func crystal_price(id: String, gs = GameState) -> int:
+	return Permadeath.crystal_price(gs, id, int(CRYSTALS[id]["price"]))
+
+
 static func is_crystal(id: String) -> bool:
 	return CRYSTALS.has(id)
 
@@ -288,10 +293,14 @@ static func use_crystal(id: String, gs = GameState) -> String:
 		return "You have no %s." % (CRYSTALS[id]["name"] if CRYSTALS.has(id) else "such crystal")
 	if id == "heal_crystal" and float(gs.hp) >= gs.max_hp() - 0.5:
 		return "Your HP is already full."
+	var pd := Permadeath.crystal_block(gs, id)
+	if pd != "":
+		return pd
 	if gs == GameState and Net.remote_client():
 		Net.request_action("crystal", {"id": id})
 		return "pending"
 	gs.spend_materials({id: 1})
+	Permadeath.note_crystal(gs, id)
 	if id == "heal_crystal":
 		gs.heal_full()
 	return ""
@@ -314,7 +323,7 @@ static func buy(id: String, gs = GameState) -> String:
 	if id == "willow_rod":
 		price = ROD_PRICE
 	elif CRYSTALS.has(id):
-		price = int(CRYSTALS[id]["price"])
+		price = crystal_price(id, gs)
 	elif DECOR.has(id):
 		if not decor_available(id, gs):
 			return "The trader will not part with that until you have cleared Floor %d." % int(DECOR[id]["requires_clear"])

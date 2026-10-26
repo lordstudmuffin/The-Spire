@@ -37,7 +37,7 @@ func _build() -> void:
 	var wares := [["willow_rod", LifeData.TOOLS["willow_rod"]["name"], LifeData.ROD_PRICE, LifeData.TOOLS["willow_rod"]["desc"], "rod", LifeData.item_color("willow_rod")]]
 	for id in LifeData.CRYSTALS:
 		var cr: Dictionary = LifeData.CRYSTALS[id]
-		wares.append([id, cr["name"], int(cr["price"]), cr["desc"], "shard", LifeData.item_color(id)])
+		wares.append([id, cr["name"], LifeData.crystal_price(id), cr["desc"], "shard", LifeData.item_color(id)])
 	for id in LifeData.DECOR:
 		var d: Dictionary = LifeData.DECOR[id]
 		wares.append([id, d["name"], int(d["col"]), d["desc"], "home", UITheme.GOLD])

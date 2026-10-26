@@ -56,7 +56,7 @@ static func wear(gs, slot: String, amount: float) -> String:
 	var before := cur(it)
 	if before <= 0.0:
 		return ""
-	var after := maxf(before - amount, 0.0)
+	var after := maxf(before - Permadeath.wear(gs, amount), 0.0)
 	_set_dur(gs, it, after)
 	var m := max_for(it)
 	if after <= 0.0:

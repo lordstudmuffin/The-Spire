@@ -116,6 +116,8 @@ var visited: Array = []
 var chests: Dictionary = {}
 ## Duel record (scripts/duels.gd): {"won": n, "lost": n}.
 var duels: Dictionary = {"won": 0, "lost": 0}
+## Permadeath only: how this character fell ({} while alive; Permadeath).
+var fallen: Dictionary = {}
 
 
 func _ready() -> void:
@@ -173,6 +175,7 @@ func reset() -> void:
 	visited = []
 	chests = {}
 	duels = {"won": 0, "lost": 0}
+	fallen = {}
 	has_position = false
 	hp = max_hp()
 
@@ -271,6 +274,7 @@ func xp_to_next() -> int:
 
 
 func add_xp(amount: int) -> void:
+	amount = Permadeath.xp_gain(self, amount)
 	xp += amount
 	while xp >= xp_to_next():
 		xp -= xp_to_next()
@@ -521,6 +525,7 @@ func move_speed() -> float:
 func take_damage(amount: float) -> void:
 	# Armor soaks half its defense value per hit; every hit does at least 1.
 	var dmg: float = max(amount - armor_defense() * 0.5, 1.0)
+	Permadeath.note_hurt(self)
 	hp = max(hp - dmg, 0.0)
 	wear_gear("armor", Durability.WEAR_HIT)
 	health_changed.emit(hp, max_hp())
@@ -653,6 +658,7 @@ func to_dict() -> Dictionary:
 		"visited": visited,
 		"chests": chests,
 		"duels": duels,
+		"fallen": fallen,
 	}
 
 
@@ -897,4 +903,5 @@ func from_dict(d: Dictionary) -> void:
 		visited = _parse_visited(raw_visited)
 	chests = _parse_chests(d.get("chests", {}))
 	duels = _parse_duels(d.get("duels", {}))
+	fallen = d["fallen"].duplicate() if d.get("fallen") is Dictionary else {}
 	hp = float(d.get("hp", max_hp()))

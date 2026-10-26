@@ -330,7 +330,7 @@ static func view(rdb, i: int, holder: String) -> Dictionary:
 	var officer := guild_officer(rdb, holder, my_gid)
 	var out := {"stall": i, "free": owner == "", "mine": mine, "owner": str(meta.get("owner_name", "")),
 		"type": str(meta.get("type", "shop")), "left": maxf(float(meta.get("rent_until", 0.0)) - now, 0.0) if mine else 0.0,
-		"listings": rows, "my_stall": stall_of(rdb, holder), "till_col": int(till.get("col", 0)), "till_items": till_items,
+		"listings": rows, "my_stall": stall_of(rdb, holder), "hardcore": bool(meta.get("hardcore", false)), "till_col": int(till.get("col", 0)), "till_items": till_items,
 		"rent": RENT, "tax": TAX_RATE, "max_listings": MAX_LISTINGS, "guild_owned": gid_of_owner(owner) != "",
 		"guild_officer": officer, "guild_stall": stall_of(rdb, guild_key(my_gid)) if officer else -1}
 	if officer:
@@ -442,6 +442,8 @@ static func _op_rent(rdb, gs, rec: Dictionary, holder: String, i: int, payload: 
 	else:
 		meta["owner_name"] = name_of(rec)
 	meta["rent_until"] = until
+	if fresh:
+		meta["hardcore"] = Permadeath.rec_on(rec)  # permadeath stalls trade only with permadeath climbers
 	if not (meta.get("prices") is Dictionary):
 		meta["prices"] = {}
 	_set_meta(rdb, i, holder, meta)
@@ -598,6 +600,8 @@ static func _op_buy(rdb, gs, rec: Dictionary, holder: String, i: int, payload: D
 	if k < 0:
 		return _err("Someone bought that already.")
 	var item: Dictionary = items[k]
+	if Permadeath.rec_on(rec) != bool(meta_of(rdb, i).get("hardcore", false)):
+		return _err("Permadeath climbers trade only with each other." if Permadeath.rec_on(rec) else "A permadeath stall sells only to permadeath climbers.")
 	var prices = meta_of(rdb, i).get("prices", {})
 	var price := int(prices.get(id, suggest_price(item))) if prices is Dictionary else suggest_price(item)
 	if payload.has("price") and int(payload["price"]) != price:
@@ -625,7 +629,7 @@ static func _op_buy(rdb, gs, rec: Dictionary, holder: String, i: int, payload: D
 ## equipped are the live GameState containers, money is written back after.
 static func local_rec() -> Dictionary:
 	return {"name": str(GameState.character.get("name", "Nameless")), "token": "", "money": GameState.money,
-		"inventory": GameState.inventory, "equipped": GameState.equipped, "realm_seq": 0}
+		"inventory": GameState.inventory, "equipped": GameState.equipped, "realm_seq": 0, "permadeath": Permadeath.is_on(GameState)}
 
 
 static func local_persist(rec: Dictionary) -> bool:
