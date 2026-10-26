@@ -92,6 +92,15 @@ const EVENTS := {
 	"block": ["crystal/block.ogg"],
 	"guard_break": ["crystal/guard_break.ogg"],
 	"stagger": ["crystal/stagger.ogg"],
+	# Combat feel pass: the perfect-parry ring (parry + digital crit layer),
+	# a dull whiffed parry, the dash-through evade, the wind-up tells (bright
+	# tick = parryable, low bell = unparryable) and the combo finisher's whoosh.
+	"parry_perfect": ["crystal/parry.ogg"],
+	"parry_whiff": ["impact_sounds/impactWood_light_001.ogg", "impact_sounds/impactWood_light_003.ogg"],
+	"dodge": ["rpg_audio/cloth4.ogg"],
+	"windup_tell": ["impact_sounds/impactGlass_light_002.ogg", "impact_sounds/impactGlass_light_003.ogg"],
+	"windup_danger": ["impact_sounds/impactBell_heavy_002.ogg"],
+	"swing_heavy": ["rpg_audio/drawKnife2.ogg", "rpg_audio/drawKnife3.ogg"],
 	# Floor Guardian (scripts/boss_brain.gd): the roar on engage / enrage, the
 	# charge rumble, and the crack of an HP bar breaking.
 	"boss_roar": ["crystal/boss_roar.ogg"],
@@ -111,14 +120,16 @@ const EVENTS := {
 const LAYERS := {
 	"hit_flesh": ["hit_digital"], "hit_metal": ["hit_digital"], "hit_heavy": ["hit_digital"],
 	"crit": ["crit_digital"], "boss_death": ["slam"], "boss_bar_break": ["slam", "crit_digital"],
+	"parry_perfect": ["crit_digital"],
 }
 
 ## Per-event minimum gap in seconds (bursts of inventory_changed etc.).
-const MIN_GAP := {"boss_roar": 0.5, "heartbeat": 0.7, "hit_digital": 0.03, "menu_select": 0.04, "notify": 0.2, "pickup": 0.3, "coins": 0.25, "ui_hover": 0.05, "ui_click": 0.05, "chat": 0.2, "hit_flesh": 0.03, "hit_metal": 0.03, "crit": 0.08}
+const MIN_GAP := {"boss_roar": 0.5, "heartbeat": 0.7, "hit_digital": 0.03, "menu_select": 0.04, "notify": 0.2, "pickup": 0.3, "coins": 0.25, "ui_hover": 0.05, "ui_click": 0.05, "chat": 0.2, "hit_flesh": 0.03, "hit_metal": 0.03, "crit": 0.08, "windup_tell": 0.12, "windup_danger": 0.3}
 ## Per-event volume offsets in dB.
 const GAIN := {"ui_hover": -16.0, "ui_click": -8.0, "ui_tick": -10.0, "menu_select": -8.0, "hit_digital": -9.0, "crit_digital": -5.0,
 	"pickup": -6.0, "panel_slide": -6.0, "heartbeat": -2.0, "shatter": -2.0, "step_grass": -8.0, "step_stone": -10.0, "step_wood": -8.0,
-	"swing": -4.0, "crit": -3.0, "level_up": -2.0, "quest_complete": -2.0, "grunt": -3.0, "death": -2.0, "anvil": -4.0, "chat": -8.0}
+	"swing": -4.0, "crit": -3.0, "level_up": -2.0, "quest_complete": -2.0, "grunt": -3.0, "death": -2.0, "anvil": -4.0, "chat": -8.0,
+	"windup_tell": -7.0, "windup_danger": -4.0, "parry_whiff": -6.0, "dodge": -4.0, "swing_heavy": -3.0}
 
 const MUSIC := {
 	"town": ["music/town_a_new_town.ogg", "music/town_rpg_town.ogg"],

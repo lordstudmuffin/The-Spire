@@ -25,6 +25,9 @@ const SHATTER_COLOR := Color(0.62, 0.9, 1.0)
 const PARRY_COLOR := Color(1.0, 0.86, 0.45)
 const STAGGER_COLOR := Color(1.0, 0.86, 0.3)
 const WINDUP_COLOR := Color(0.95, 0.1, 0.08)
+## Parryable wind-up glint: warm white-gold (the parry flash's family).
+const PARRY_TELL_COLOR := Color(1.0, 0.9, 0.55)
+const DODGE_COLOR := Color(0.6, 0.9, 1.0)
 const MAX_SHATTERS := 6     # concurrent shard bursts (MultiMesh pool)
 ## Shards per burst by preset; `big` (bosses) doubles it.
 const SHARDS := {"Low": 36, "Medium": 60, "High": 90, "Ultra": 140}
@@ -306,6 +309,12 @@ func slash(origin: Vector3, forward: Vector3, kind: int, flip := false) -> void:
 			size = 1.2
 			roll = 0.8 if not flip else -0.8
 			pitch = 0.35
+		-2:
+			# Basic-combo finisher: a big overhead arc.
+			size = 1.45
+			roll = PI / 2.0 if not flip else -PI / 2.0
+			pitch = 0.1
+			height = 1.15
 	mi.visible = true
 	mi.global_position = origin + f * 0.9 + Vector3(0, height, 0)
 	mi.look_at(mi.global_position - f, Vector3.UP)
@@ -490,12 +499,16 @@ func stagger(enemy: Node3D, seconds: float) -> void:
 	tw.chain().tween_callback(pivot.queue_free)
 
 
-## Mob wind-up telegraph: a red glint gathers at the striking side of the
-## mob for the wind-up and pops just before the blow lands, so a player who
-## watches the glint can step out or parry on the pop.
-func windup_glint(enemy: Node3D, seconds: float) -> void:
+## Mob wind-up telegraph: a glint gathers at the striking side of the mob for
+## the wind-up and pops exactly as the blow lands (the parry cue: press as it
+## flares). Parryable blows glint gold-white; unparryable ones (slams, the
+## Guardian's smash) glint red with a pulsing danger ring under the mob, so
+## the two never read alike. The node is named "WindupGlint" so a broken
+## wind-up (Enemy.net_flinch) can put it out.
+func windup_glint(enemy: Node3D, seconds: float, parryable := true) -> void:
 	if enemy == null or not is_instance_valid(enemy):
 		return
+	var tint := WINDUP_COLOR if not parryable else PARRY_TELL_COLOR
 	var box := _body_bounds(enemy)
 	var at := enemy.global_position + Vector3(0, 1.2, 0)
 	if box.size.y > 0.1:
@@ -508,7 +521,7 @@ func windup_glint(enemy: Node3D, seconds: float) -> void:
 	var m := q.material_override as StandardMaterial3D
 	m.albedo_texture = AssetLib.vfx_texture("star_07")
 	m.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
-	m.albedo_color = Color(WINDUP_COLOR, 0.0)
+	m.albedo_color = Color(tint, 0.0)
 	m.render_priority = 2
 	m.no_depth_test = true
 	var core := _make_quad(true)
@@ -520,12 +533,16 @@ func windup_glint(enemy: Node3D, seconds: float) -> void:
 	core.visible = true
 	core.scale = Vector3.ONE * 0.3
 	q.add_child(core)
+	q.name = "WindupGlint"
 	enemy.add_child(q)
 	q.global_position = at
 	q.visible = true
 	var s := clampf(maxf(box.size.y, 1.0) * 0.6, 0.9, 2.6)
 	q.scale = Vector3.ONE * s * 0.2
-	var dur := maxf(seconds - 0.06, 0.12)
+	if not parryable:
+		_danger_ring(enemy, box, seconds)
+	# Grow for the whole wind-up and flare ON the blow (not before it).
+	var dur := maxf(seconds, 0.12)
 	var tw := q.create_tween()
 	tw.set_parallel(true)
 	tw.tween_property(m, "albedo_color:a", 1.0, dur * 0.35)
@@ -533,10 +550,60 @@ func windup_glint(enemy: Node3D, seconds: float) -> void:
 	tw.tween_property(q, "rotation:z", PI * 0.5, dur)
 	tw.chain().tween_callback(func():
 		if is_instance_valid(q):
-			flash(q.global_position, WINDUP_COLOR, s * 0.9))
-	tw.chain().tween_property(q, "scale", Vector3.ONE * s * 1.6, 0.06)
-	tw.parallel().tween_property(m, "albedo_color:a", 0.0, 0.06)
+			flash(q.global_position, tint, s * 0.9))
+	tw.chain().tween_property(q, "scale", Vector3.ONE * s * 1.6, 0.07)
+	tw.parallel().tween_property(m, "albedo_color:a", 0.0, 0.07)
 	tw.chain().tween_callback(q.queue_free)
+
+
+## Unparryable tell: a red ring on the ground that pulses twice under the mob
+## during the wind-up (child of the mob, freed with the glint's timing).
+func _danger_ring(enemy: Node3D, box: AABB, seconds: float) -> void:
+	var q := _make_quad(false)
+	var m := q.material_override as StandardMaterial3D
+	m.albedo_texture = AssetLib.vfx_texture("circle_02")
+	m.albedo_color = Color(WINDUP_COLOR, 0.0)
+	q.name = "WindupGlintRing"
+	enemy.add_child(q)
+	var r := clampf(maxf(box.size.x, box.size.z) * 1.3, 1.6, 6.0)
+	q.global_position = Vector3(enemy.global_position.x, _ground_y(enemy.global_position) + 0.06, enemy.global_position.z)
+	q.rotation = Vector3(-PI / 2.0, 0.0, 0.0)
+	q.visible = true
+	q.scale = Vector3.ONE * r
+	var half := maxf(seconds, 0.2) * 0.5
+	var tw := q.create_tween()
+	for i in 2:
+		tw.tween_property(m, "albedo_color:a", 0.85, half * 0.35)
+		tw.tween_property(m, "albedo_color:a", 0.15, half * 0.65)
+	tw.tween_callback(q.queue_free)
+
+
+## Perfect parry: the parry flash, then a second, whiter burst with a wide
+## ring and a long cross glint (the "clean deflection" moment).
+func perfect_parry_flash(pos: Vector3) -> void:
+	parry_flash(pos, false)
+	_glint(pos, Color(1, 1, 1), 3.6, 0.42, true)
+	_shock_ring(pos, Color(1.0, 0.97, 0.85), 3.4, 0.36)
+	flash(pos, Color(1.0, 1.0, 0.92), 1.5)
+
+
+## Dash dodge through a blow: a cool afterimage flash on the dodger.
+func dodge_flash(player: Node3D) -> void:
+	if not _valid(player):
+		return
+	var at := player.global_position + Vector3(0, 1.0, 0)
+	flash(at, DODGE_COLOR, 1.1)
+	_shock_ring(at, DODGE_COLOR, 1.6, 0.2)
+	_fire(at, "spark_04", true, DODGE_COLOR, 0.6, 0.25, 2.0, 5.0, Vector3.UP, 80.0, 0.0, 0.05, 0.12, 0.0, false)
+
+
+## Whiffed parry (the window passed with nothing to meet): a dull grey puff
+## at the blade so the miss reads, nothing flashy.
+func parry_whiff(player: Node3D) -> void:
+	if not _valid(player):
+		return
+	var at := player.global_position + Vector3(0, 1.15, 0) + _player_forward(player) * 0.55
+	puff(at, 0.5, Color(0.7, 0.72, 0.78, 0.5))
 
 
 # --- Floor boss (BossBrain hooks) ---------------------------------------------
