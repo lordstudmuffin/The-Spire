@@ -118,20 +118,38 @@ P7. **Player stalls and restaurants**: 6 rentable Hollowbrook stalls, offline st
 P8. **Farm plots and guilds**: 8 rentable farm plots with real-time crops; guilds at Lv10 with ranks, chat, shared storage. Opus: routine features on the P4 core.
 
 ## Floor 1 backlog, prioritised
+0. **Permadeath ("Hardcore") character slot, SAO-style** (Kyle, 2026-10-26 03:35-03:37 UTC; NOT built, top priority after stop). Fable-level for the data model and server authority (hard to undo once players own characters); Opus for the UI, titles and the leaderboard.
+   - **Slots:** 3 characters per account: 2 normal and 1 permadeath, chosen at creation and fixed for life (it can't be converted either way). This needs a per-account slot list on the server (today a record is keyed by token + name) plus a slot picker in the character creator.
+   - **Death:** server-authoritative. Net.srv_damage decides death, and the record is flagged `fallen` and saved before the client hears of it. A disconnect while in combat (hit in the last ~10 s, or a boss engaged) counts like staying in: the body stays in the world for 20 s, and dying there counts. On death you get the SAO polygon shatter, then a "Your journey has ended" screen with the time, place and cause. The record goes read-only. Its name gets struck through on the Monument of Climbers (monument.gd already lists names, so add a `fallen` + date + cause entry, as with the Monument of Life in Aincrad). Its limited items and unique skill are released back to the realm (RealmDB.release_all). Gear and Col are lost, with no transfer. The slot can then be rerolled.
+   - **Boosts** (from similar systems: Diablo/PoE Hardcore leagues and ladders, RuneScape Hardcore Ironman status, Deepwoken-style lasting legacy):
+     - +15% EXP and +10% drop rate.
+     - A permanent "Undying" nameplate mark and a title that changes with level/floors cleared.
+     - Its own Hardcore leaderboard on the monument.
+     - Exclusive cosmetics at milestones (e.g. a red-trimmed coat at Floor 1 clear).
+     - A small Last Attack bonus edge (+25% fallback rewards).
+     - A legacy reward to the account's normal characters when it dies, scaled by the level reached (a cosmetic plus a little Col), so a death still leaves something behind.
+   - **Penalties:**
+     - No revive or second chance of any kind.
+     - Healing crystals cost 2x and have a 30 s cooldown. Teleport crystals can't be used in combat.
+     - Trading, mail and stall buying only with other permadeath characters (an RS-Ironman-style economy split; their stalls show a Hardcore badge). It can't join guild storage withdrawals from normal characters.
+     - Durability wear x1.5.
+     - Duels can only be "First Strike", and dying in a duel never counts as death.
+     - Parties with normal characters are allowed, but the share bonus doesn't apply between the two kinds.
+   - **Tests:** a smoke test that a fallen record refuses login and actions, that disconnecting mid-combat still kills, that release_all frees claims, and that the monument strikes the name.
 1. **Review the round-7 screenshots and tune** creature scale/tints, window glow, Controls tab spacing. Opus.
 2. **In-world mob pass**: idle/walk blend, attack timing vs hit frame, death clip length vs dissolve, shadows under flying mobs. Opus.
-3. **Real Gravelmaw boss fight**: phases, telegraphed slam/charge, arena hazards, music stingers. Fable-level: new server-authoritative boss state machine is netcode plus combat feel, and it sets the pattern every later boss copies. Opus can do the arena dressing and audio afterwards.
+3. DONE (Vargash the Kobold Warlord: BossBrain, 4 bars, halberdier guard, weapon swap, throne leap, stingers). **Real Gravelmaw boss fight**: phases, telegraphed slam/charge, arena hazards, music stingers. Fable-level: new server-authoritative boss state machine is netcode plus combat feel, and it sets the pattern every later boss copies. Opus can do the arena dressing and audio afterwards.
 4. **Hollowbrook polish**: tavern and smithy interiors, NPC day/night routines, ambient animals from the animals pack. Opus.
 5. **Labyrinth terraces**: traps, locked doors with keys, treasure chests. Opus for content; Fable-level only for the loot-validation design (server-side chest ownership and anti-dupe is a hard-to-undo data-model call).
-6. **Crafting depth**: forging minigame (timing bar), ranks Normal→Myth with rank VFX, repair/durability. Fable-level for the minigame's server validation (a client-timed minigame is a cheating surface) and the rank VFX shaders; Opus for the item tables and UI.
+6. **Crafting depth** (ranks to Myth and repair/durability are DONE): forging minigame (timing bar), rank VFX. Fable-level for the minigame's server validation (a client-timed minigame is a cheating surface) and the rank VFX shaders; Opus for the item tables and UI.
 7. **Hidden class system**: add 2 more Floor 1 hidden classes with unlock quests and unique Sword Arts. Fable-level: new skills touch balance plus the validated action path and replicated VFX at once. Opus writes the quests and dialogue.
 8. **Performance on Forward+**: profile on Kyle's RTX 5070, tune Ultra (SDFGI, FSR2, shadows) and Low; verify batching with `--stats`. Opus prepares the checklist; escalate to Fable only if a frame-time or leak mystery appears.
 9. **Controller polish**: physical pad test, glyph art instead of text badges, radial skill menu. Opus.
 10. **Accounts and floor transfer**: server records persist already; add account token UI and character transfer between floor servers. Fable-level: cross-server handoff is new architecture and a hard-to-undo data-format decision.
 11. **Join race**: a client once dropped when another joined; 2×4-bot staggered tests could not reproduce it. Watch soaks. Fable-level only if it reappears (unexplained netcode bug).
-12. **GitHub**: Kyle must create an empty repo; then add_repo and push the tree (exclude .godot/). Opus.
+12. DONE: GitHub repo lordstudmuffin/The-Spire. Gotcha: git LFS uploads (.ogg/.png/.glb) failed from this container on 2026-10-26 with an S3 'Authorization error'. New small audio files were committed as plain blobs through per-file `-filter` lines in .gitattributes. Retry LFS, or use the same workaround.
 
-## Status of the visuals thread (2026-10-26 03:35 UTC, stopped by Kyle)
+## Status of the visuals thread (2026-10-26 04:10 UTC, resumed 03:46)
 - GitHub: branch claude/project-thread-xxm6yq, rolling PR #1 into main (commits authored as lordstudmuffin, no Claude trailers). Shots: /mnt/project-files/anime-rpg-shots/visuals/.
 - Done: polygon-shatter death (VFX.shatter, shard/shatter_glow shaders); sky_spire sky (stars, moon, the floor-above "lid"); clean inverted-hull outlines (averaged normals); night window glow on KayKit houses; stone town wall, marble gate columns, Voronoi plaza cobbles (they lead over the photo detail on Forward+), stone fountain; mob plates (MobPlate: threat cursor, slanted HP bar with chip, boss bar pips); border-only hit vignette; presets fixed (MSAA off, High = FSR2 native; Low vs Ultra checked on Forward+, GPU timings still to be measured on Kyle's RTX 5070).
 - Combat look: VFX.parry_flash, stagger, windup_glint; boss telegraphs (shaders/telegraph.gdshader: sweep/slam/charge/rockfall with a falling faceted boulder), boss_bar_break, boss_enrage, boss_reset; VRMCharacter.play_guard.
@@ -144,7 +162,8 @@ P8. **Farm plots and guilds**: 8 rentable farm plots with real-time crops; guild
 - Combat VFX hooks added: switch_flash, inner_area_notice, mob_rush_warning, mob_pack_call, mob_lure_burst, boss_weapon_swap, boss_leap (mesh arc tween), mob_plated_hit, whirl style on boss_sweep_warning/impact (arc >= 300).
 - Life/UI: BattleResult panel (scripts/ui/battle_result.gd, top-right after fights), durability WearGauge/CrackOverlay on inventory cards, anvil rows and under the Attack key, death screen line "EXP -N · GEAR DURABILITY -10%", WorldProps.stall_keeper (VRM keeper built the first time a stall's Keeper node shows).
 - Final round: LastAttackBanner (scripts/ui/last_attack_banner.gd via hud.show_last_attack), "PARTY OF N +X%" row in BattleResult, Greytusk elite look (MobDress "greytusk": grey tint 7abcbc set in Enemy._model_spec, curved tusks, mane, scars; review with mob_review --only greytusk), WorldProps.boss_throne (gameplay seats Vargash there).
-- Open visual items: Greytusk's gold named-elite plate (MobPlate has no elite flag yet), a dust and roar touch on the Warlord's opening leap (key on data["descend"]), the fields and meadow pass on Forward+, and preset GPU timings on Kyle's RTX 5070.
+- Resumed round: MobPlate.set_elite (gold name + ring, Enemy.elite from data "la"), VFX.boss_descend (roar, dais dust, heavy landing), meadow gusts and gold/lush patches (grass.gdshader + ground.gdshader share the patch formula), Monument permadeath marks and fallen strikes (entry keys "permadeath", "fallen"), FallenScreen.show_in(root, name, info, secs). Harness: --monument-demo, --open fallen, --combat-demo boss_descend.
+- Open visual items: creator/slot-screen permadeath styling (waiting on gameplay's UI), preset GPU timings on Kyle's RTX 5070.
 - Screenshot harness extras: --combat-demo heal_crystal|teleport_crystal|switch|inner_area|outer_field|battle_result|boss_swap|boss_leap|boss_whirl|plated|last_attack|last_attack_fallback|duel|boss_rockfall|parry|guard_break|stagger|windup|guard|shatter|shatter_player|boss_*|chest_open|still_water|breaking_wave|hearth_flare|hearth_glow, --open death|realm|party|map|ring:<panel>, --class NAME, --bark, --pad, --unique, --spawn-boss, --summit, --stalls-open. Mob lineup: mob_review.tscn -- --floor1 [--only NAME] [--turn DEG].
 - Gotcha: VFX._fire ignores tiny scale_min/max in practice (soft circles render ~0.3 m); use star_05 / spark_04 for small embers.
 - Next: fields/meadow pass on Forward+, Floor 1 boss arena dressing, preset perf numbers from Kyle's PC.
