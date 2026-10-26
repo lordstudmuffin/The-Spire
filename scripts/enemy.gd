@@ -65,8 +65,22 @@ var _hit_cd := 0.0
 ## Telegraphed strikes: the attack animation starts, the blow lands WINDUP
 ## seconds later only if the target is still in reach. Stepping or dashing
 ## out at the last moment is a dodge (a hidden "reaction" point, UniqueSkills).
-const WINDUP := 0.42
+## The glint (VFX.windup_glint) peaks exactly on the blow and the attack clip
+## is time-scaled so its contact frame (ATTACK_CONTACT of the clip) lands
+## then too: watch the glint, press Parry as it flashes.
+const WINDUP := 0.5
 const WINDUP_BOSS := 0.6
+const ATTACK_CONTACT := 0.45
+## A perfect parry builds this much posture (a Guardian staggers after two)
+## and the stagger it causes lasts PERFECT_STAGGER_BONUS longer.
+const PERFECT_POSTURE := 2
+const PERFECT_STAGGER_BONUS := 0.5
+## Shove on a hit (m/s, decays at 30 m/s^2): light swings barely move a mob so
+## the chain keeps connecting; a finisher throws it back and breaks a field
+## mob's wind-up (not a boss's, not a plated guard's).
+const KNOCK_LIGHT := 4.5
+const KNOCK_HEAVY := 8.0
+const KNOCK_FINISHER := 11.0
 var _windup := 0.0
 var _windup_target: Node3D
 ## Parried strikes build posture; a full bar staggers the mob (it stops,
@@ -229,6 +243,7 @@ func _update_label() -> void:
 func _physics_process(delta: float) -> void:
 	if not Net.is_authority():
 		# Client: mirror what the server sends. Dead mobs must not block anyone.
+		_stagger = maxf(_stagger - delta, 0.0)  # display copy (net_staggered)
 		var was_dead := _dead
 		_dead = not visible
 		if was_dead and not _dead:
@@ -244,9 +259,9 @@ func _physics_process(delta: float) -> void:
 				var dealt := _shown_hp - hp
 				# Clients don't know the move; a hit well above the smallest
 				# one seen on this mob reads as a Sword Art (cosmetic only).
-				var crit := _min_hit < INF and dealt >= _min_hit * 1.5
+				var crit := (_min_hit < INF and dealt >= _min_hit * 1.5) or _stagger > 0.0
 				_min_hit = minf(_min_hit, dealt)
-				_popup("-%d" % int(round(dealt)), Color(1.0, 0.85, 0.3), crit)
+				_popup(("RIPOSTE  -%d" if _stagger > 0.0 else "-%d") % int(round(dealt)), Color(1.0, 0.85, 0.3), crit)
 				_hit_sfx(dealt)
 				_hit_fx(Vector3.ZERO, crit)
 			_update_label()
@@ -451,15 +466,7 @@ func _rush_contact() -> void:
 		var to: Vector3 = p.global_position - global_position
 		to.y = 0.0
 		if to.length() < reach and (to.length() < 0.5 or _rush_dir.dot(to.normalized()) > 0.2):
-			var outcome: String = p.defend(global_position) if p.has_method("defend") else ""
-			_show_defence(p, outcome)
-			match outcome:
-				"parry":
-					_parried(p)
-				"block":
-					_damage_player(p, damage * RUSH_MULT * (1.0 - Player.BLOCK_REDUCTION))
-				_:
-					_damage_player(p, damage * RUSH_MULT)
+			strike_player(p, damage * RUSH_MULT)
 			_end_rush()
 			return
 
@@ -482,35 +489,67 @@ func _resolve_strike(reach: float) -> void:
 		return
 	var d := t.global_position.distance_to(global_position)
 	if d < reach * 1.1:
-		var outcome: String = t.defend(global_position) if t.has_method("defend") else ""
-		_show_defence(t, outcome)
-		match outcome:
-			"parry":
-				_parried(t)
-			"block":
-				_damage_player(t, damage * (1.0 - Player.BLOCK_REDUCTION))
-			_:
-				_damage_player(t, damage)
+		strike_player(t, damage)
 	elif d < reach * 2.6 and "peer_id" in t:
 		Net.note_hidden(t.peer_id, "dodge")
 
 
-## Tell the defender's machine what happened (the server judged it).
-func _show_defence(t: Node3D, outcome: String) -> void:
+## One blow of `dmg` on player `t` from this mob, judged by the player's
+## defence (Player.srv_strike: dash i-frames, parry, guard; on the server a
+## remote player's blow may wait out the late-press grace first), then
+## applied in _on_defended. Unparryable blows (slams, rockfall) pass
+## parryable = false: only i-frames or a raised guard help.
+func strike_player(t: Node3D, dmg: float, parryable := true) -> String:
+	if t.has_method("srv_strike"):
+		return t.srv_strike(global_position, Callable(self, "_on_defended").bind(t, dmg, global_position), parryable)
+	_on_defended("", t, dmg, global_position)
+	return ""
+
+
+func _on_defended(outcome: String, t, dmg: float, from_pos: Vector3) -> void:
+	if _dead or t == null or not is_instance_valid(t) or not t.is_inside_tree():
+		return
+	if t.has_method("is_dying") and t.is_dying():
+		return
+	_show_defence(t, outcome, from_pos)
+	match outcome:
+		"parry":
+			_parried(t)
+		"block":
+			_damage_player(t, dmg * (1.0 - Player.BLOCK_REDUCTION))
+		"dodge":
+			if "peer_id" in t:
+				Net.note_hidden(t.peer_id, "dodge")
+		_:
+			_damage_player(t, dmg)
+
+
+## Tell the defender's machine what happened (the server judged it). A
+## parry is shown as "perfect" when the defender's last one was.
+func _show_defence(t: Node3D, outcome: String, from_pos = null) -> void:
 	if outcome == "":
 		return
+	var at: Vector3 = from_pos if from_pos is Vector3 else global_position
+	if outcome == "parry" and bool(t.get("last_parry_perfect")):
+		outcome = "perfect"
 	if not Net.online or t.peer_id == multiplayer.get_unique_id():
-		t.defend_fx(outcome, global_position)
+		t.defend_fx(outcome, at)
 	elif multiplayer.get_peers().has(t.peer_id):
-		t.net_defended.rpc_id(t.peer_id, outcome, global_position, t.guard, t._stun)
+		t.net_defended.rpc_id(t.peer_id, outcome, at, t.guard, t._stun)
 
 
 func _parried(t: Node3D) -> void:
 	_hit_cd = maxf(_hit_cd, 1.2)
 	Net.note_hidden(t.peer_id, "parry")
+	var perfect := bool(t.get("last_parry_perfect"))
+	# The deflected mob is thrown back a step (the parrier holds the ground).
+	var away := global_position - t.global_position
+	away.y = 0.0
+	if away.length() > 0.05 and not is_boss:
+		_knock = away.normalized() * (KNOCK_FINISHER if perfect else KNOCK_LIGHT)
 	if brain != null and brain.has_method("stagger_immune") and brain.stagger_immune():
 		return  # the parry deflected, but a roaring Guardian builds no posture
-	_build_posture(1)
+	_build_posture(PERFECT_POSTURE if perfect else 1, PERFECT_STAGGER_BONUS if perfect else 0.0)
 	if _stagger > 0.0 and "peer_id" in t:
 		_switch_from = int(t.peer_id)
 		_switch_until = Time.get_ticks_msec() + SWITCH_WINDOW_MS
@@ -541,11 +580,11 @@ func net_switch(from: int, to: int) -> void:
 
 ## Posture from a parry or a posture-breaking art (Breaking Wave): a full
 ## bar staggers the mob (one count on a normal mob, three on a Guardian).
-func _build_posture(n: int) -> void:
+func _build_posture(n: int, bonus := 0.0) -> void:
 	_posture += n
 	if _posture >= (3 if is_boss else 1):
 		_posture = 0
-		_stagger = STAGGER_TIME_BOSS if is_boss else STAGGER_TIME
+		_stagger = (STAGGER_TIME_BOSS if is_boss else STAGGER_TIME) + bonus
 		_windup = 0.0
 		if Net.online:
 			net_staggered.rpc(_stagger)
@@ -573,6 +612,27 @@ func net_staggered(seconds: float) -> void:
 
 func is_staggered() -> bool:
 	return _stagger > 0.0
+
+
+## Everyone: a finisher broke this mob's wind-up. The glint goes out, the
+## mob plays its hit reaction and grunts.
+@rpc("authority", "call_local", "reliable")
+func net_flinch() -> void:
+	for c in get_children():
+		if str(c.name).begins_with("WindupGlint"):
+			c.queue_free()
+	if _dead:
+		return
+	Audio.play("grunt", global_position, 0.1, -2.0, 1.1)
+	_attack_until = 0.0
+	if _anim != null:
+		_anim.speed_scale = 1.0
+		var clip_len := _set_anim("hit", false)
+		if clip_len > 0.0:
+			_attack_until = Time.get_ticks_msec() / 1000.0 + minf(clip_len, 0.5)
+	var fx := VFX.get_for(self)
+	if fx:
+		fx.puff(global_position, 0.9)
 
 
 func _nearest_player() -> Node3D:
@@ -611,7 +671,7 @@ func _slam() -> void:
 		_slam_fx()
 		for p in get_tree().get_nodes_in_group("players"):
 			if p.global_position.distance_to(global_position) < SLAM_RANGE:
-				_damage_player(p, damage * 2.5))
+				strike_player(p, damage * 2.5, false))
 	tw.tween_property(_mesh, "scale", Vector3.ONE, 0.2)
 
 
@@ -681,7 +741,9 @@ func net_swing() -> void:
 
 ## This peer's side of a telegraphed strike with a `windup` of its own (boss
 ## brains send theirs with the move): bots time their parry on it when the
-## blow is parryable, the attack clip and glint play either way.
+## blow is parryable, the attack clip and glint play either way. Parryable
+## blows ring a bright tell and a gold glint; unparryable ones a low toll and
+## a red one (VFX.windup_glint), so the two never read alike.
 func _swing_local(windup: float, parryable := true) -> void:
 	if _dead:
 		return
@@ -692,15 +754,19 @@ func _swing_local(windup: float, parryable := true) -> void:
 				p.bot_incoming(windup)
 	if _rig == null:
 		return
+	Audio.play("windup_tell" if parryable else "windup_danger", global_position, 0.05)
 	var now := Time.get_ticks_msec() / 1000.0
 	var fx := VFX.get_for(self)
 	if fx and fx.has_method("windup_glint"):
-		fx.call("windup_glint", self, windup)
+		fx.call("windup_glint", self, windup, parryable)
 	if _anim != null:
 		_anim.speed_scale = 1.0
 		var clip_len := _set_anim("attack", false)
 		if clip_len > 0.0:
-			_attack_until = now + minf(clip_len, 1.2)
+			# Time-scale the clip so its contact frame lands on the blow.
+			var spd := clampf(clip_len * ATTACK_CONTACT / maxf(windup, 0.1), 0.45, 1.8)
+			_anim.speed_scale = spd
+			_attack_until = now + minf(clip_len / spd, 1.6)
 			return
 	# No attack clip: a short lunge forward and back.
 	var tw := create_tween()
@@ -715,6 +781,22 @@ static var _swing_times := {}
 const SWING_WINDOW_MS := 250
 ## Which swing serial last hit this mob, per peer, so one swing lands once.
 var _hit_by := {}
+
+
+## Server: the light/finisher chain's cross-kind cadence (Player.COMBO). A
+## light swing may not come sooner than FINISHER_RECOVERY after a finisher,
+## and a finisher not sooner than one light gap after a light swing; with the
+## per-kind cooldowns (light ATTACK_COOLDOWN, finisher FINISHER_COOLDOWN)
+## that caps basic-attack damage at one full chain per FINISHER_COOLDOWN.
+## 90% of each gap is enough, as with every other cooldown here.
+static func combo_gate_ok(sender: int, kind: int, now: int) -> bool:
+	if kind == -1:
+		var fin: Array = _swing_times.get("%d:%d" % [sender, Player.KIND_FINISHER], [-100000, -1])
+		return now - int(fin[0]) >= int(Player.FINISHER_RECOVERY * 900.0)
+	if kind == Player.KIND_FINISHER:
+		var lt: Array = _swing_times.get("%d:-1" % sender, [-100000, -1])
+		return now - int(lt[0]) >= int(Player.ATTACK_COOLDOWN * 900.0)
+	return true
 
 
 static func forget_peer(peer: int) -> void:
@@ -774,16 +856,19 @@ func net_hit(kind: int, from_dir: Vector3, swing: int = 0) -> void:
 				return
 			mult = float(art["mult"])
 			cooldown = float(art["cooldown"])
+		elif kind == Player.KIND_FINISHER:
+			mult = float(Player.COMBO[2]["mult"])
+			cooldown = Player.FINISHER_COOLDOWN
 		elif kind != -1:
 			return
-		if kind != -1:
+		if kind >= 0:
 			mult *= Net.srv_art_power(sender)
 		var key := "%d:%d" % [sender, kind]
 		var now := Time.get_ticks_msec()
 		var last: Array = _swing_times.get(key, [-100000, -1])
 		var same_swing: bool = last[1] == swing and now - int(last[0]) <= SWING_WINDOW_MS
 		if not same_swing:
-			if now - int(last[0]) < int(cooldown * 900.0):
+			if now - int(last[0]) < int(cooldown * 900.0) or not combo_gate_ok(sender, kind, now):
 				return
 			_swing_times[key] = [now, swing]
 			if kind < Player.SKILLS.size():
@@ -803,6 +888,8 @@ func net_hit(kind: int, from_dir: Vector3, swing: int = 0) -> void:
 func take_hit(amount: float, from_dir: Vector3, hitter := 1, kind := -1) -> void:
 	if _dead or not Net.is_authority():
 		return
+	var riposte := _stagger > 0.0
+	var finisher := kind == Player.KIND_FINISHER
 	if _stagger > 0.0:
 		amount *= RIPOSTE_MULT  # riposte on a staggered mob
 		kind = maxi(kind, 0)    # reads as a heavy (crit) hit
@@ -832,8 +919,8 @@ func take_hit(amount: float, from_dir: Vector3, hitter := 1, kind := -1) -> void
 	_last_hitter = hitter
 	# Offline, and for the listen-server host, the popup is drawn here; clients
 	# draw theirs when the replicated hp drops.
-	var crit := kind >= 0
-	_popup("-%d" % int(round(amount)), Color(1.0, 0.85, 0.3), crit)
+	var crit := kind >= 0 or finisher
+	_popup(("RIPOSTE  -%d" if riposte else "-%d") % int(round(amount)), Color(1.0, 0.85, 0.3), crit)
 	_hit_sfx(amount)
 	_hit_fx(from_dir, crit, VFX.kind_color(kind))
 	if armor < 1.0 and _stagger <= 0.0:
@@ -842,7 +929,19 @@ func take_hit(amount: float, from_dir: Vector3, hitter := 1, kind := -1) -> void
 			net_plated.rpc(from_dir)
 		else:
 			net_plated(from_dir)
-	_knock = from_dir * (2.0 if is_boss else 8.0)
+	if is_boss:
+		_knock = from_dir * 2.0
+	else:
+		_knock = from_dir * (KNOCK_FINISHER if finisher else (KNOCK_LIGHT if kind == -1 else KNOCK_HEAVY))
+	if finisher and not is_boss and brain == null and armor >= 1.0 and _windup > 0.0:
+		# The finisher breaks a field mob's wind-up: it reels instead of striking.
+		_windup = 0.0
+		_windup_target = null
+		_hit_cd = maxf(_hit_cd, 0.6)
+		if Net.online:
+			net_flinch.rpc()
+		else:
+			net_flinch()
 	if hp <= 0:
 		_die()
 	else:

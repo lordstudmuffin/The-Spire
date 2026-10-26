@@ -1033,6 +1033,7 @@ func _ready() -> void:
 		pl_u.press_parry()
 		_check(Time.get_ticks_msec() - pl_u._parry_open_ms > int(Player.PARRY_WINDOW * 1000.0), "a whiffed parry can't be re-opened by mashing")
 		pl_u.release_parry()
+		_test_combat_feel(pl_u, mob)
 		mob._posture = 0
 		mob._stagger = 0.0
 		GameState.heal_full()
@@ -2232,13 +2233,25 @@ func _test_boss() -> void:
 	b._slam_cd = 999.0
 	pl._parry_ready_ms = 0
 	pl.press_parry()
+	pl._parry_open_ms -= 150  # pressed a little early: a plain (not perfect) parry
 	b._begin("sweep", pl)
 	_check(b.state == BossBrain.State.WINDUP and b.move == "sweep" and events[-1] == "telegraph" and is_equal_approx(b._timer, P0["windup"]["sweep"]), "sweep is telegraphed for the phase's wind-up")
 	var hp0: float = GameState.hp
 	var par0: int = pl.parries
 	b._resolve()
-	_check(GameState.hp == hp0 and boss._posture == 1 and pl.parries == par0 + 1 and b.state == BossBrain.State.RECOVER and events[-1] == "impact", "a timed parry deflects the sweep and builds posture")
+	_check(GameState.hp == hp0 and boss._posture == 1 and pl.parries == par0 + 1 and not pl.last_parry_perfect and b.state == BossBrain.State.RECOVER and events[-1] == "impact", "a timed parry deflects the sweep and builds posture")
 	pl.release_parry()
+	# A perfect parry (the press right on the blow) counts double on the Guardian.
+	boss._posture = 0
+	pl._parry_ready_ms = 0
+	pl.press_parry()
+	b._begin("sweep", pl)
+	b._resolve()
+	_check(pl.last_parry_perfect and boss._posture == Enemy.PERFECT_POSTURE and not boss.is_staggered(), "a perfect parry builds %d posture on the Guardian" % Enemy.PERFECT_POSTURE)
+	pl.release_parry()
+	boss._posture = 0
+	b._cooldown = 0.0
+	b.state = BossBrain.State.ENGAGE
 	pl._parry_open_ms = -100000
 	b._begin("sweep", pl)
 	hp0 = GameState.hp
@@ -2537,7 +2550,7 @@ func _test_duels() -> void:
 	_check(D.srv_hit(A, B, -1, Vector3.RIGHT, 30) == "", "a swing is accepted while the defender's parry window is open")
 	D.tick(Dc.WINDUP + 0.01)
 	_check(hp_b.call() == hp0 and D.duels.has(id) and pb.parries >= 1, "a parry inside the window deflects the blow (no damage, duel goes on)")
-	_check(pa.is_stunned() and is_equal_approx(float(last_ev.call(A, "parried").get("stun", 0.0)), Dc.PARRY_STUN) and last_ev.call(A, "parried").get("push") is Vector3, "the parried attacker is staggered and shoved back")
+	_check(pa.is_stunned() and is_equal_approx(float(last_ev.call(A, "parried").get("stun", 0.0)), Dc.PERFECT_STUN if pb.last_parry_perfect else Dc.PARRY_STUN) and last_ev.call(A, "parried").get("push") is Vector3, "the parried attacker is staggered and shoved back (longer after a perfect parry)")
 	_check(D.srv_hit(A, B, -1, Vector3.RIGHT, 31) == "stunned", "a staggered attacker cannot swing")
 	pa._stun = 0.0
 	pb.release_parry()
@@ -3026,3 +3039,157 @@ func _test_dedicated_servers() -> void:
 	srv.auth_callback = Callable()
 	ep.close()
 	srv.multiplayer_peer = null
+
+
+## Combat feel pass: parry tiers, buffered presses, dash i-frames, the
+## server's late-press grace, the light/finisher combo and its server gates.
+func _test_combat_feel(pl: Player, mob: Enemy) -> void:
+	var reach := 1.3 + mob.size.z * 0.5
+	var reset := func():
+		pl.release_parry()
+		pl._stun = 0.0
+		pl.guard = Player.GUARD_MAX
+		pl._parry_open_ms = -100000
+		pl._parry_ready_ms = 0
+		pl._parry_buffer_at = 0
+		pl._iframe_until = 0
+		pl._dash_srv_ms = -100000
+		pl.defer_test = false
+		mob._posture = 0
+		mob._stagger = 0.0
+		mob._hit_cd = 0.0
+		GameState.heal_full()
+	pl.global_position = mob.global_position + Vector3(0.5, 0, 0)
+	pl.model.look_at(Vector3(mob.global_position.x, pl.model.global_position.y, mob.global_position.z))
+	# Perfect vs plain parry.
+	reset.call()
+	var perf0 := pl.perfect_parries
+	pl.press_parry()
+	mob._windup_target = pl
+	mob._resolve_strike(reach)
+	_check(pl.last_parry_perfect and pl.perfect_parries == perf0 + 1 and mob.is_staggered() and is_equal_approx(mob._stagger, Enemy.STAGGER_TIME + Enemy.PERFECT_STAGGER_BONUS), "a press right on the blow is a PERFECT parry (longer stagger)")
+	reset.call()
+	pl.press_parry()
+	pl._parry_open_ms -= int(Player.PERFECT_WINDOW * 1000.0) + 40
+	var hp0 := GameState.hp
+	mob._windup_target = pl
+	mob._resolve_strike(reach)
+	_check(GameState.hp == hp0 and not pl.last_parry_perfect and is_equal_approx(mob._stagger, Enemy.STAGGER_TIME), "a press a little early is a plain parry")
+	reset.call()
+	pl.press_parry()
+	pl._parry_open_ms -= int(Player.PARRY_WINDOW * 1000.0) + 30
+	pl.release_parry()
+	hp0 = GameState.hp
+	mob._windup_target = pl
+	mob._resolve_strike(reach)
+	_check(GameState.hp < hp0 and not mob.is_staggered(), "a press earlier than the %.2f s window does not parry" % Player.PARRY_WINDOW)
+	# Buffered press: inside the last PARRY_BUFFER of the whiff cooldown.
+	reset.call()
+	var now := Time.get_ticks_msec()
+	pl._parry_ready_ms = now + 50
+	pl.press_parry()
+	pl.release_parry()
+	_check(pl._parry_buffer_at == now + 50 and pl._parry_open_ms < 0, "a press just before the whiff cooldown ends is buffered")
+	pl._parry_buffer_at = Time.get_ticks_msec()
+	pl._tick_parry_buffer()
+	_check(pl._parry_buffer_at == 0 and Time.get_ticks_msec() - pl._parry_open_ms < 50, "the buffered press opens its window when the cooldown ends")
+	reset.call()
+	pl._parry_ready_ms = Time.get_ticks_msec() + 400
+	pl.press_parry()
+	_check(pl._parry_buffer_at == 0 and pl._parry_open_ms < 0, "a press deep inside the whiff cooldown only guards")
+	# Whiff: an open window with nothing to meet is reported once.
+	reset.call()
+	var wh0 := pl.whiffs
+	pl.press_parry()
+	pl.release_parry()
+	pl._parry_open_ms -= int(Player.PARRY_WINDOW * 1000.0) + 20
+	pl._check_whiff()
+	pl._check_whiff()
+	_check(pl.whiffs == wh0 + 1, "a window that parries nothing is one WHIFF")
+	# Dash i-frames.
+	reset.call()
+	_check(pl._start_iframes(Time.get_ticks_msec()) and pl.is_dodging(), "a dash starts its invulnerability frames")
+	_check(not pl._start_iframes(Time.get_ticks_msec()), "i-frames can't be re-armed inside the dash cooldown (server rate limit)")
+	hp0 = GameState.hp
+	mob._windup_target = pl
+	mob._resolve_strike(reach)
+	_check(GameState.hp == hp0 and not mob.is_staggered(), "a blow inside the dash's i-frames is evaded")
+	reset.call()
+	pl._stun = 1.0
+	_check(not pl._start_iframes(Time.get_ticks_msec()), "a stunned (guard broken) player can't dash out")
+	# Server late-press grace: a blow on a remote player waits for a press in flight.
+	reset.call()
+	pl.defer_test = true
+	hp0 = GameState.hp
+	mob._windup_target = pl
+	mob._resolve_strike(reach)
+	_check(pl.pending_strikes() == 1 and GameState.hp == hp0, "server: an unparried blow waits out the late-press grace (%d-%d ms)" % [Player.LATE_GRACE_MIN_MS, Player.LATE_GRACE_MAX_MS])
+	pl.press_parry()
+	_check(pl.pending_strikes() == 0 and GameState.hp == hp0 and pl.last_parry_perfect and mob.is_staggered(), "a press arriving inside the grace parries the held blow (perfect)")
+	reset.call()
+	pl.defer_test = true
+	hp0 = GameState.hp
+	mob._windup_target = pl
+	mob._resolve_strike(reach)
+	pl._start_iframes(Time.get_ticks_msec())
+	_check(pl.pending_strikes() == 0 and GameState.hp == hp0, "a dash arriving inside the grace evades the held blow")
+	reset.call()
+	pl.defer_test = true
+	hp0 = GameState.hp
+	mob._windup_target = pl
+	mob._resolve_strike(reach)
+	pl._pending_strikes[0]["at"] = Time.get_ticks_msec() - 1
+	pl._flush_pending(false)
+	_check(pl.pending_strikes() == 0 and GameState.hp < hp0, "with no press in time the held blow lands when the grace runs out")
+	reset.call()
+	pl.defer_test = true
+	pl.press_parry()
+	pl._parry_open_ms -= 150
+	hp0 = GameState.hp
+	mob._windup_target = pl
+	mob._resolve_strike(reach)
+	_check(pl.pending_strikes() == 0 and GameState.hp == hp0 and not pl.last_parry_perfect, "a window already open resolves at once (no hold)")
+	reset.call()
+	_check(pl.late_grace_ms() >= Player.LATE_GRACE_MIN_MS and pl.late_grace_ms() <= Player.LATE_GRACE_MAX_MS, "the late grace stays inside its clamp")
+	# Basic combo: light, light, finisher, then a fresh chain.
+	reset.call()
+	pl._combo_t = 99.0
+	pl._combo_step = 0
+	var steps: Array = []
+	var gaps: Array = []
+	for i in 4:
+		pl._attack_cd = 0.0
+		pl._attack()
+		steps.append(pl._combo_step)
+		gaps.append(pl._attack_cd)
+	_check(steps == [1, 2, 0, 1] and is_equal_approx(gaps[2], float(Player.COMBO[2]["gap"])) and int(Player.COMBO[2]["kind"]) == Player.KIND_FINISHER, "attacks chain light, light, finisher, then start over")
+	pl._combo_t = Player.COMBO_CHAIN + 0.1
+	pl._attack_cd = 0.0
+	pl._attack()
+	_check(pl._combo_step == 1, "a pause longer than the chain window restarts the combo")
+	pl._combo_step = 0
+	# The finisher breaks a field mob's wind-up.
+	mob._stagger = 0.0
+	mob._windup = 0.3
+	mob._windup_target = pl
+	var mhp := mob.hp
+	mob.take_hit(1.0, Vector3.FORWARD, 1, Player.KIND_FINISHER)
+	_check(mob._windup == 0.0 and mob._windup_target == null and mob.hp < mhp, "a finisher breaks a field mob's wind-up")
+	mob._windup = 0.3
+	mob.take_hit(1.0, Vector3.FORWARD, 1, -1)
+	_check(mob._windup > 0.0, "light hits don't interrupt a wind-up")
+	mob._windup = 0.0
+	mob._windup_target = null
+	mob._knock = Vector3.ZERO
+	# Server cadence gates for the chain (shared by Enemy.net_hit and Duels.srv_hit).
+	var P := 4242
+	Enemy._swing_times.clear()
+	var t := Time.get_ticks_msec()
+	Enemy._swing_times["%d:-1" % P] = [t, 1]
+	_check(not Enemy.combo_gate_ok(P, Player.KIND_FINISHER, t + 100), "server: a finisher right on a light swing is refused")
+	_check(Enemy.combo_gate_ok(P, Player.KIND_FINISHER, t + int(Player.ATTACK_COOLDOWN * 1000.0)), "server: a finisher one light gap later is accepted")
+	Enemy._swing_times["%d:%d" % [P, Player.KIND_FINISHER]] = [t, 2]
+	_check(not Enemy.combo_gate_ok(P, -1, t + 200) and Enemy.combo_gate_ok(P, -1, t + int(Player.FINISHER_RECOVERY * 1000.0)), "server: a light swing must wait out the finisher's recovery")
+	_check(Duels.move_for(P, Player.KIND_FINISHER, pl).get("cooldown", 0.0) == Player.FINISHER_COOLDOWN, "duels validate the finisher with the same cooldown")
+	Enemy._swing_times.clear()
+	reset.call()

@@ -11,8 +11,42 @@ const JUMP_VELOCITY := 6.0
 const DASH_SPEED := 18.0
 const DASH_TIME := 0.18
 const DASH_COOLDOWN := 0.8
+## A dash is invulnerable to mob, boss and duel strikes for this long from
+## its start (the server stamps its own copy in net_dash, rate-limited by
+## DASH_COOLDOWN, and a strike already in flight waits for it: srv_strike).
+const DASH_IFRAMES := 0.22
 const ATTACK_RANGE := 2.2
-const ATTACK_COOLDOWN := 0.45
+## Light attack cadence: the gap between two light swings of the combo, and
+## the server's per-kind cooldown for kind -1 (net_hit refuses < 90% of it).
+const ATTACK_COOLDOWN := 0.36
+## Basic attack combo: light, light, finisher. Each press advances the chain
+## if it comes within COMBO_CHAIN of the last swing; otherwise it restarts.
+## "kind" is what the server sees (-1 light, KIND_FINISHER the heavy third
+## blow); "anim" picks the VRM clip (0 slice, 2 diagonal, 1 overhead chop);
+## "gap" is how long until the next swing may start; "delay" is when the blade
+## connects after the press (matched to the clip's contact frame); "knock" is
+## the shove the mob takes (Enemy.take_hit reads the kind).
+const KIND_FINISHER := -2
+const COMBO := [
+	{"kind": -1, "anim": 0, "mult": 1.0, "range": 2.2, "arc": 1.3, "gap": 0.36, "delay": 0.07},
+	{"kind": -1, "anim": 2, "mult": 1.0, "range": 2.2, "arc": 1.3, "gap": 0.36, "delay": 0.07},
+	{"kind": -2, "anim": 1, "mult": 1.5, "range": 2.5, "arc": 1.7, "gap": 0.62, "delay": 0.12},
+]
+const COMBO_CHAIN := 0.9
+## Recovery after the finisher before a new chain (server: light swings are
+## refused this soon after a finisher), and the finisher's own cooldown
+## (one full chain: two light gaps plus this recovery).
+const FINISHER_RECOVERY := 0.62
+const FINISHER_COOLDOWN := 0.36 + 0.36 + 0.62
+## An attack pressed this long before the swing is allowed fires as soon as
+## it is (input buffer), so mashing in rhythm never eats a press.
+const ATTACK_BUFFER := 0.16
+## Light magnetism: a swing snaps to face the nearest foe within this range in
+## a forward cone and steps in if it is just out of reach.
+const MAGNET_RANGE := 3.8
+const MAGNET_CONE := 0.35   # cos of the half-angle (~70 degrees)
+const MAGNET_STEP := 7.0    # m/s for MAGNET_STEP_TIME
+const MAGNET_STEP_TIME := 0.09
 const MOUSE_SENS := 0.003
 ## Right-stick orbit speed at full deflection, radians per second (x stick_sens).
 const STICK_SENS := 2.4
@@ -92,9 +126,27 @@ var _recovery := 0.0
 ## (stunned). A whiffed parry (no strike landed in the window) puts parry
 ## on a short cooldown so it can't be mashed. Judged where the mob's strike
 ## resolves (the server online, using the times it received our presses).
-const PARRY_WINDOW := 0.22       # seconds after the press that a strike is parried
-const PARRY_LATENCY_MAX := 0.12  # extra window online for the press's travel time
-const PARRY_WHIFF_CD := 0.7
+##
+## Timing (all judged on the server for remote players):
+## - PARRY_WINDOW: a strike that lands within this long after the press is
+##   parried; within PERFECT_WINDOW it is a PERFECT parry (double posture,
+##   longer stagger, guard refund, no blade wear).
+## - A press made up to PARRY_BUFFER before the whiff cooldown ends opens
+##   its window the moment the cooldown does (buffered input).
+## - Online the press travels to the server after the player saw the blow
+##   coming, so a strike that finds no parry on a remote player waits up to
+##   one round trip + LATE_GRACE_PAD_MS (clamped LATE_GRACE_MIN/MAX_MS) for a
+##   press or dash already in flight (srv_strike). The early side gets no
+##   extra allowance, so the total window never grows past PARRY_WINDOW +
+##   the measured round trip, capped at LATE_GRACE_MAX_MS.
+const PARRY_WINDOW := 0.25
+const PERFECT_WINDOW := 0.09
+const PARRY_BUFFER := 0.1
+const PARRY_WHIFF_CD := 0.6
+const LATE_GRACE_PAD_MS := 40
+const LATE_GRACE_MIN_MS := 60
+const LATE_GRACE_MAX_MS := 260
+const PERFECT_GUARD := 25.0      # guard refunded by a perfect parry
 const BLOCK_REDUCTION := 0.7     # blocked hits do 30% damage
 const GUARD_MAX := 100.0
 const GUARD_PER_BLOCK := 34.0    # three blocked hits break guard
@@ -104,8 +156,28 @@ var guard := GUARD_MAX
 var blocking := false
 var _parry_open_ms := -100000   # when the current parry window opened (this machine's clock)
 var _parry_ready_ms := 0
+var _parry_buffer_at := 0       # a buffered press opens its window at this time
+var _parry_used := true         # local: the open window parried (else it whiffs)
 var _stun := 0.0
 var parries := 0                # successful parries (stats / tests)
+var perfect_parries := 0        # of which perfect
+var whiffs := 0                 # local whiffed windows (stats / tests)
+## Was the last parry judged by defend() a perfect one (callers read it).
+var last_parry_perfect := false
+## Dash invulnerability on this machine's clock (server: stamped by net_dash).
+var _iframe_until := 0
+var _dash_srv_ms := -100000
+## Server, remote player: strikes waiting for an in-flight parry/dash press,
+## [{"at": ms, "from": Vector3, "cb": Callable, "parryable": bool}].
+var _pending_strikes: Array = []
+## Tests: let srv_strike hold strikes for this node as if it were remote.
+var defer_test := false
+# Basic attack combo state (owner only).
+var _combo_step := 0
+var _combo_t := 99.0
+var _attack_buf := 0.0
+var _magnet_t := 0.0
+var _magnet_dir := Vector3.ZERO
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 ## Either a VRMCharacter (real anime model) or the built-in CharacterModel.
 var model: Node3D
@@ -437,6 +509,8 @@ func _physics_process(delta: float) -> void:
 				_stun = maxf(_stun - delta, 0.0)
 			elif not blocking:
 				guard = minf(guard + _guard_regen() * delta, GUARD_MAX)
+			_tick_parry_buffer()
+			_flush_pending(false)
 		return
 	level = GameState.level
 	srv_attack = GameState.attack_damage()
@@ -488,13 +562,8 @@ func _physics_process(delta: float) -> void:
 	var can_act := input_enabled and not _dying and _stun == 0.0 and not blocking and _recovery == 0.0
 	if class_chord and class_arts.size() > 1 and can_act and Input.is_action_just_pressed("dash"):
 		use_class_art(1)
-	elif input_enabled and Input.is_action_just_pressed("dash") and _dash_cd == 0.0:
-		_dash_timer = DASH_TIME
-		_dash_cd = DASH_COOLDOWN
-		Audio.play("dash")
-		var fx := VFX.get_for(self)
-		if fx:
-			fx.dash(global_position, dir if dir != Vector3.ZERO else -model.global_transform.basis.z)
+	elif input_enabled and not _dying and _stun == 0.0 and Input.is_action_just_pressed("dash") and _dash_cd == 0.0:
+		start_dash(dir)
 	if input_enabled and not _dying and _stun == 0.0:
 		if Input.is_action_just_pressed("parry"):
 			press_parry()
@@ -504,9 +573,16 @@ func _physics_process(delta: float) -> void:
 		_stun = maxf(_stun - delta, 0.0)
 	elif not blocking:
 		guard = minf(guard + _guard_regen() * delta, GUARD_MAX)
+	_tick_parry_buffer()
+	_check_whiff()
+	_combo_t += delta
+	_attack_buf = maxf(_attack_buf - delta, 0.0)
 	if class_chord and can_act and Input.is_action_just_pressed("attack"):
 		use_class_art(0)
-	elif input_enabled and not _dying and _stun == 0.0 and not blocking and Input.is_action_just_pressed("attack") and _attack_cd == 0.0 and _recovery == 0.0:
+	elif input_enabled and not _dying and not bot and Input.is_action_just_pressed("attack"):
+		_attack_buf = ATTACK_BUFFER  # fires below now, or as soon as the swing is allowed
+	if _attack_buf > 0.0 and input_enabled and not _dying and _stun == 0.0 and not blocking and _attack_cd == 0.0 and _recovery == 0.0:
+		_attack_buf = 0.0
 		_attack()
 	if can_act and not class_arts.is_empty():
 		for i in mini(class_arts.size(), class_cd.size()):
@@ -535,6 +611,11 @@ func _physics_process(delta: float) -> void:
 		var fwd := dir if dir != Vector3.ZERO else -model.global_transform.basis.z
 		velocity.x = fwd.x * DASH_SPEED
 		velocity.z = fwd.z * DASH_SPEED
+	elif _magnet_t > 0.0:
+		# Attack magnetism: a short step in toward the swing's target.
+		_magnet_t -= delta
+		velocity.x = _magnet_dir.x * MAGNET_STEP
+		velocity.z = _magnet_dir.z * MAGNET_STEP
 	elif dir != Vector3.ZERO:
 		velocity.x = dir.x * speed * input_mag
 		velocity.z = dir.z * speed * input_mag
@@ -582,23 +663,89 @@ func _footsteps(delta: float, grounded: bool) -> void:
 			fx.puff(global_position, 0.55 if hspeed > 5.5 else 0.4)
 
 
+## Basic attack: the next blow of the light-light-finisher chain. Faces (and
+## steps toward) the nearest foe in front, plays the swing at once and lands
+## the blade on the clip's contact frame ("delay"). The server re-checks
+## kind, cadence, range and facing in Enemy.net_hit / Duels.srv_hit.
 func _attack() -> void:
-	_attack_cd = ATTACK_COOLDOWN
-	_play_swing_fx(-1)
+	if _combo_t > COMBO_CHAIN:
+		_combo_step = 0
+	var step: Dictionary = COMBO[_combo_step]
+	var kind := int(step["kind"])
+	_combo_t = 0.0
+	_combo_step = (_combo_step + 1) % COMBO.size()
+	_attack_cd = float(step["gap"])
+	_magnetize(float(step["range"]))
+	_play_swing_fx(kind, int(step["anim"]))
 	if Net.online:
-		net_swing.rpc(-1)
-	_hit_cone(GameState.attack_damage(), ATTACK_RANGE, 1.3)
+		net_swing.rpc(kind, int(step["anim"]))
+	var dmg := GameState.attack_damage() * float(step["mult"])
+	get_tree().create_timer(float(step["delay"]), false).timeout.connect(func():
+		if is_inside_tree() and not _dying and _stun == 0.0:
+			_hit_cone(dmg, float(step["range"]), float(step["arc"]), kind))
+
+
+## The foe a swing should go to: the nearest living mob (or duel opponent)
+## within MAGNET_RANGE inside a forward cone around where the player is
+## steering (stick/keys) or facing. Turns the body to it at once and, if it
+## stands just out of reach, steps in for MAGNET_STEP_TIME.
+func _magnetize(reach: float) -> Node3D:
+	var want := -model.global_transform.basis.z
+	if is_local and not bot and input_enabled:
+		var input_dir := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+		if input_dir != Vector2.ZERO:
+			want = Basis(Vector3.UP, cam_pivot.rotation.y) * Vector3(input_dir.x, 0, input_dir.y)
+	want.y = 0.0
+	want = want.normalized() if want.length_squared() > 0.001 else Vector3.FORWARD
+	var best = null
+	var best_score := INF
+	var cands: Array = get_tree().get_nodes_in_group("enemies")
+	var duels := get_tree().get_first_node_in_group("duels")
+	if duels != null and duels.opponent_peer() != 0:
+		for p in get_tree().get_nodes_in_group("players"):
+			if p != self and duels.is_opponent(int(p.get("peer_id"))):
+				cands.append(p)
+	for e in cands:
+		if not (e is Node3D) or not e.visible or ("hp" in e and float(e.hp) <= 0.0):
+			continue
+		var to: Vector3 = e.global_position - global_position
+		to.y = 0.0
+		var d := to.length()
+		if d > MAGNET_RANGE + (e.size.z * 0.5 if "size" in e else 0.0) or absf(e.global_position.y - global_position.y) > 2.5:
+			continue
+		var c := want.dot(to.normalized()) if d > 0.05 else 1.0
+		if c < MAGNET_CONE:
+			continue
+		var score := d * (2.0 - c)  # prefer close and centred
+		if score < best_score:
+			best_score = score
+			best = e
+	if best == null:
+		return null
+	var to_b: Vector3 = best.global_position - global_position
+	to_b.y = 0.0
+	if to_b.length() > 0.05:
+		model.rotation.y = atan2(-to_b.x, -to_b.z)
+		var edge: float = to_b.length() - (best.size.z * 0.5 if "size" in best else 0.4)
+		if edge > reach * 0.6 and _dash_timer <= 0.0:
+			_magnet_dir = to_b.normalized()
+			_magnet_t = clampf((edge - reach * 0.6) / MAGNET_STEP, 0.0, MAGNET_STEP_TIME)
+	return best
 
 
 ## Everything a swing looks and sounds like, on every peer: the animation,
 ## the swing sound, the slash arc and (Sword Arts) the ground ring and blade
 ## glow. Cosmetic only; damage goes through _hit_cone / net_hit as before.
-func _play_swing_fx(kind: int) -> void:
+## `anim` overrides the clip (combo steps); -1 picks it from the kind.
+func _play_swing_fx(kind: int, anim := -1) -> void:
 	_swing_t = ATTACK_COOLDOWN
 	if _vrm != null:
-		_vrm.play_attack(0 if kind < 0 else 1 + kind)
+		_vrm.play_attack(anim if anim >= 0 else (0 if kind < 0 else 1 + kind))
 	var pos = null if is_local else global_position
-	if kind < 0:
+	if kind == KIND_FINISHER:
+		Audio.play("swing", pos, 0.06, 2.0, 0.82)
+		Audio.play("swing_heavy", pos, 0.08)
+	elif kind < 0:
 		Audio.play("swing", pos, 0.1)
 	else:
 		Audio.play("swing", pos, 0.05, 2.0, 0.9)
@@ -621,20 +768,23 @@ func _play_swing_fx(kind: int) -> void:
 	if kind >= 0:
 		fx.ring(global_position, VFX.kind_color(kind), 2.6 if kind != 2 else 3.2, 0.4)
 		fx.flash_light(global_position + Vector3(0, 1.0, 0), VFX.kind_color(kind), 3.0)
+	elif kind == KIND_FINISHER:
+		fx.puff(global_position + fwd * 0.6, 0.8)
+		fx.flash_light(global_position + Vector3(0, 1.0, 0) + fwd * 0.8, VFX.BASIC_COLOR, 2.0)
 
 
 ## Owner -> everyone: "I swung this move", so other players see the animation
 ## and slash arc. Purely cosmetic and unreliable; the server never acts on it
 ## (hits go through Enemy.net_hit). Accepted only from this node's own peer.
 @rpc("any_peer", "call_remote", "unreliable")
-func net_swing(kind: int) -> void:
+func net_swing(kind: int, anim: int) -> void:
 	if is_local or multiplayer.get_remote_sender_id() != peer_id:
 		return
 	var now := Time.get_ticks_msec()
 	if now - _last_swing_fx_ms < 120:
 		return  # Rate limit: a flood of swings cannot spam effects.
 	_last_swing_fx_ms = now
-	_play_swing_fx(clampi(kind, -1, SKILLS.size() - 1))
+	_play_swing_fx(clampi(kind, KIND_FINISHER, SKILLS.size() - 1), clampi(anim, -1, 3))
 
 
 ## Decaying camera shake (local player only; settings-free, small).
@@ -736,7 +886,8 @@ func bot_incoming(windup: float) -> void:
 	var now := Time.get_ticks_msec()
 	var r := randf()
 	if r < 0.55:
-		_bot_parry_at = now + int(maxf(windup - 0.12, 0.0) * 1000.0)
+		# Half aim at the flare (perfect), half a little early (plain parry).
+		_bot_parry_at = now + int(maxf(windup - (0.05 if randf() < 0.5 else 0.16), 0.0) * 1000.0)
 		_bot_release_at = _bot_parry_at + 120
 	elif r < 0.75:
 		_bot_parry_at = now
@@ -869,7 +1020,7 @@ func _hit_cone(damage: float, range_: float, arc: float, kind := -1) -> int:
 		var reach: float = range_ + (e.size.z * 0.5 if "size" in e else 0.0)
 		if to.length() <= reach and (to.length() < 0.6 or facing.dot(to.normalized()) > cos(arc / 2.0)):
 			if not Net.online or multiplayer.is_server():
-				e.take_hit(damage, to.normalized(), peer_id)
+				e.take_hit(damage, to.normalized(), peer_id, kind)
 			else:
 				e.net_hit.rpc_id(1, kind, to.normalized(), _swing_serial)
 			hits += 1
@@ -897,19 +1048,18 @@ func _hit_cone(damage: float, range_: float, arc: float, kind := -1) -> int:
 	if hits > 0 and is_local:
 		# Juice on a landed blow: a tiny camera kick and a 60 ms hit-stop on
 		# our own animation (never Engine.time_scale: that would be global).
-		shake(0.12 if kind < 0 else 0.22)
+		shake(0.12 if kind == -1 else 0.24)
+		InputSetup.rumble(0.15 if kind == -1 else 0.35, 0.35 if kind == -1 else 0.8, 0.08 if kind == -1 else 0.14)
 		if _vrm != null:
-			_vrm.hit_stop(0.06 if kind < 0 else 0.09)
+			_vrm.hit_stop(0.06 if kind == -1 else 0.1)
 	return hits
 
 
-## Parry press: opens the window and starts guarding while held.
+## Parry press: opens the window at once (no wind-up of its own) and starts
+## guarding while held. Inside the whiff cooldown it only guards, unless the
+## cooldown ends within PARRY_BUFFER, in which case the press is buffered.
 func press_parry() -> void:
-	var now := Time.get_ticks_msec()
-	blocking = true
-	if now >= _parry_ready_ms:
-		_parry_open_ms = now
-		_parry_ready_ms = now + int(PARRY_WHIFF_CD * 1000.0)
+	_parry_press_at(Time.get_ticks_msec())
 	if _vrm != null and _vrm.has_method("play_guard"):
 		_vrm.play_guard(true)
 	if Net.online and not multiplayer.is_server():
@@ -924,54 +1074,209 @@ func release_parry() -> void:
 		net_parry.rpc_id(1, false)
 
 
+## The press itself, on whichever machine judges it (same rules everywhere).
+func _parry_press_at(now: int) -> void:
+	blocking = true
+	if now >= _parry_ready_ms:
+		_open_parry(now)
+	elif _parry_ready_ms - now <= int(PARRY_BUFFER * 1000.0):
+		_parry_buffer_at = _parry_ready_ms
+
+
+func _open_parry(now: int) -> void:
+	_parry_open_ms = now
+	_parry_ready_ms = now + int(PARRY_WHIFF_CD * 1000.0)
+	_parry_buffer_at = 0
+	_parry_used = false
+	_flush_pending(false)  # server: a strike held for a press in flight
+
+
+## A buffered press opens its window when the whiff cooldown runs out (even
+## if the tap was already released: the window parries on its own).
+func _tick_parry_buffer() -> void:
+	if _parry_buffer_at > 0 and Time.get_ticks_msec() >= _parry_buffer_at:
+		_open_parry(Time.get_ticks_msec())
+
+
+## Owner only: an open window that parried nothing is a whiff. Online the
+## server's verdict needs a round trip, so the owner waits a little longer.
+func _check_whiff() -> void:
+	if _parry_used or not is_local:
+		return
+	var wait := int(PARRY_WINDOW * 1000.0) + (300 if Net.online and not multiplayer.is_server() else 0)
+	if Time.get_ticks_msec() - _parry_open_ms > wait:
+		_parry_used = true
+		whiffs += 1
+		defend_fx("whiff", global_position - model.global_transform.basis.z)
+
+
 ## Owner -> server: parry pressed / released. The server stamps its own time
-## (minus nothing: latency is covered by PARRY_LATENCY_MAX) and applies the
-## same whiff cooldown, so a client can't keep a window open by spamming.
+## and applies the same whiff cooldown and buffer, so a client can't keep a
+## window open by spamming.
 @rpc("any_peer", "call_remote", "reliable")
 func net_parry(on: bool) -> void:
 	if not multiplayer.is_server() or multiplayer.get_remote_sender_id() != peer_id:
 		return
+	if on:
+		_parry_press_at(Time.get_ticks_msec())
+	else:
+		blocking = false
+
+
+## Dash: the burst of speed plus DASH_IFRAMES of invulnerability.
+func start_dash(dir := Vector3.ZERO) -> void:
+	_dash_timer = DASH_TIME
+	_dash_cd = DASH_COOLDOWN
+	_magnet_t = 0.0
+	_start_iframes(Time.get_ticks_msec())
+	if Net.online and not multiplayer.is_server():
+		net_dash.rpc_id(1)
+	Audio.play("dash")
+	var fx := VFX.get_for(self)
+	if fx:
+		fx.dash(global_position, dir if dir != Vector3.ZERO else -model.global_transform.basis.z)
+
+
+## Owner -> server: I dashed. The server grants its own i-frames at most once
+## per DASH_COOLDOWN (90%), never while stunned.
+@rpc("any_peer", "call_remote", "reliable")
+func net_dash() -> void:
+	if not multiplayer.is_server() or multiplayer.get_remote_sender_id() != peer_id:
+		return
+	_start_iframes(Time.get_ticks_msec())
+
+
+func _start_iframes(now: int) -> bool:
+	if _stun > 0.0 or now - _dash_srv_ms < int(DASH_COOLDOWN * 900.0):
+		return false
+	_dash_srv_ms = now
+	_iframe_until = now + int(DASH_IFRAMES * 1000.0)
+	_flush_pending(false)
+	return true
+
+
+func is_dodging() -> bool:
+	return Time.get_ticks_msec() < _iframe_until
+
+
+## Server-side late grace for this remote player's presses (ms).
+func late_grace_ms() -> int:
+	return clampi(Net.srv_rtt(peer_id) + LATE_GRACE_PAD_MS, LATE_GRACE_MIN_MS, LATE_GRACE_MAX_MS)
+
+
+func _can_defer() -> bool:
+	if defer_test:
+		return true
+	return Net.online and multiplayer.is_server() and not is_local and multiplayer.get_peers().has(peer_id)
+
+
+## The one way a mob, boss or duel blow reaches this player: judged now
+## (defend) and handed to `on_outcome(outcome)`. On the server, for a remote
+## player who has no parry/dash running yet, the blow waits up to
+## late_grace_ms() for a press already on its way; it then resolves as a
+## (perfect) parry or dodge if one arrives, or as it would have anyway.
+## `parryable` false: a heavy blow only i-frames or a raised guard soften.
+## Returns the outcome, or "pending" while the blow is held.
+func srv_strike(from_pos: Vector3, on_outcome: Callable, parryable := true) -> String:
+	if _can_defer():
+		var peek := defend(from_pos, parryable, false)
+		if peek == "" or peek == "block":
+			_pending_strikes.append({"at": Time.get_ticks_msec() + late_grace_ms(), "from": from_pos, "cb": on_outcome, "parryable": parryable})
+			return "pending"
+	var out := defend(from_pos, parryable)
+	on_outcome.call(out)
+	return out
+
+
+## Resolve held strikes: now when a press or dash makes them parry/dodge,
+## else when their grace runs out (or all of them when `force`).
+func _flush_pending(force: bool) -> void:
+	if _pending_strikes.is_empty():
+		return
 	var now := Time.get_ticks_msec()
-	blocking = on
-	if on and now >= _parry_ready_ms:
-		_parry_open_ms = now
-		_parry_ready_ms = now + int(PARRY_WHIFF_CD * 1000.0)
+	var due: Array = []
+	var keep: Array = []
+	for s in _pending_strikes:
+		var o := defend(s["from"], bool(s["parryable"]), false)
+		if force or now >= int(s["at"]) or o == "parry" or o == "dodge" or o == "dazed":
+			due.append(s)
+		else:
+			keep.append(s)
+	_pending_strikes = keep
+	for s in due:
+		var out := defend(s["from"], bool(s["parryable"]))
+		var cb: Callable = s["cb"]
+		if cb.is_valid():
+			cb.call(out)
 
 
-## Where a mob's strike resolves (offline/host: here; server: the remote
-## player's node). Returns "parry", "block", "stunned" or "" (no defence).
-## A parry consumes the window and refunds the whiff cooldown.
-func defend(from_pos: Vector3) -> String:
+func pending_strikes() -> int:
+	return _pending_strikes.size()
+
+
+## Where a blow resolves (offline/host: here; server: the remote player's
+## node). Returns "dodge" (dash i-frames), "parry" (last_parry_perfect tells
+## the tier), "block", "stunned" (this blow broke the guard), "dazed" (already
+## stunned: full damage) or "" (no defence). A parry consumes the
+## window and refunds the whiff cooldown. `commit` false only looks.
+## Unparryable blows (`parryable` false) are softened by any raised guard
+## without wearing it, as before.
+func defend(from_pos: Vector3, parryable := true, commit := true) -> String:
 	if _stun > 0.0:
-		return "stunned"
+		return "dazed"  # already reeling: the blow lands in full
 	var now := Time.get_ticks_msec()
-	var window := PARRY_WINDOW + (PARRY_LATENCY_MAX if Net.online and not is_local else 0.0)
+	if now < _iframe_until:
+		return "dodge"
+	if not parryable:
+		return "block" if blocking else ""
 	# Must face the attacker roughly (no parrying blows from behind).
 	var to := from_pos - global_position
 	to.y = 0.0
 	var facing := -model.global_transform.basis.z if model else Vector3.FORWARD
 	var front := to.length() < 0.5 or facing.dot(to.normalized()) > -0.1
-	if front and now - _parry_open_ms <= int(window * 1000.0):
+	var since := now - _parry_open_ms
+	if front and since <= int(PARRY_WINDOW * 1000.0):
+		if not commit:
+			return "parry"
 		_parry_open_ms = -100000
 		_parry_ready_ms = now  # a clean parry can chain into the next one
+		_parry_used = true
+		last_parry_perfect = since <= perfect_ms()
 		parries += 1
 		last_parry_ms = now
-		if is_local:
+		if last_parry_perfect:
+			perfect_parries += 1
+			guard = minf(guard + PERFECT_GUARD, GUARD_MAX)
+		elif is_local:
 			GameState.wear_gear("weapon", Durability.WEAR_PARRY)
 		elif Net.online and multiplayer.is_server():
 			Net.srv_wear(peer_id, "weapon", Durability.WEAR_PARRY)
 		return "parry"
 	if front and blocking:
+		if not commit:
+			return "block"
 		guard -= GUARD_PER_BLOCK
 		if guard <= 0.0:
 			guard = 0.0
 			blocking = false
 			_stun = GUARD_BREAK_STUN
+			_parry_buffer_at = 0
 			if _vrm != null and _vrm.has_method("play_guard"):
 				_vrm.play_guard(false)
 			return "stunned"
 		return "block"
 	return ""
+
+
+## How soon after the press a parried blow counts as perfect (ms). For a
+## remote player the press reached the server one round trip after it was
+## made, so the server takes that off; a press that arrives during the late
+## grace (since <= 0) is always perfect.
+func perfect_ms() -> int:
+	var ms := int(PERFECT_WINDOW * 1000.0)
+	if Net.online and multiplayer.is_server() and not is_local:
+		ms = maxi(ms - Net.srv_rtt(peer_id), 0)
+	return ms
 
 
 func is_stunned() -> bool:
@@ -984,44 +1289,88 @@ func is_stunned() -> bool:
 func pvp_staggered(secs: float, push: Vector3) -> void:
 	_stun = maxf(_stun, clampf(secs, 0.0, GUARD_BREAK_STUN))
 	_recovery = maxf(_recovery, 0.2)
+	_combo_step = 0
 	if is_local:
 		velocity.x = push.x
 		velocity.z = push.z
 		shake(0.2)
 		InputSetup.rumble(0.4, 0.8, 0.2)
 		Audio.play("block", null, 0.05)
+		_callout("PARRIED", Color(1.0, 0.45, 0.35), false)
 		var fx := VFX.get_for(self)
 		if fx and fx.has_method("stagger"):
 			fx.call("stagger", self, secs)
 
 
-## Local feedback for a defence outcome (on the defender's own machine).
+## Big centred combat word on the owner's HUD (PARRY / PERFECT / ...).
+func _callout(text: String, color: Color, big: bool) -> void:
+	if not is_local or bot:
+		return
+	var hud := get_tree().get_first_node_in_group("hud")
+	if hud and hud.has_method("combat_callout"):
+		hud.combat_callout(text, color, big)
+
+
+## Local feedback for a defence outcome (on the defender's own machine):
+## "parry", "perfect", "block", "stunned" (guard break), "dodge", "whiff".
 func defend_fx(outcome: String, from_pos: Vector3) -> void:
 	var fx := VFX.get_for(self)
 	var at := global_position + Vector3(0, 1.2, 0) + (from_pos - global_position).normalized() * 0.6
+	var spot = null if is_local else at
 	match outcome:
-		"parry":
-			Audio.play("parry", null if is_local else at, 0.04)
-			shake(0.18)
-			InputSetup.rumble(0.3, 0.9, 0.12)
-			if fx and fx.has_method("parry_flash"):
+		"parry", "perfect":
+			var perfect := outcome == "perfect"
+			Audio.play("parry_perfect" if perfect else "parry", spot, 0.04)
+			shake(0.3 if perfect else 0.18)
+			InputSetup.rumble(0.4 if perfect else 0.3, 1.0 if perfect else 0.9, 0.18 if perfect else 0.12)
+			if fx and perfect and fx.has_method("perfect_parry_flash"):
+				fx.call("perfect_parry_flash", at)
+			elif fx and fx.has_method("parry_flash"):
 				fx.call("parry_flash", at, false)
 			elif fx:
 				fx.flash(at, Color(1.0, 0.95, 0.7), 1.3)
 				fx.ring(at, Color(1.0, 0.85, 0.4), 1.8, 0.25)
 			if _vrm != null:
-				_vrm.hit_stop(0.09)
+				_vrm.play_attack(3 if perfect else 0)  # the deflecting cut
+				_vrm.hit_stop(0.14 if perfect else 0.09)
+			_callout("PERFECT" if perfect else "PARRY", Color(1.0, 0.95, 0.75) if perfect else VFX.PARRY_COLOR, perfect)
+			if perfect and is_local:
+				_time_stop(0.11)
 		"block":
-			Audio.play("block", null if is_local else at, 0.06)
+			Audio.play("block", spot, 0.06)
 			shake(0.1)
 			if fx:
 				fx.hit(at, (global_position - from_pos).normalized(), Color(0.7, 0.85, 1.0))
 		"stunned":
-			Audio.play("guard_break", null if is_local else at, 0.04)
+			Audio.play("guard_break", spot, 0.04)
 			shake(0.3)
 			InputSetup.rumble(0.5, 1.0, 0.3)
 			if fx and fx.has_method("parry_flash"):
 				fx.call("parry_flash", at, true)
+			if fx and fx.has_method("stagger"):
+				fx.call("stagger", self, GUARD_BREAK_STUN)
+			_callout("GUARD BREAK", Color(1.0, 0.4, 0.3), true)
+		"dodge":
+			Audio.play("dodge", spot, 0.08)
+			if fx and fx.has_method("dodge_flash"):
+				fx.call("dodge_flash", self)
+			_callout("EVADE", Color(0.6, 0.9, 1.0), false)
+		"whiff":
+			Audio.play("parry_whiff", spot, 0.06)
+			if fx and fx.has_method("parry_whiff"):
+				fx.call("parry_whiff", self)
+			_callout("WHIFF", Color(0.62, 0.66, 0.72), false)
+
+
+## Offline only: a perfect parry freezes the world for a beat (online the
+## world can't stop; the shake and the rig's hit-stop carry it instead).
+func _time_stop(secs: float) -> void:
+	if Net.online or not Audio.enabled or Engine.time_scale < 1.0:
+		return
+	Engine.time_scale = 0.08
+	get_tree().create_timer(secs, true, false, true).timeout.connect(func():
+		if Engine.time_scale == 0.08:
+			Engine.time_scale = 1.0)
 
 
 ## Server -> owner: the outcome of a defence judged on the server (and the
@@ -1036,10 +1385,17 @@ func net_defended(outcome: String, from_pos: Vector3, guard_left: float, stun: f
 		blocking = false
 		if _vrm != null and _vrm.has_method("play_guard"):
 			_vrm.play_guard(false)
-	if outcome == "parry":
+	if outcome == "parry" or outcome == "perfect":
 		parries += 1
 		last_parry_ms = Time.get_ticks_msec()
-		GameState.wear_gear("weapon", Durability.WEAR_PARRY)  # mirror of the server's wear
+		last_parry_perfect = outcome == "perfect"
+		_parry_used = true
+		_parry_open_ms = -100000
+		_parry_ready_ms = 0
+		if outcome == "perfect":
+			perfect_parries += 1
+		else:
+			GameState.wear_gear("weapon", Durability.WEAR_PARRY)  # mirror of the server's wear
 	defend_fx(outcome, from_pos)
 
 
@@ -1086,7 +1442,7 @@ func use_unique(i: int) -> bool:
 			if is_inside_tree():
 				_play_swing_fx(h % SKILLS.size())
 				if Net.online:
-					net_swing.rpc(h % SKILLS.size()))
+					net_swing.rpc(h % SKILLS.size(), -1))
 	get_tree().create_timer(0.12 + hits * 0.08, false).timeout.connect(func():
 		if is_inside_tree():
 			_hit_cone(GameState.attack_damage() * GameState.art_power() * float(art["mult"]), float(art["range"]), float(art["arc"]), UniqueSkills.KIND_BASE + i))
@@ -1132,7 +1488,7 @@ func use_class_art(i: int) -> bool:
 		velocity.z = fwd.z * float(art["lunge"])
 	_play_swing_fx(i % SKILLS.size())
 	if Net.online:
-		net_swing.rpc(i % SKILLS.size())
+		net_swing.rpc(i % SKILLS.size(), -1)
 	var kind := HiddenClasses.kind_of(cls, i)
 	get_tree().create_timer(0.12, false).timeout.connect(func():
 		if not is_inside_tree():
@@ -1164,9 +1520,10 @@ func _use_skill(i: int) -> void:
 	var sk: Dictionary = SKILLS[i]
 	skill_cd[i] = sk["cooldown"]
 	_recovery = sk["recovery"]
+	_combo_step = 0
 	_play_swing_fx(i)
 	if Net.online:
-		net_swing.rpc(i)
+		net_swing.rpc(i, -1)
 	skill_used.emit(i, sk["cooldown"])
 	# Heavy Sword Arts (2x damage and up) thump the pad; light ones tap it.
 	if float(sk["mult"]) >= 2.0:

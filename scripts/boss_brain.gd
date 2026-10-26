@@ -472,15 +472,9 @@ func _resolve() -> void:
 				var d := _pos_of(p).distance_to(pos)
 				if d < radius:
 					# Not parryable: inside the ring you take it (a guard
-					# still eats the blow as a block, but the parry never fires).
-					var outcome := ""
-					if p.has_method("is_stunned") and p.is_stunned():
-						outcome = "stunned"
-					elif bool(p.get("blocking")):
-						outcome = "block"
-					e._show_defence(p, outcome)
-					var dmg := e.damage * float(ph["slam_mult"])
-					e._damage_player(p, dmg * (1.0 - Player.BLOCK_REDUCTION) if outcome == "block" else dmg)
+					# still eats the blow as a block, a dash's i-frames slip
+					# it, but the parry never fires).
+					_strike(p, e.damage * float(ph["slam_mult"]), false)
 				elif _threatened.has(p) and "peer_id" in p:
 					Net.note_hidden(p.peer_id, "dodge")
 			_threatened.clear()
@@ -559,24 +553,14 @@ func _players_on_line(a: Vector3, b: Vector3, width: float) -> Array:
 	return out
 
 
-## One blow on one player through Player.defend (the server judges), exactly
-## like Enemy._resolve_strike: parry -> posture, block -> chip, else damage.
+## One blow on one player through Player.srv_strike (the server judges),
+## exactly like Enemy._resolve_strike: dash i-frames -> no damage, parry ->
+## posture (perfect: double), block -> chip, else damage. A remote player's
+## blow may wait out the late-press grace (Player.late_grace_ms) first.
 func _strike(t: Node3D, dmg: float, parryable: bool) -> String:
-	var e := enemy
 	if t.has_method("is_dying") and t.is_dying():
 		return ""
-	var outcome := ""
-	if parryable and t.has_method("defend"):
-		outcome = t.defend(e.global_position)
-	e._show_defence(t, outcome)
-	match outcome:
-		"parry":
-			e._parried(t)
-		"block":
-			e._damage_player(t, dmg * (1.0 - Player.BLOCK_REDUCTION))
-		_:
-			e._damage_player(t, dmg)
-	return outcome
+	return enemy.strike_player(t, dmg, parryable)
 
 
 # ------------------------------------------------------------ arena hazard --
@@ -621,13 +605,7 @@ func _land_rock(at: Vector3, radius: float, dmg: float) -> void:
 		var flat := (_pos_of(p) - at) * Vector3(1, 0, 1)
 		if flat.length() >= radius or absf(_pos_of(p).y - at.y) > 4.0:
 			continue
-		var outcome := ""
-		if p.has_method("is_stunned") and p.is_stunned():
-			outcome = "stunned"
-		elif bool(p.get("blocking")):
-			outcome = "block"
-		enemy._show_defence(p, outcome)
-		enemy._damage_player(p, dmg * (1.0 - Player.BLOCK_REDUCTION) if outcome == "block" else dmg)
+		_strike(p, dmg, false)
 	_emit("hazard_land", {"pos": at, "radius": radius})
 
 

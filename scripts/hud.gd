@@ -2214,3 +2214,42 @@ func toast(text: String, sub := "", kicker := "", accent: Color = UITheme.GOLD) 
 	tw.set_parallel(false)
 	tw.tween_interval(2.0 if sub == "" else 2.8)
 	tw.tween_property(_toast_card, "modulate:a", 0.0, 0.6)
+
+
+# --- Combat callouts (Player._callout) ----------------------------------------
+
+var _callout_label: Label
+var _callout_tw: Tween
+
+## A short combat word punched in just below the crosshair: PARRY, PERFECT,
+## GUARD BREAK, EVADE, WHIFF, PARRIED. One at a time (a new one replaces the
+## last); `big` for the moments that should land hard.
+func combat_callout(text: String, color: Color, big := false) -> void:
+	if _root == null:
+		return
+	if _callout_label == null or not is_instance_valid(_callout_label):
+		_callout_label = Label.new()
+		_callout_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_callout_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		_callout_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_callout_label.add_theme_font_override("font", UITheme.display_font())
+		_callout_label.add_theme_color_override("font_outline_color", Color(0.05, 0.03, 0.02, 0.9))
+		_callout_label.add_theme_constant_override("outline_size", 10)
+		_root.add_child(_callout_label)
+	var l := _callout_label
+	l.text = text
+	l.add_theme_font_size_override("font_size", 46 if big else 32)
+	l.add_theme_color_override("font_color", color)
+	l.reset_size()
+	l.size = Vector2(640, 80)
+	l.pivot_offset = l.size * 0.5
+	l.position = Vector2((_root.size.x - l.size.x) * 0.5, _root.size.y * 0.5 + 70.0)
+	if _callout_tw:
+		_callout_tw.kill()
+	l.modulate = Color(1, 1, 1, 1)
+	l.scale = Vector2.ONE * (1.6 if big else 1.3)
+	var tw := create_tween()
+	_callout_tw = tw
+	tw.tween_property(l, "scale", Vector2.ONE, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(0.45 if big else 0.3)
+	tw.tween_property(l, "modulate:a", 0.0, 0.3)

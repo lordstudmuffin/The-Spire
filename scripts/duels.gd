@@ -37,8 +37,10 @@ const ANNOUNCE_RANGE := 40.0
 const COUNTDOWN := 60   # Aincrad-style: a full minute to get ready (big numbers for the last 10)
 ## PvP telegraph: a swing on a duel opponent lands this long after the server
 ## accepts it (shorter than a mob's Enemy.WINDUP), so the defender can parry.
-const WINDUP := 0.25
+const WINDUP := 0.3
 const PARRY_STUN := 0.8
+## A perfect parry (Player.PERFECT_WINDOW) stuns the attacker this long.
+const PERFECT_STUN := 1.2
 const PARRY_PUSH := 7.0
 const HIT_RANGE := 4.0
 const FIRST_STRIKE_PCT := 0.05
@@ -315,24 +317,49 @@ func _resolve(s: Dictionary) -> void:
 	var t_pos: Vector3 = t.srv_position()
 	if p_pos.distance_to(t_pos) > (HIT_RANGE + Net.RANGE_SLACK) * 1.2:
 		return  # the defender stepped out during the telegraph
-	var outcome: String = t.defend(p_pos) if t.has_method("defend") else ""
+	# Judged by the defender's Player.srv_strike (i-frames, parry, guard, and
+	# on a live server the late-press grace), then finished in _on_defended.
+	if t.has_method("srv_strike"):
+		t.srv_strike(p_pos, _on_defended.bind(s, p_pos))
+	else:
+		_on_defended("", s, p_pos)
+
+
+func _on_defended(outcome: String, s: Dictionary, p_pos: Vector3) -> void:
+	var id := int(s["duel"])
+	if not duels.has(id) or str(duels[id]["phase"]) != "fight":
+		return
+	var d: Dictionary = duels[id]
+	var attacker := int(s["attacker"])
+	var defender := int(s["defender"])
+	var p := _node_of(attacker)
+	var t := _node_of(defender)
+	if p == null or t == null or not is_instance_valid(p) or not is_instance_valid(t):
+		return
+	if t.has_method("is_dying") and t.is_dying():
+		return
+	var t_pos: Vector3 = t.srv_position()
 	# Tell the defender's machine what the server judged (as Enemy does).
 	if outcome != "":
+		var shown := "perfect" if outcome == "parry" and bool(t.get("last_parry_perfect")) else outcome
 		if not Net.online or t.peer_id == multiplayer.get_unique_id():
-			t.defend_fx(outcome, p_pos)
+			t.defend_fx(shown, p_pos)
 		elif multiplayer.get_peers().has(t.peer_id):
-			t.net_defended.rpc_id(t.peer_id, outcome, p_pos, t.guard, t._stun)
+			t.net_defended.rpc_id(t.peer_id, shown, p_pos, t.guard, t._stun)
 	var dmg := float(s["dmg"])
 	var dealt := 0.0
 	var clean := false
 	match outcome:
 		"parry":
+			var stun := PERFECT_STUN if bool(t.get("last_parry_perfect")) else PARRY_STUN
 			var push := (p_pos - t_pos) * Vector3(1, 0, 1)
 			push = push.normalized() * PARRY_PUSH if push.length() > 0.01 else Vector3.ZERO
 			if p.has_method("pvp_staggered"):
-				p.pvp_staggered(PARRY_STUN, push)
+				p.pvp_staggered(stun, push)
 			Net.note_hidden(defender, "parry")
-			_deliver(attacker, {"ev": "parried", "by": _name(defender), "stun": PARRY_STUN, "push": push})
+			_deliver(attacker, {"ev": "parried", "by": _name(defender), "stun": stun, "push": push})
+		"dodge":
+			Net.note_hidden(defender, "dodge")
 		"block":
 			dealt = _apply_damage(defender, dmg * (1.0 - Player.BLOCK_REDUCTION))
 		_:
@@ -503,6 +530,8 @@ func on_peer_left(peer: int) -> void:
 static func move_for(sender: int, kind: int, p: Node) -> Dictionary:
 	if kind == -1:
 		return {"mult": 1.0, "cooldown": Player.ATTACK_COOLDOWN}
+	if kind == Player.KIND_FINISHER:
+		return {"mult": float(Player.COMBO[2]["mult"]), "cooldown": Player.FINISHER_COOLDOWN}
 	if kind >= 0 and kind < Player.SKILLS.size():
 		return {"mult": float(Player.SKILLS[kind]["mult"]), "cooldown": float(Player.SKILLS[kind]["cooldown"])}
 	if HiddenClasses.is_art_kind(kind):
@@ -559,7 +588,7 @@ func srv_hit(sender: int, target: int, kind: int, from_dir: Vector3, swing: int)
 	var last: Array = Enemy._swing_times.get(key, [-100000, -1])
 	var same_swing: bool = last[1] == swing and now - int(last[0]) <= Enemy.SWING_WINDOW_MS
 	if not same_swing:
-		if now - int(last[0]) < int(float(move["cooldown"]) * 900.0):
+		if now - int(last[0]) < int(float(move["cooldown"]) * 900.0) or not Enemy.combo_gate_ok(sender, kind, now):
 			return "cooldown"
 		Enemy._swing_times[key] = [now, swing]
 	if int(d["hit_by"].get(sender, -1)) == swing and swing != 0:
@@ -567,7 +596,7 @@ func srv_hit(sender: int, target: int, kind: int, from_dir: Vector3, swing: int)
 	d["hit_by"][sender] = swing
 	from_dir.y = 0.0
 	from_dir = from_dir.normalized() if from_dir.length_squared() > 0.0001 else Vector3.FORWARD
-	_pending.append({"duel": id, "attacker": sender, "defender": target, "kind": kind, "dmg": float(p.srv_attack) * float(move["mult"]) * (Net.srv_art_power(sender) if kind != -1 else 1.0),
+	_pending.append({"duel": id, "attacker": sender, "defender": target, "kind": kind, "dmg": float(p.srv_attack) * float(move["mult"]) * (Net.srv_art_power(sender) if kind >= 0 else 1.0),
 		"dir": from_dir, "at": _time + WINDUP})
 	_deliver(target, {"ev": "incoming", "from": sender, "windup": WINDUP, "pos": p_pos})
 	return ""
