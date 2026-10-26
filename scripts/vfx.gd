@@ -719,6 +719,98 @@ func chest_sparkle(node: Node3D, on := true, color := Color(1.0, 0.88, 0.5)) -> 
 		_glint(node.global_position + node.global_transform.basis * off, color, 0.35, 0.5, true))
 
 
+# --- Hidden class arts ---------------------------------------------------------
+
+const STILL_COLOR := Color(0.62, 0.92, 1.0)   # Stillblade: clear water
+const HEARTH_COLOR := Color(1.0, 0.62, 0.22)  # Hearthwright: banked embers
+
+
+## Layered on top of the normal swing fx whenever a class art is cast.
+func class_art_cast(player: Node3D, cls: String, art_id: String) -> void:
+	if not _valid(player):
+		return
+	var f := _player_forward(player)
+	var o := player.global_position
+	var g := Vector3(o.x, _ground_y(o), o.z)
+	match art_id:
+		"still_water":
+			# A single calm, wide cut with a mirror-still ripple under it.
+			_tinted_slash(o + f * 0.9, f, STILL_COLOR, 1.1, 0.75, 0.0, 0.3)
+			ring(g + Vector3(0, 0.04, 0), STILL_COLOR, 2.2, 0.45)
+			get_tree().create_timer(0.12).timeout.connect(func():
+				if is_inside_tree():
+					ring(g + Vector3(0, 0.04, 0), Color(STILL_COLOR, 0.7), 3.4, 0.6))
+			_glint(o + f * 1.6 + Vector3(0, 1.1, 0), STILL_COLOR, 0.9, 0.35, true)
+			_fire(o + f * 1.4 + Vector3(0, 1.0, 0), "spark_04", true, STILL_COLOR, 0.5, 0.3, 4.0, 8.0, f, 25.0, -6.0, 0.1, 0.25, 0.0, true)
+		"breaking_wave":
+			# Pommel strike: a white-water burst thrown forward.
+			var at := o + f * 1.3 + Vector3(0, 1.0, 0)
+			flash(at, Color(0.85, 0.97, 1.0), 1.3)
+			_shock_ring(at, STILL_COLOR, 2.2, 0.28)
+			_fire(at, "spark_04", true, Color(0.92, 0.98, 1.0), 0.8, 0.35, 5.0, 10.0, f + Vector3(0, 0.35, 0), 32.0, -12.0, 0.12, 0.3, 0.0, true)
+			_fire(at, "star_05", true, STILL_COLOR, 0.5, 0.5, 2.0, 5.0, f + Vector3(0, 0.5, 0), 40.0, -10.0, 0.08, 0.18, 0.0, false)
+		"hearth_flare":
+			# A half-circle of hearth-fire washes over the ground in front.
+			var mi := _telegraph(player, 1, g, Vector2.ONE * 6.0, f, 0.22, PI / 2.0)
+			if mi:
+				(mi.material_override as ShaderMaterial).set_shader_parameter("color", HEARTH_COLOR)
+			_tinted_slash(o + f * 0.9, f, HEARTH_COLOR, 1.2, 0.75, 0.0, 0.34)
+			_fire(g + f * 1.5 + Vector3(0, 0.3, 0), "star_05", true, Color(1.0, 0.7, 0.3, 1.0), 0.6, 0.9, 1.2, 3.0, Vector3.UP, 50.0, -2.0, 0.1, 0.22, 1.4, false)
+			flash_light(o + f * 1.5 + Vector3(0, 1.0, 0), HEARTH_COLOR, 4.0)
+
+
+## Hearth Glow landed: a warm ring, rising embers and a small light that
+## stays with the player for the buff's 10 s and fades out.
+func hearth_glow(player: Node3D, secs := 10.0) -> void:
+	if not _valid(player):
+		return
+	var o := player.global_position
+	ring(Vector3(o.x, _ground_y(o) + 0.04, o.z), HEARTH_COLOR, 2.0, 0.6)
+	_fire(o + Vector3(0, 0.4, 0), "star_05", true, Color(1.0, 0.75, 0.35), 0.6, 1.2, 0.6, 1.8, Vector3.UP, 20.0, -0.5, 0.08, 0.18, 0.5, false)
+	var old := player.get_node_or_null("VFXHearthGlow")
+	if old:
+		old.queue_free()
+	var l := OmniLight3D.new()
+	l.name = "VFXHearthGlow"
+	l.light_color = HEARTH_COLOR
+	l.light_energy = 0.9
+	l.omni_range = 3.2
+	l.shadow_enabled = false
+	l.position = Vector3(0, 1.0, 0)
+	player.add_child(l)
+	var tw := l.create_tween()
+	tw.tween_property(l, "light_energy", 0.6, 0.6)
+	tw.tween_interval(maxf(secs - 2.0, 0.0))
+	tw.tween_property(l, "light_energy", 0.0, 1.4)
+	tw.tween_callback(l.queue_free)
+
+
+func _player_forward(player: Node3D) -> Vector3:
+	var m = player.get("model")
+	return _forward(m) if m is Node3D else _forward(player)
+
+
+## A slash arc in any colour (the pooled slashes are coloured by kind).
+func _tinted_slash(origin: Vector3, forward: Vector3, col: Color, size: float, pitch: float, roll: float, dur: float) -> void:
+	var mi := _make_slash()
+	add_child(mi)
+	var mat := mi.material_override as StandardMaterial3D
+	mat.albedo_color = Color(col, 1.0)
+	var f := Vector3(forward.x, 0.0, forward.z)
+	f = f.normalized() if f.length_squared() > 0.001 else Vector3.FORWARD
+	mi.visible = true
+	mi.global_position = origin + Vector3(0, 1.1, 0)
+	mi.look_at(mi.global_position - f, Vector3.UP)
+	mi.rotate_object_local(Vector3.RIGHT, -pitch)
+	mi.rotate_object_local(Vector3.FORWARD, roll)
+	mi.scale = Vector3.ONE * size * 0.6
+	var tw := mi.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(mi, "scale", Vector3.ONE * size * 1.2, dur).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(mat, "albedo_color:a", 0.0, dur * 0.7).set_delay(dur * 0.3)
+	tw.chain().tween_callback(mi.queue_free)
+
+
 ## An HP bar emptied: a ring of glass shards bursts off the boss with a cold
 ## flash, like the bar itself breaking.
 func boss_bar_break(enemy: Node3D, bar_left: int, bars: int) -> void:
