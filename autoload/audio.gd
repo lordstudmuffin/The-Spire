@@ -97,6 +97,13 @@ const EVENTS := {
 	"boss_roar": ["crystal/boss_roar.ogg"],
 	"boss_charge": ["crystal/boss_charge.ogg"],
 	"boss_bar_break": ["crystal/shatter.ogg"],
+	# Stingers (gen_crystal.py): the Guardian wakes, his last bar, the floor
+	# cleared fanfare, a Last Attack bonus. Played with stinger(), which
+	# ducks the music under them.
+	"boss_sting": ["crystal/boss_sting.ogg"],
+	"boss_phase_sting": ["crystal/boss_phase_sting.ogg"],
+	"floor_victory": ["crystal/floor_victory.ogg"],
+	"last_attack": ["crystal/last_attack.ogg"],
 }
 
 ## Extra events that always play with an event (same position): the crisp
@@ -382,6 +389,20 @@ func music(track: String, fade := MUSIC_FADE) -> void:
 		_music_tween.tween_property(new, "volume_db", MUSIC_GAIN, fade).set_trans(Tween.TRANS_SINE)
 	if old.playing:
 		_music_tween.chain().tween_callback(old.stop)
+
+
+## A musical stinger over the soundtrack: the music dips for `secs`, then
+## comes back. 2D (everyone near the fight hears it the same).
+func stinger(event: String, secs := 2.5, duck_db := -14.0) -> void:
+	if play(event, null, 0.0, 0.0) == null:
+		return
+	var m: AudioStreamPlayer = _music[_music_idx]
+	if not m.playing:
+		return
+	var tw := create_tween()
+	tw.tween_property(m, "volume_db", MUSIC_GAIN + duck_db, 0.25)
+	tw.tween_interval(maxf(secs - 0.25, 0.0))
+	tw.tween_property(m, "volume_db", MUSIC_GAIN, 1.2).set_trans(Tween.TRANS_SINE)
 
 
 # --- Ambient -------------------------------------------------------------

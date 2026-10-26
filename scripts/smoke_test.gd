@@ -2152,6 +2152,10 @@ func _test_boss() -> void:
 	pl.velocity = Vector3.ZERO
 	var ctl: Dictionary = b.tick(0.05, pl)
 	_check(boss.global_position.distance_to(w.throne_pos()) < 1.5 and b.throne != Vector3.ZERO, "the Guardian waits on his throne")
+	var stings_ok := true
+	for ev in ["boss_sting", "boss_phase_sting", "floor_victory", "last_attack"]:
+		stings_ok = stings_ok and Audio.EVENTS.has(ev) and ResourceLoader.exists("res://assets/audio/" + str(Audio.EVENTS[ev][0]))
+	_check(stings_ok and Audio.has_method("stinger"), "the boss stingers, victory fanfare and Last Attack chime are wired to synthesized sounds")
 	_check(b.state == BossBrain.State.WINDUP and b.move == "slam" and events.has("engage") and ctl.has("target") and ctl.has("spd"), "a player on the summit wakes the Guardian: he crouches to leap down (engage, then a telegraphed descent)")
 	var seat: Vector3 = boss.global_position
 	b._timer = 0.0

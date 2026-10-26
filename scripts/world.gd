@@ -1698,6 +1698,7 @@ func _grant_last_attack(killer: int, la: Dictionary = {}, foe := "") -> Dictiona
 func _show_last_attack(data: Dictionary) -> void:
 	if hud == null:
 		return
+	Audio.stinger("last_attack", 2.0)
 	if hud.has_method("show_last_attack"):
 		hud.show_last_attack(data)
 		return

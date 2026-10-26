@@ -449,8 +449,90 @@ def boss_charge():
 	return reverb(b, 0.25, 1.2, damp=4000.0)
 
 
+def brass(freq, dur, a=0.03, r=0.4, bright=2600.0, det=0.06):
+	"""Brassy section note: three detuned saws through a swelling low-pass."""
+	t = t_axis(dur)
+	x = np.zeros_like(t)
+	for d in (-det, 0.0, det):
+		f = freq * 2.0 ** (d / 12.0)
+		x += (2 * ((f * t) % 1.0) - 1) / 3.0
+	x = one_pole_lp(x, bright) * 0.6 + one_pole_lp(x, bright * 0.4) * 0.4
+	return x * env_adsr(dur, a, 0.12, 0.75, r)
+
+
+def timpani(freq, dur=1.2):
+	t = t_axis(dur)
+	f = freq * (1.0 + 0.08 * np.exp(-t * 18.0))
+	ph = 2 * np.pi * np.cumsum(f) / SR
+	body = (np.sin(ph) + 0.4 * np.sin(ph * 1.5) + 0.2 * np.sin(ph * 1.99)) * np.exp(-t / 0.45)
+	hit = band_noise(dur, 60, 900) * env_exp(dur, 0.001, 0.05)
+	return body * 0.8 + hit * 0.35
+
+
+def boss_sting():
+	"""Floor Guardian engage stinger: a dissonant low brass stab (A, B-flat,
+	E) over a timpani hit, with a rising string-like swell after it."""
+	b = np.zeros(int(2.6 * SR))
+	for st, g in ((-36, 0.5), (-35, 0.35), (-29, 0.4), (-24, 0.3)):
+		place(b, brass(note(st), 1.4, a=0.015, r=0.9, bright=1800.0), 0.0, g)
+	place(b, timpani(note(-36)), 0.0, 0.9)
+	place(b, timpani(note(-36)), 0.38, 0.6)
+	t = t_axis(1.6)
+	swell = np.zeros_like(t)
+	for st in (-12, -11, -5):
+		f = note(st) * (1.0 + 0.04 * t / 1.6)
+		swell += (2 * ((f * t) % 1.0) - 1) * 0.06
+	place(b, one_pole_lp(swell, 1500) * env_adsr(1.6, 0.9, 0.2, 0.8, 0.5), 0.6, 1.0)
+	return reverb(b, 0.35, 1.8, damp=4000.0)
+
+
+def boss_phase_sting():
+	"""Last bar / weapon swap: brass climbing a half step at a time into a
+	held cluster, two timpani hits, a cymbal-ish wash."""
+	b = np.zeros(int(2.4 * SR))
+	for i, st in enumerate((-31, -30, -29, -28)):
+		place(b, brass(note(st), 0.32, a=0.01, r=0.12, bright=2200.0), i * 0.14, 0.45)
+	for st, g in ((-24, 0.4), (-23, 0.3), (-17, 0.35)):
+		place(b, brass(note(st), 1.3, a=0.02, r=0.8, bright=3000.0), 0.56, g)
+	place(b, timpani(note(-31)), 0.56, 0.9)
+	place(b, timpani(note(-31)), 0.7, 0.6)
+	place(b, band_noise(1.4, 3000, 12000) * env_exp(1.4, 0.01, 0.4), 0.56, 0.18)
+	return reverb(b, 0.35, 1.6, damp=5000.0)
+
+
+def floor_victory():
+	"""Floor cleared fanfare (the "Congratulations" moment): a brass call
+	A-C#-E-A rising into a held A major chord, glass sparkles on top."""
+	b = np.zeros(int(4.2 * SR))
+	call = [(-12, 0.0, 0.18), (-8, 0.18, 0.18), (-5, 0.36, 0.18), (0, 0.54, 0.5),
+		(-3, 1.08, 0.16), (0, 1.26, 0.16)]
+	for st, at, d in call:
+		place(b, brass(note(st), d + 0.12, a=0.01, r=0.1, bright=3400.0), at, 0.4)
+		place(b, brass(note(st - 12), d + 0.12, a=0.01, r=0.1, bright=2000.0), at, 0.22)
+	for st in (-24, -12, -8, -5, 0, 4):
+		place(b, brass(note(st), 2.6, a=0.04, r=1.4, bright=3200.0), 1.44, 0.2)
+	place(b, timpani(note(-24)), 1.44, 0.7)
+	place(b, _arp([24, 28, 31, 36, 40, 43, 48], 0.06, 0.18, 0.3), 1.5, 1.0)
+	for k in range(26):
+		place(b, glass(note(36 + RNG.integers(0, 14)), 0.3, decay=0.06, bright=0.3), 1.6 + k * 0.05, 0.08)
+	return reverb(b, 0.38, 2.0)
+
+
+def last_attack():
+	"""Last Attack bonus: a bright bell strike, a fast rising glass run and a
+	ringing high chord (pitched above level_up so the two never blur)."""
+	b = np.zeros(int(2.4 * SR))
+	place(b, fm_bell(note(12), 1.8, index=3.0, ratio=3.5, decay=0.7), 0.0, 0.45)
+	place(b, _arp([24, 28, 31, 36, 40, 43, 48, 52], 0.035, 0.12, 0.35), 0.05, 1.0)
+	chord = sum(glass(note(st), 1.8, decay=0.7) for st in (36, 40, 43, 48))
+	place(b, chord, 0.36, 0.3)
+	place(b, band_noise(0.8, 8000, 16000) * env_exp(0.8, 0.05, 0.25), 0.3, 0.06)
+	return reverb(b, 0.4, 1.6)
+
+
 RECIPES = {
 	"boss_roar": boss_roar, "boss_charge": boss_charge,
+	"boss_sting": boss_sting, "boss_phase_sting": boss_phase_sting, "floor_victory": floor_victory, "last_attack": last_attack,
 	"parry": parry, "block": block, "guard_break": guard_break, "stagger": stagger,
 	"menu_open": menu_open, "menu_close": menu_close, "menu_select": menu_select,
 	"menu_confirm": menu_confirm, "menu_back": menu_back, "menu_error": menu_error,

@@ -756,6 +756,12 @@ func _on_boss_died(_e: Enemy) -> void:
 	_emit("death", {})
 
 
+## Stingers are 2D: only for a local player who is in the fight.
+func _heard_here(pos: Vector3) -> bool:
+	var me := get_tree().get_first_node_in_group("player") as Node3D
+	return me != null and me.global_position.distance_to(pos) < arena_radius + LEASH_PAD + 20.0
+
+
 ## One line for world._print_report.
 func report() -> String:
 	return "bar=%d/%d phase=%d state=%s adds=%d spawned=%d breaks=%d resets=%d moves=s%d/c%d/g%d rocks=%d" % [
@@ -784,6 +790,8 @@ func net_event(kind: String, data: Dictionary) -> void:
 	match kind:
 		"engage":
 			Audio.play("boss_roar", pos, 0.06, -2.0, 0.9)
+			if _heard_here(pos):
+				Audio.stinger("boss_sting", 2.6)
 			if fx and fx.has_method("boss_engage"):
 				fx.call("boss_engage", e)
 		"telegraph":
@@ -866,6 +874,8 @@ func net_event(kind: String, data: Dictionary) -> void:
 			# Model hook: Enemy.swap_weapon(data); VFX hook boss_weapon_swap.
 			swapped = true
 			Audio.play("anvil", pos, 0.05, 2.0, 0.6)
+			if _heard_here(pos):
+				Audio.stinger("boss_phase_sting", 2.4)
 			Audio.play("skill_charge", pos, 0.05, 0.0, 1.3)
 			if e.has_method("swap_weapon"):
 				e.call("swap_weapon", data)
@@ -882,5 +892,7 @@ func net_event(kind: String, data: Dictionary) -> void:
 			if fx and fx.has_method("boss_reset"):
 				fx.call("boss_reset", e)
 		"death":
-			pass
+			# Every Guardian kill plays the fanfare for whoever was in the fight.
+			if _heard_here(pos):
+				Audio.stinger("floor_victory", 4.5)
 	boss_event.emit(kind, data)
