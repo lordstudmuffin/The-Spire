@@ -765,3 +765,101 @@ static func style_guard_bar(bar: ProgressBar) -> void:
 	bg.content_margin_bottom = 0
 	bar.add_theme_stylebox_override("background", bg)
 	bar.add_theme_stylebox_override("fill", gradient_fill_box([Color("3d7bd9"), Color("8cc4ff"), Color("e6f3ff")], 3))
+
+
+## Locked-art cover for a skill slot: the card darkens, a padlock sits in
+## the middle with the proficiency the art needs under it, and a thin bar
+## along the bottom fills toward it. set_state(prof, need) each refresh.
+class LockOverlay extends Control:
+	var prof := 0
+	var need := 1
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		set_anchors_preset(Control.PRESET_FULL_RECT)
+
+	func set_state(p: int, n: int) -> void:
+		var locked := p < n
+		if locked != visible or p != prof or n != need:
+			prof = p
+			need = maxi(n, 1)
+			visible = locked
+			queue_redraw()
+
+	func _draw() -> void:
+		var r := Rect2(Vector2.ZERO, size)
+		var cover := StyleBoxFlat.new()
+		cover.bg_color = Color(UITheme.NAVY, 0.72)
+		cover.set_corner_radius_all(10)
+		draw_style_box(cover, r)
+		# Diagonal hatching, very faint, so it reads as sealed rather than empty.
+		var step := 9.0
+		var x := -size.y
+		while x < size.x:
+			draw_line(Vector2(x, size.y), Vector2(x + size.y, 0), Color(1, 1, 1, 0.035), 1.0)
+			x += step
+		# Padlock: rounded body and an open-topped shackle.
+		var c := Vector2(size.x * 0.5, size.y * 0.38)
+		var body := Rect2(c + Vector2(-9, -2), Vector2(18, 14))
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(UITheme.MUTED, 0.95)
+		sb.set_corner_radius_all(3)
+		draw_style_box(sb, body)
+		draw_arc(c + Vector2(0, -3), 5.5, PI, TAU, 14, Color(UITheme.MUTED, 0.95), 2.5, true)
+		draw_line(c + Vector2(-5.5, -3), c + Vector2(-5.5, -1), Color(UITheme.MUTED, 0.95), 2.5)
+		draw_line(c + Vector2(5.5, -3), c + Vector2(5.5, -1), Color(UITheme.MUTED, 0.95), 2.5)
+		draw_circle(c + Vector2(0, 4), 1.8, UITheme.NAVY)
+		draw_line(c + Vector2(0, 4), c + Vector2(0, 8), UITheme.NAVY, 1.5)
+		var f := UITheme.ui_bold()
+		var t := "PROF %d" % need
+		var tw := f.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+		draw_string(f, Vector2((size.x - tw) * 0.5, c.y + 25), t, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(UITheme.GOLD, 0.95))
+		# Progress toward the unlock.
+		var bw := size.x - 16.0
+		draw_rect(Rect2(8, size.y - 5, bw, 2), Color(1, 1, 1, 0.12))
+		draw_rect(Rect2(8, size.y - 5, bw * clampf(float(prof) / need, 0.0, 1.0), 2), Color(UITheme.CYAN, 0.9))
+
+
+## Weapon proficiency readout (SAO's skill proficiency): the skill name and
+## "41 / 1000" over a thin gauge with a notch at each Sword Art unlock.
+class ProfLine extends Control:
+	var skill := "One-Handed Sword"
+	var value := 0
+	var cap := 1000
+	var marks: Array = []
+
+	func _init() -> void:
+		custom_minimum_size = Vector2(0, 30)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func set_value(v: int, c: int, m: Array) -> void:
+		value = v
+		cap = maxi(c, 1)
+		marks = m
+		queue_redraw()
+
+	func _draw() -> void:
+		var f := UITheme.ui_bold()
+		draw_string(f, Vector2(0, 13), skill.to_upper(), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, UITheme.MUTED)
+		var t := "%d / %d" % [value, cap]
+		draw_string(f, Vector2(0, 13), t, HORIZONTAL_ALIGNMENT_RIGHT, size.x, 12, UITheme.PARCH)
+		var y := 20.0
+		var w := size.x
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.06, 0.08, 0.13, 0.7)
+		sb.border_color = Color(1, 1, 1, 0.18)
+		sb.set_border_width_all(1)
+		sb.set_corner_radius_all(3)
+		draw_style_box(sb, Rect2(0, y, w, 6))
+		var frac := clampf(float(value) / cap, 0.0, 1.0)
+		if frac > 0.0:
+			var fill := StyleBoxFlat.new()
+			fill.bg_color = UITheme.CYAN
+			fill.set_corner_radius_all(3)
+			draw_style_box(fill, Rect2(1, y + 1, maxf((w - 2) * frac, 3.0), 4))
+		for m in marks:
+			var mx := w * clampf(float(m) / cap, 0.0, 1.0)
+			if m <= 0:
+				continue
+			var got: bool = value >= int(m)
+			draw_line(Vector2(mx, y - 2), Vector2(mx, y + 8), UITheme.GOLD if got else Color(1, 1, 1, 0.45), 2.0)

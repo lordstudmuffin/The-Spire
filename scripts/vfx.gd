@@ -902,6 +902,75 @@ func hearth_glow(player: Node3D, secs := 10.0) -> void:
 	tw.tween_callback(l.queue_free)
 
 
+## A crystal crushed in the hand (SAO's crystals): it breaks into shards of
+## its colour, then a Healing Crystal wraps the body in rising motes and a
+## soft pillar, and a Teleport Crystal swallows it in a tall column of light
+## (the move itself happens right after, in world.crystal_effect).
+func crystal_burst(pos: Vector3, color: Color, teleport := false) -> void:
+	var hand := pos + Vector3(0, 0.15, 0)
+	burst_at(AABB(hand - Vector3(0.18, 0.18, 0.18), Vector3(0.36, 0.36, 0.36)), color)
+	var feet := pos - Vector3(0, 1.0, 0)
+	ring(feet, color, 2.6 if teleport else 2.0, 0.6)
+	_light_pillar(feet, color, 0.75 if teleport else 0.55, 6.0 if teleport else 2.6, 1.4 if teleport else 0.8, 1.6 if teleport else 1.0)
+	_fire(feet + Vector3(0, 0.2, 0), "star_05", true, color.lightened(0.35), 1.0, 1.1,
+		1.2 if not teleport else 3.5, 2.4 if not teleport else 6.0, Vector3.UP, 12.0, 0.0, 0.05, 0.12, 0.55, false)
+	if teleport:
+		_shock_ring(pos, color.lightened(0.3), 3.2, 0.5)
+		flash(pos, Color(1, 1, 1), 2.6)
+
+
+var _pillar_shader: Shader
+
+
+func _light_pillar(feet: Vector3, color: Color, radius: float, height: float, dur: float, strength := 1.0) -> void:
+	if _pillar_shader == null:
+		_pillar_shader = Shader.new()
+		_pillar_shader.code = """shader_type spatial;
+render_mode unshaded, blend_mix, cull_disabled, depth_draw_never, shadows_disabled;
+uniform vec4 color : source_color = vec4(1.0);
+uniform float fade = 1.0;
+uniform float strength = 1.0;
+void fragment() {
+	// UV.y: 0 at the top, 1 at the base. Bright at the base, gone at the top,
+	// with thin vertical streaks drifting upward and a brighter rim.
+	float up = 1.0 - UV.y;
+	float body = pow(UV.y, 1.6);
+	float streak = 0.55 + 0.45 * sin(UV.x * 62.83 + sin(UV.x * 18.0) * 2.0);
+	float drift = 0.7 + 0.3 * sin(up * 18.0 - TIME * 9.0 + UV.x * 25.0);
+	float rim = pow(1.0 - abs(dot(NORMAL, VIEW)), 2.0);
+	// Mixed, not additive: additive light washes out against a daylit plaza.
+	ALBEDO = mix(color.rgb, vec3(1.0), 0.25 + 0.45 * body);
+	ALPHA = clamp(pow(UV.y, 0.9) * streak * drift * (0.3 + 0.8 * rim) * 0.85 * strength, 0.0, 0.92) * fade;
+}
+"""
+	var cm := CylinderMesh.new()
+	cm.top_radius = radius
+	cm.bottom_radius = radius
+	cm.height = height
+	cm.radial_segments = 24
+	cm.rings = 1
+	cm.cap_top = false
+	cm.cap_bottom = false
+	var mi := MeshInstance3D.new()
+	mi.mesh = cm
+	var m := ShaderMaterial.new()
+	m.shader = _pillar_shader
+	m.set_shader_parameter("color", Color(color, 1.0))
+	m.set_shader_parameter("fade", 0.0)
+	m.set_shader_parameter("strength", strength)
+	mi.material_override = m
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
+	mi.global_position = feet + Vector3(0, height * 0.5, 0)
+	mi.scale = Vector3(0.6, 1.0, 0.6)
+	var tw := mi.create_tween()
+	tw.set_parallel(true)
+	tw.tween_method(func(v: float): m.set_shader_parameter("fade", v), 0.0, 1.0, dur * 0.18)
+	tw.tween_property(mi, "scale", Vector3(1.15, 1.0, 1.15), dur).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.chain().tween_method(func(v: float): m.set_shader_parameter("fade", v), 1.0, 0.0, dur * 0.7)
+	tw.chain().tween_callback(mi.queue_free)
+
+
 func _player_forward(player: Node3D) -> Vector3:
 	var m = player.get("model")
 	return _forward(m) if m is Node3D else _forward(player)

@@ -39,6 +39,8 @@ var xp := 0.0
 var xp_need := 1.0
 var money := 0
 var floor_no := 1
+var heal_crystals := 0
+var tele_crystals := 0
 var guard_visible := false
 var guard := 0.0
 var guard_max := 1.0
@@ -87,6 +89,14 @@ func set_xp(value: float, need: float) -> void:
 	xp = value
 	xp_need = maxf(need, 1.0)
 	queue_redraw()
+
+
+## Crystal counts shown as small gems after the Col / floor line.
+func set_crystals(heal: int, tele: int) -> void:
+	if heal != heal_crystals or tele != tele_crystals:
+		heal_crystals = heal
+		tele_crystals = tele
+		queue_redraw()
 
 
 func set_guard(show: bool, value: float, maximum: float, is_stunned: bool) -> void:
@@ -233,7 +243,27 @@ func _draw() -> void:
 	var sy := y_plate + PLATE_H + 18.0
 	var info := class_text
 	_text(Vector2(2, sy), info, 12, Color(0.85, 0.92, 1.0), true)
-	_text(Vector2(2, sy + 17), "%d Col   ·   Floor %d" % [money, floor_no], 12, Color(1, 0.93, 0.8))
+	var line := "%d Col   ·   Floor %d" % [money, floor_no]
+	_text(Vector2(2, sy + 17), line, 12, Color(1, 0.93, 0.8))
+	# Crystals in the pack: a rose gem (Healing) and a sky gem (Teleport).
+	var f := _font if _font else get_theme_default_font()
+	var cx := 2.0 + f.get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x + 16.0
+	for gem in [[heal_crystals, Color("ff6f9a")], [tele_crystals, Color("5fc8ff")]]:
+		var n: int = gem[0]
+		if n <= 0:
+			continue
+		_gem(Vector2(cx + 5, sy + 12), gem[1])
+		_text(Vector2(cx + 13, sy + 17), "%d" % n, 12, TEXT, true)
+		cx += 34.0
+
+
+func _gem(c: Vector2, col: Color) -> void:
+	var pts := PackedVector2Array([c + Vector2(0, -7), c + Vector2(4.5, -1), c + Vector2(0, 6), c + Vector2(-4.5, -1)])
+	var ring := pts.duplicate()
+	ring.append(pts[0])
+	draw_polyline(ring, TEXT_SHADOW, 3.0, true)
+	draw_colored_polygon(pts, col)
+	draw_colored_polygon(PackedVector2Array([c + Vector2(0, -7), c + Vector2(4.5, -1), c + Vector2(0, -1)]), col.lightened(0.45))
 
 
 ## The duel opponent's gauge: the same SAO-style plate and gauge, compact,
