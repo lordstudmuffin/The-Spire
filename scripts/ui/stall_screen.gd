@@ -72,7 +72,7 @@ func _build() -> void:
 	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_list.add_theme_constant_override("separation", 6)
 	scroll.add_child(_list)
-	var hint := UITheme.subtle("Rent is %d Col a week, paid up front; one stall per character. %d%% of every sale goes to the market as tax. Wares stay on sale while you are away; when the rent runs out they return to your till." % [Stalls.RENT, int(Stalls.TAX_RATE * 100)], 12)
+	var hint := UITheme.subtle("Rent is %d Col a week, paid up front; one stall per character, and Officers can rent one more for their guild. %d%% of every sale goes to the market as tax. Wares stay on sale while you are away; when the rent runs out they return to your till." % [Stalls.RENT, int(Stalls.TAX_RATE * 100)], 12)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD
 	add_child(hint)
 
@@ -120,7 +120,7 @@ func show_result(res: Dictionary) -> void:
 			_status.text = ""
 		"rent":
 			Audio.play("coins")
-			_status.text = "Rent paid: %d Col. %s" % [int(res.get("paid", 0)), "Another week is yours." if res.get("renewed", false) else "The stall is yours for a week."]
+			_status.text = "Rent paid: %d Col. %s" % [int(res.get("paid", 0)), "Another week is paid." if res.get("renewed", false) else ("The stall is your guild's for a week." if res.get("guild", false) else "The stall is yours for a week.")]
 		"type":
 			Audio.play("ui_tick")
 			_status.text = "Now a %s." % ("restaurant" if str(res.get("type", "")) == "restaurant" else "shop")
@@ -180,7 +180,7 @@ func _render() -> void:
 	if bool(view.get("free", true)):
 		_title.text = "Stall %d  ·  For rent" % (index + 1)
 	else:
-		_title.text = "%s's %s" % [owner, "Kitchen" if resto else "Stall"] if not bool(view.get("mine", false)) else ("Your %s" % ("Kitchen" if resto else "Stall"))
+		_title.text = "%s's %s" % [owner, "Kitchen" if resto else "Stall"] if not bool(view.get("mine", false)) else ("%s %s" % ["Your guild's" if bool(view.get("guild_owned", false)) else "Your", "Kitchen" if resto else "Stall"])
 	_tab_manage.visible = _can_manage()
 	_tab_manage.text = "Rent" if bool(view.get("free", false)) else "Manage"
 	UITheme.set_chip(_tab_browse, _tab == "browse")
@@ -229,19 +229,18 @@ func _render_manage(resto: bool) -> void:
 	if bool(view.get("free", false)):
 		if my >= 0 and my != index:
 			_list.add_child(_note("You already rent stall %d. One stall per character." % (my + 1)))
-			_till_footer()
-			return
-		_list.add_child(_section("Rent this stall", "%d Col / week" % Stalls.RENT))
-		_list.add_child(_note("Pick what it will be, then pay the first week. You can prepay up to %d weeks." % Stalls.MAX_WEEKS))
-		var hb := HBoxContainer.new()
-		hb.add_theme_constant_override("separation", 8)
-		for t in ["shop", "restaurant"]:
-			var b := UITheme.make_button("Rent as Shop" if t == "shop" else "Rent as Restaurant", "primary" if t == "shop" else "normal")
-			b.disabled = GameState.money < Stalls.RENT
-			var tt: String = t
-			b.pressed.connect(func(): _send({"op": "rent", "type": tt}))
-			hb.add_child(b)
-		_list.add_child(hb)
+		else:
+			_list.add_child(_section("Rent this stall", "%d Col / week" % Stalls.RENT))
+			_list.add_child(_note("Pick what it will be, then pay the first week. You can prepay up to %d weeks." % Stalls.MAX_WEEKS))
+			_list.add_child(_rent_buttons(false))
+		if bool(view.get("guild_officer", false)):
+			var gs_i := int(view.get("guild_stall", -1))
+			_list.add_child(_section("Rent for [%s]" % str(view.get("guild_tag", "")), "%d Col / week" % Stalls.RENT))
+			if gs_i >= 0:
+				_list.add_child(_note("Your guild already rents stall %d. One stall per guild." % (gs_i + 1)))
+			else:
+				_list.add_child(_note("You pay the rent; any Officer or the Leader can stock and price it, and sales go to the guild storage at the notice board."))
+				_list.add_child(_rent_buttons(true))
 		_till_footer()
 		return
 	# Rent and type.
@@ -260,12 +259,15 @@ func _render_manage(resto: bool) -> void:
 		tb.add_child(c)
 	_list.add_child(_line_card("food" if resto else "coin", Color("ffcf8a") if resto else UITheme.GOLD, "Stall type",
 		"Cooked dishes only; seating out front" if resto else "Gear and goods of any kind", [tb]))
-	var tc := int(view.get("till_col", 0))
-	var ti: Array = view.get("till_items", [])
-	var cb := UITheme.make_button("Collect", "primary")
-	cb.disabled = tc <= 0 and ti.is_empty()
-	cb.pressed.connect(func(): _send({"op": "collect"}))
-	_list.add_child(_line_card("coin", UITheme.GOLD, "Till", "%d Col%s" % [tc, (" · %d returned item(s)" % ti.size()) if not ti.is_empty() else ""], [cb]))
+	if bool(view.get("guild_owned", false)):
+		_list.add_child(_line_card("coin", UITheme.GOLD, "Guild storage", "Sales go here: %d Col so far. Officers draw it at the notice board." % int(view.get("guild_col", 0)), []))
+	else:
+		var tc := int(view.get("till_col", 0))
+		var ti: Array = view.get("till_items", [])
+		var cb := UITheme.make_button("Collect", "primary")
+		cb.disabled = tc <= 0 and ti.is_empty()
+		cb.pressed.connect(func(): _send({"op": "collect"}))
+		_list.add_child(_line_card("coin", UITheme.GOLD, "Till", "%d Col%s" % [tc, (" · %d returned item(s)" % ti.size()) if not ti.is_empty() else ""], [cb]))
 	# The counter.
 	var rows: Array = view.get("listings", [])
 	_list.add_child(_section("On the counter", "%d / %d" % [rows.size(), int(view.get("max_listings", Stalls.MAX_LISTINGS))]))
@@ -327,6 +329,18 @@ func _render_manage(resto: bool) -> void:
 
 
 # --- Widgets ---------------------------------------------------------------------
+
+func _rent_buttons(guild: bool) -> HBoxContainer:
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 8)
+	for t in ["shop", "restaurant"]:
+		var b := UITheme.make_button("Rent as Shop" if t == "shop" else "Rent as Restaurant", "primary" if t == "shop" else "normal")
+		b.disabled = GameState.money < Stalls.RENT
+		var tt: String = t
+		b.pressed.connect(func(): _send({"op": "rent", "type": tt, "guild": guild}))
+		hb.add_child(b)
+	return hb
+
 
 func _section(title: String, right: String) -> Control:
 	var h := HBoxContainer.new()

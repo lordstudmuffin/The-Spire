@@ -446,9 +446,13 @@ static func _op_disband(rdb, holder: String) -> Dictionary:
 		return _err("You are not in a guild.")
 	if rank_of(rdb, holder) != "leader":
 		return _err("Only the Leader may disband the guild.")
+	var se: String = Stalls.close_guild_stall(rdb, gid)
+	if se != "":
+		return _err(se)
 	var st: Dictionary = rdb.container(storage_id(gid))
 	if int(st.get("col", 0)) > 0 or not (st.get("items", []) as Array).is_empty():
 		return _err("Empty the guild storage first.")
+	Stalls.release_guild_stall(rdb, gid)
 	var g := get_guild(rdb, gid)
 	var to: Array = (g["members"] as Dictionary).keys()
 	if not _remove(rdb, gid):

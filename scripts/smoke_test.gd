@@ -1521,6 +1521,28 @@ func _test_farms_guilds() -> void:
 	_check(not r.has("error") and ben["money"] == bm + 90 and int(rdb.container(sid)["col"]) == 100 and rdb.pending_count() == 0, "guild: an Officer takes 90 Col; escrow settled")
 	_check(G.run(rdb, ars, ann, {"op": "disband"}, keep).has("error") and G.guild_of(rdb, ah) == gid, "guild: disband refused while the storage holds goods")
 	_check(G.run(rdb, brs, ben, {"op": "disband"}, keep).has("error"), "guild: only the Leader disbands")
+	# Guild stall: an Officer rents a market stall in the guild's name.
+	var S = preload("res://scripts/life/stalls.gd")
+	var gkey: String = S.guild_key(gid)
+	dot["money"] = 500
+	_check(S.run(rdb, drs, dot, 1, {"op": "rent", "guild": true}, keep).has("error") and dot["money"] == 500, "guild stall: a Member cannot rent for the guild")
+	ben["money"] = 400
+	r = S.run(rdb, brs, ben, 1, {"op": "rent", "type": "shop", "guild": true}, keep)
+	_check(not r.has("error") and ben["money"] == 400 - S.RENT and str(rdb.container(S.stock_id(1)).get("owner", "")) == gkey and rdb.is_holder(S.claim_id(1), gkey)
+		and S.sign_state(rdb)[1]["owner"] == "[LW] Lantern bWardens" and S.stall_of(rdb, bh) < 0, "guild stall: an Officer rents stall 2 for [LW]; the sign names the guild")
+	_check(S.run(rdb, brs, ben, 3, {"op": "rent", "guild": true}, keep).has("error"), "guild stall: one stall per guild")
+	var gaxe := {"id": "gs_axe", "name": "Guild Axe", "kind": "weapon", "rank": 1, "atk": 10, "def": 0}
+	ann["inventory"].append(gaxe)
+	r = S.run(rdb, ars, ann, 1, {"op": "stock", "item": "gs_axe", "price": 200}, keep)
+	_check(not r.has("error") and r["view"]["mine"] and r["view"]["guild_owned"] and Stalls_find(ann["inventory"], "gs_axe") < 0, "guild stall: the Leader stocks it too")
+	_check(S.run(rdb, drs, dot, 1, {"op": "withdraw", "item": "gs_axe"}, keep).has("error") and not S.view(rdb, 1, dh)["mine"], "guild stall: a Member cannot manage it")
+	_check(S.close_guild_stall(rdb, gid) != "", "guild stall: disband is refused while wares are on its counter")
+	var col_before := int(rdb.container(sid).get("col", 0))
+	r = S.run(rdb, drs, dot, 1, {"op": "buy", "item": "gs_axe", "price": 200}, keep)
+	_check(not r.has("error") and dot["money"] == 300 and Stalls_find(dot["inventory"], "gs_axe") >= 0
+		and int(rdb.container(sid).get("col", 0)) == col_before + 200 - roundi(200 * S.TAX_RATE) and rdb.pending_count() == 0,
+		"guild stall: a sale pays the guild storage, less %d%% tax" % int(S.TAX_RATE * 100))
+	_check(S.close_guild_stall(rdb, gid) == "" and S.run(rdb, brs, ben, 1, {"op": "price", "item": "x", "price": 5}, keep).has("error"), "guild stall: an empty counter can close")
 	# Leaving and leadership.
 	r = G.run(rdb, drs, dot, {"op": "leave"}, keep)
 	_check(not r.has("error") and G.guild_of(rdb, dh) == "", "guild: a Member leaves")
@@ -1532,9 +1554,10 @@ func _test_farms_guilds() -> void:
 	rdb.clock = func() -> float: return now[0]
 	_check(G.guild_of(rdb, bh) == gid and G.rank_of(rdb, bh) == "leader" and G.get_guild(rdb, gid)["members"].size() == 1, "guild: membership survives a realm reload (journal op)")
 	G.run(rdb, brs, ben, {"op": "withdraw", "item": "gd_sword"}, keep, board)
-	G.run(rdb, brs, ben, {"op": "withdraw", "col": 100}, keep, board)
+	G.run(rdb, brs, ben, {"op": "withdraw", "col": int(rdb.container(sid).get("col", 0))}, keep, board)
 	r = G.run(rdb, brs, ben, {"op": "leave"}, keep)
 	_check(not r.has("error") and G.guild_of(rdb, bh) == "" and G.get_guild(rdb, gid).is_empty() and rdb.container(sid).is_empty(), "guild: the last member's leave disbands an emptied guild")
+	_check(S.sign_state(rdb)[1]["owner"] == "" and not rdb.is_holder(S.claim_id(1), gkey), "guild stall: disbanding frees the guild's stall")
 	r = G.run(rdb, crs, cid, {"op": "found", "name": "Lantern bWardens", "tag": "LW"}, keep, board)
 	_check(r.has("error"), "guild: Cid (Lv 1) still cannot found")
 	cid["level"] = 10

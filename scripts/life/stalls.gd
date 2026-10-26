@@ -23,6 +23,13 @@ extends Node3D
 ## realm through a proxy record over GameState, and by the smoke test on a
 ## private realm). The node part draws the stalls and signs, answers
 ## interact prompts and relays the stall screen's requests.
+##
+## Guild stalls: an Officer or the Leader can rent a stall in the guild's
+## name (payload "guild": true). Its owner key is `guildstall:<gid>`, one
+## stall per guild, the sign reads "[TAG] Guild Name", any Officer or the
+## Leader manages it, and sales (less tax) land in the guild storage at the
+## notice board instead of a till. If the guild is gone the stall closes on
+## the next sweep and its wares go to that storage.
 
 const COUNT := 6
 const RENT := 120                       # Col per week, paid up front
@@ -35,6 +42,8 @@ const MAX_STACK := 99
 const SINK := "realm:market"
 const TYPES := ["shop", "restaurant"]
 const USE_RANGE := 2.6
+const GUILD_KEY := "guildstall:"
+const GUILDS_PATH := "res://scripts/life/guilds.gd"
 ## Market square: south-east of the well, outside the cottage ring, rows of
 ## three stalls facing each other across an aisle.
 const MARKET_OFFSET := 22.0
@@ -65,6 +74,49 @@ static func stock_id(i: int) -> String:
 
 static func till_id(holder: String) -> String:
 	return "till:" + holder
+
+
+## Owner key of the stall rented in guild `gid`'s name.
+static func guild_key(gid: String) -> String:
+	return GUILD_KEY + gid
+
+
+## The guild id behind a stall owner key, or "" for a character's stall.
+static func gid_of_owner(owner: String) -> String:
+	return owner.trim_prefix(GUILD_KEY) if owner.begins_with(GUILD_KEY) else ""
+
+
+## guilds.gd preloads this script, so it is loaded at call time here.
+static func _guilds() -> Script:
+	return load(GUILDS_PATH)
+
+
+static func guild_officer(rdb, holder: String, gid: String) -> bool:
+	var g := _guilds()
+	return gid != "" and g.guild_of(rdb, holder) == gid and g.rank_value(g.rank_of(rdb, holder)) >= g.rank_value("officer")
+
+
+## Who `holder` acts as at stall `i`: the guild key when the stall is their
+## guild's and they are an Officer or the Leader, else themselves.
+static func actor_for(rdb, holder: String, i: int) -> String:
+	var owner := str(rdb.container(stock_id(i)).get("owner", ""))
+	return owner if guild_officer(rdb, holder, gid_of_owner(owner)) else holder
+
+
+## Where an owner's sales go: a character's till, or the guild storage.
+static func till_for(owner: String) -> String:
+	var gid := gid_of_owner(owner)
+	return _guilds().storage_id(gid) if gid != "" else till_id(owner)
+
+
+static func _ensure_till(rdb, owner: String) -> String:
+	var t := till_for(owner)
+	var gid := gid_of_owner(owner)
+	if gid == "":
+		rdb.ensure_container(t, owner, "till")
+	elif rdb.container(t).is_empty():
+		rdb.ensure_container(t, "", "guild", {"gid": gid})
+	return t
 
 
 static func market_center(hollowbrook: Vector3) -> Vector3:
@@ -143,10 +195,10 @@ static func sweep(rdb) -> Array:
 			continue
 		var held: bool = rdb.is_holder(claim_id(i), owner)
 		var until := float(meta_of(rdb, i).get("rent_until", 0.0))
-		if held and now < until:
+		var gid := gid_of_owner(owner)
+		if held and now < until and (gid == "" or not _guilds().get_guild(rdb, gid).is_empty()):
 			continue
-		var till := till_id(owner)
-		rdb.ensure_container(till, owner, "till")
+		var till := _ensure_till(rdb, owner)
 		var room: int = Net.RealmDBScript.MAX_CONTAINER_ITEMS - (rdb.container(till).get("items", []) as Array).size()
 		var moves: Array = []
 		for it in c.get("items", []):
@@ -273,10 +325,19 @@ static func view(rdb, i: int, holder: String) -> Dictionary:
 		if it is Dictionary:
 			till_items.append(item_name(it))
 	var now := _now(rdb)
-	return {"stall": i, "free": owner == "", "mine": owner != "" and owner == holder, "owner": str(meta.get("owner_name", "")),
-		"type": str(meta.get("type", "shop")), "left": maxf(float(meta.get("rent_until", 0.0)) - now, 0.0) if owner == holder else 0.0,
+	var mine := owner != "" and owner == actor_for(rdb, holder, i)
+	var my_gid: String = _guilds().guild_of(rdb, holder) if holder != "" else ""
+	var officer := guild_officer(rdb, holder, my_gid)
+	var out := {"stall": i, "free": owner == "", "mine": mine, "owner": str(meta.get("owner_name", "")),
+		"type": str(meta.get("type", "shop")), "left": maxf(float(meta.get("rent_until", 0.0)) - now, 0.0) if mine else 0.0,
 		"listings": rows, "my_stall": stall_of(rdb, holder), "till_col": int(till.get("col", 0)), "till_items": till_items,
-		"rent": RENT, "tax": TAX_RATE, "max_listings": MAX_LISTINGS}
+		"rent": RENT, "tax": TAX_RATE, "max_listings": MAX_LISTINGS, "guild_owned": gid_of_owner(owner) != "",
+		"guild_officer": officer, "guild_stall": stall_of(rdb, guild_key(my_gid)) if officer else -1}
+	if officer:
+		out["guild_tag"] = str(_guilds().get_guild(rdb, my_gid).get("tag", ""))
+	if mine and gid_of_owner(owner) != "":
+		out["guild_col"] = int(rdb.container(till_for(owner)).get("col", 0))
+	return out
 
 
 ## Sign state for every stall: [{"owner", "type", "n"}].
@@ -301,24 +362,35 @@ static func run(rdb, gs, rec: Dictionary, i: int, payload: Dictionary, persist: 
 	sweep(rdb)
 	var holder := holder_of(rec)
 	var op := str(payload.get("op", "view"))
+	# `actor` is the owner key this character manages the stall as.
+	var actor := actor_for(rdb, holder, i)
+	if op == "rent" and bool(payload.get("guild", false)) and actor == holder:
+		var gid: String = _guilds().guild_of(rdb, holder)
+		if gid == "":
+			return _err("You are not in a guild.")
+		if not guild_officer(rdb, holder, gid):
+			return _err("Only Officers and the Leader may rent a stall for the guild.")
+		actor = guild_key(gid)
+	if actor != holder:
+		rdb.touch(actor)
 	var res: Dictionary = {}
 	match op:
 		"view":
 			pass
 		"rent":
-			res = _op_rent(rdb, gs, rec, holder, i, payload, persist)
+			res = _op_rent(rdb, gs, rec, actor, i, payload, persist)
 		"type":
-			res = _op_type(rdb, holder, i, str(payload.get("type", "shop")))
+			res = _op_type(rdb, actor, i, str(payload.get("type", "shop")))
 		"stock":
-			res = _op_stock(rdb, gs, rec, holder, i, payload, persist)
+			res = _op_stock(rdb, gs, rec, actor, i, payload, persist)
 		"price":
-			res = _op_price(rdb, holder, i, str(payload.get("item", "")), int(payload.get("price", 0)))
+			res = _op_price(rdb, actor, i, str(payload.get("item", "")), int(payload.get("price", 0)))
 		"withdraw":
-			res = _op_withdraw(rdb, gs, rec, holder, i, str(payload.get("item", "")), persist)
+			res = _op_withdraw(rdb, gs, rec, actor, i, str(payload.get("item", "")), persist)
 		"collect":
 			res = _op_collect(rdb, gs, rec, holder, persist)
 		"buy":
-			res = _op_buy(rdb, gs, rec, holder, i, payload, persist)
+			res = _op_buy(rdb, gs, rec, actor, i, payload, persist)
 		_:
 			return _err("Unknown stall action.")
 	if res.has("error"):
@@ -335,8 +407,9 @@ static func _owner_ok(rdb, holder: String, i: int) -> bool:
 
 static func _op_rent(rdb, gs, rec: Dictionary, holder: String, i: int, payload: Dictionary, persist: Callable) -> Dictionary:
 	var mine := stall_of(rdb, holder)
+	var gid := gid_of_owner(holder)
 	if mine >= 0 and mine != i:
-		return _err("You already rent stall %d. One stall per character." % (mine + 1))
+		return _err(("Your guild already rents stall %d. One stall per guild." if gid != "" else "You already rent stall %d. One stall per character.") % (mine + 1))
 	var owner := str(rdb.container(stock_id(i)).get("owner", ""))
 	if owner != "" and owner != holder:
 		return _err("%s rents this stall." % str(meta_of(rdb, i).get("owner_name", "Someone")))
@@ -362,13 +435,18 @@ static func _op_rent(rdb, gs, rec: Dictionary, holder: String, i: int, payload: 
 		return _err(str(r.get("error", "The rent could not be paid.")))
 	var t := str(payload.get("type", meta.get("type", "shop")))
 	meta["type"] = t if TYPES.has(t) else "shop"
-	meta["owner_name"] = name_of(rec)
+	if gid != "":
+		var g: Dictionary = _guilds().get_guild(rdb, gid)
+		meta["owner_name"] = "[%s] %s" % [str(g.get("tag", "")), str(g.get("name", "Guild"))]
+		meta["guild"] = gid
+	else:
+		meta["owner_name"] = name_of(rec)
 	meta["rent_until"] = until
 	if not (meta.get("prices") is Dictionary):
 		meta["prices"] = {}
 	_set_meta(rdb, i, holder, meta)
-	rdb.ensure_container(till_id(holder), holder, "till")
-	return {"rented": i, "renewed": not fresh, "paid": RENT}
+	_ensure_till(rdb, holder)
+	return {"rented": i, "renewed": not fresh, "paid": RENT, "guild": gid != ""}
 
 
 static func _op_type(rdb, holder: String, i: int, t: String) -> Dictionary:
@@ -513,7 +591,7 @@ static func _op_buy(rdb, gs, rec: Dictionary, holder: String, i: int, payload: D
 	if owner == "":
 		return _err("This stall is empty.")
 	if owner == holder:
-		return _err("That is your own stall: withdraw it instead.")
+		return _err("That is your guild's stall: withdraw it instead." if gid_of_owner(owner) != "" else "That is your own stall: withdraw it instead.")
 	var id := str(payload.get("item", ""))
 	var items: Array = c.get("items", [])
 	var k := _find(items, id)
@@ -527,8 +605,7 @@ static func _op_buy(rdb, gs, rec: Dictionary, holder: String, i: int, payload: D
 	if int(rec.get("money", 0)) < price:
 		return _err("Not enough Col (%d needed)." % price)
 	var tax := roundi(price * TAX_RATE)
-	var till := till_id(owner)
-	rdb.ensure_container(till, owner, "till")
+	var till := _ensure_till(rdb, owner)
 	rdb.ensure_container(SINK, "", "sink")
 	var moves: Array = [{"col": price, "from": "record", "to": till}, {"item": id, "from": stock_id(i), "to": "record"}]
 	if tax > 0:
@@ -700,6 +777,29 @@ func apply_signs(list: Array) -> void:
 		(st["seats"] as Node3D).visible = owner != "" and resto
 		(st["wares"] as Node3D).visible = owner != "" and not resto and int(s.get("n", 0)) > 0
 		(st["keeper"] as Node3D).visible = owner != "" and int(s.get("n", 0)) > 0
+
+
+## Closes the stall guild `gid` rents (the guild is disbanding). Refuses
+## ("" ok, else the reason) while wares are still on its counter.
+static func close_guild_stall(rdb, gid: String) -> String:
+	var key := guild_key(gid)
+	var i := stall_of(rdb, key)
+	if i < 0:
+		return ""
+	var c: Dictionary = rdb.container(stock_id(i))
+	if not (c.get("items", []) as Array).is_empty() or int(c.get("col", 0)) > 0:
+		return "Withdraw the wares from the guild stall (stall %d) first." % (i + 1)
+	return ""
+
+
+static func release_guild_stall(rdb, gid: String) -> void:
+	var key := guild_key(gid)
+	var i := stall_of(rdb, key)
+	if i < 0:
+		return
+	if rdb.is_holder(claim_id(i), key):
+		rdb.release(claim_id(i), key)
+	_set_meta(rdb, i, "", _free_meta())
 
 
 ## Interact prompt: {"stall": i, "label"} when the player stands at a stall front.

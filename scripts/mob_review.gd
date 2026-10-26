@@ -30,6 +30,9 @@ const FLOOR1 := [
 	{"name": "Kobold Scout", "color": "6b7a3a"},
 	{"name": "Kobold Sergeant", "color": "8a5a2b", "size": [1.3, 1.4, 1.5]},
 	{"name": "Kobold Halberdier", "color": "667380", "size": [1.0, 1.6, 1.0]},
+	{"name": "Snaptrap Vine", "color": "5f8a3a", "size": [1.0, 1.5, 1.0]},
+	{"name": "Fruiting Snaptrap", "color": "7a8a3a", "size": [1.0, 1.5, 1.0]},
+	{"name": "Blossoming Snaptrap", "color": "c26a8a", "size": [1.0, 1.5, 1.0]},
 	{"name": "Floor Guardian: Vargash the Kobold Warlord", "color": "806b8c", "size": [3.0, 2.6, 3.6], "boss": true},
 ]
 const NPCS := [
@@ -159,6 +162,7 @@ func _ready() -> void:
 			en.aggro_range = 0.0
 			en.speed = 0.0
 			en._wander_timer = 999.0
+			en._wander_target = en.global_position  # nowhere to walk: keep the set facing
 			subjects.append(en)
 			x += sz[0] * 0.5 + 0.6
 	var cam := Camera3D.new()

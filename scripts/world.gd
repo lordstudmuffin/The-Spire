@@ -2029,7 +2029,11 @@ func _dress_world() -> void:
 	for lvl in LAB_LEVELS:
 		keep.append([lvl, LAB_RADIUS + 2])
 	keep.append_array(_life_keep)
+	# Snaptrap Grove: each vine stands in its own small clearing in the woods.
+	for sp in GROVE_SPOTS:
+		keep.append([GROVE + sp, 2.8])
 	WorldArt.build_vegetation(self, _art_rng, FLOOR_RADIUS, keep)
+	WorldProps.grove_dress(self, GROVE, GROVE_SPOTS)
 	WorldArt.build_ambience(self)
 	WorldProps.flush(self)
 

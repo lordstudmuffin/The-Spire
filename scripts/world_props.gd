@@ -1081,3 +1081,92 @@ static func iron_hall(parent: Node3D, center: Vector3, gap := 5.3, wing_w := 4.2
 		var pier := BoxMesh.new()
 		pier.size = Vector3(0.5, ly - 0.9, 0.8)
 		WorldArt.mesh_node(parent, pier, center + Vector3(sx * (gap - 0.05), (ly - 0.9) * 0.5, depth * 0.5 - 0.4), iron)
+
+
+## The Snaptrap Grove (world.GROVE): a ring of tall ferns, bushes and red
+## toadstools round each vine's clearing (the clearing itself stays open so
+## the plant reads and can be fought), fallen logs and stumps between them,
+## and a mossy standing stone at the heart. Deterministic per seed.
+static func grove_dress(parent: Node3D, center: Vector3, spots: Array, seed := 4817) -> void:
+	if not has("nature", "plant_bush"):
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed
+	var sets := {}
+	for k in ["plant_flatTall", "plant_bushLarge", "plant_bushDetailed", "mushroom_redTall", "mushroom_redGroup", "grass_leafsLarge", "mushroom_tanGroup"]:
+		sets[k] = []
+	var near_spot := func(p: Vector3, r: float) -> bool:
+		for s in spots:
+			if Vector2(p.x - s.x, p.z - s.z).length() < r:
+				return true
+		return false
+	for s in spots:
+		var base := rng.randf() * TAU
+		for i in 7:
+			var a := base + TAU * i / 7.0 + rng.randf_range(-0.2, 0.2)
+			var r := rng.randf_range(2.7, 3.6)
+			var p: Vector3 = center + s + Vector3(cos(a) * r, 0, sin(a) * r)
+			if near_spot.call(p - center, 2.5):
+				continue
+			var kind: String = ["plant_flatTall", "plant_bushLarge", "plant_flatTall", "grass_leafsLarge", "plant_bushDetailed", "mushroom_redTall", "grass_leafsLarge"][i]
+			sets[kind].append(WorldArt.xf(p, rng.randf() * TAU, Vector3.ONE * NATURE * rng.randf_range(0.9, 1.4)))
+	# Loose floor cover across the whole grove, never inside a clearing.
+	for i in 70:
+		var a := rng.randf() * TAU
+		var r := sqrt(rng.randf()) * 14.0
+		var off := Vector3(cos(a) * r, 0, sin(a) * r)
+		if near_spot.call(off, 2.4):
+			continue
+		var kind: String = ["grass_leafsLarge", "mushroom_tanGroup", "mushroom_redGroup", "plant_bushDetailed"][i % 4]
+		sets[kind].append(WorldArt.xf(center + off, rng.randf() * TAU, Vector3.ONE * NATURE * rng.randf_range(0.7, 1.1)))
+	for k in sets:
+		if not sets[k].is_empty():
+			AssetLib.multi(parent, "nature", k, sets[k], true, k.begins_with("plant"))
+	# Close-set dark oaks and pines round and between the clearings, so the
+	# grove reads as woods (trunks are solid).
+	var trees := {}
+	var placed: Array = []
+	var pool := ["tree_oak_dark", "tree_default_dark", "tree_detailed_dark", "tree_pineTallA_detailed", "tree_pineRoundC"]
+	for t in 220:
+		if placed.size() >= 26:
+			break
+		var a := rng.randf() * TAU
+		var off := Vector3(cos(a), 0, sin(a)) * rng.randf_range(4.0, 17.0)
+		if near_spot.call(off, 3.9):
+			continue
+		var crowded := false
+		for q in placed:
+			if q.distance_to(off) < 3.4:
+				crowded = true
+				break
+		if crowded:
+			continue
+		placed.append(off)
+		var kind: String = pool[rng.randi() % pool.size()]
+		if not has("nature", kind):
+			kind = "tree_oak"
+		if not trees.has(kind):
+			trees[kind] = []
+		var ts := NATURE * rng.randf_range(1.2, 1.7)
+		trees[kind].append(WorldArt.xf(center + off, rng.randf() * TAU, Vector3(ts, ts * rng.randf_range(1.0, 1.25), ts)))
+		var cs := CylinderShape3D.new()
+		cs.radius = 0.35
+		cs.height = 3.0
+		WorldArt.collider(parent, cs, center + off + Vector3(0, 1.5, 0))
+	for k in trees:
+		AssetLib.multi(parent, "nature", k, trees[k])
+	# Fallen logs and stumps between the clearings (solid).
+	for i in 5:
+		for t in 8:
+			var a := rng.randf() * TAU
+			var off := Vector3(cos(a), 0, sin(a)) * rng.randf_range(4.0, 12.0)
+			if near_spot.call(off, 3.3):
+				continue
+			var piece := "log_large" if i < 2 else ("stump_oldTall" if i == 2 else "stump_old")
+			if has("nature", piece):
+				tinted_prop(parent, "nature", piece, center + off, rng.randf() * TAU, NATURE * rng.randf_range(0.9, 1.2), "box", Color("6e5440"))
+			break
+	# A leaning standing stone, moss-green, at the grove's heart.
+	var heart := Vector3(-1.5, 0, -2.5)
+	if not near_spot.call(heart, 2.6):
+		prop(parent, "nature", "rock_tallC", center + heart, 0.7, NATURE * 0.9)

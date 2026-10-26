@@ -1438,9 +1438,12 @@ func _build_boar() -> void:
 
 
 # -- Snaptrap Vine (carnivorous plant) ------------------------------------------
-# A rooted pitcher on a thick stalk with two whipping vines. Variants by name:
-# "Blossoming" wears a flower crown, "Fruiting" a swollen bulb (node "Fruit",
-# hidden once it bursts; see net_lure_burst).
+# A walking pitcher: a swollen, veined bulb on splayed root legs, a flared
+# toothed rim with a lid hinged at the back, a pool of acid inside, and two
+# whip vines ending in serrated leaf blades. Variants by name: "Blossoming"
+# carries a flower on its crown, "Fruiting" a heavy bulb on a stem (node
+# "Fruit", kept out of the mesh merge so it can be hidden once it bursts;
+# see net_lure_burst).
 
 func _build_plant() -> void:
 	var w := size.x
@@ -1448,42 +1451,86 @@ func _build_plant() -> void:
 	_visual_height = h * 1.05
 	var m := _pm(color)
 	var md := _pm(color.darkened(0.45))
-	var ml := _pm(color.lightened(0.25))
-	var maw := _pm(Color(0.55, 0.12, 0.16), 0.0, Color(0.6, 0.1, 0.1), 0.25)
-	# Leaf rosette on the ground.
-	for i in 6:
-		var a := TAU * i / 6.0
-		_pt(_rig, _sph(w * 0.3), md, Vector3(cos(a) * w * 0.38, 0.05, sin(a) * w * 0.38), Vector3(0, -a, 0), Vector3(1.0, 0.12, 0.45))
-	var stalk := _nd(_rig, Vector3(0, 0, 0))
-	_breath = stalk
-	_pt(stalk, _cy(w * 0.12, w * 0.2, h * 0.55), m, Vector3(0, h * 0.27, 0))
-	# The pitcher head, mouth forward (-Z), lid above.
-	var head := _nd(stalk, Vector3(0, h * 0.68, 0))
-	_pt(head, _cap(w * 0.32, h * 0.42), ml, Vector3.ZERO, Vector3(0.25, 0, 0))
-	_pt(head, _cy(w * 0.3, w * 0.24, 0.05), maw, Vector3(0, h * 0.06, -w * 0.12), Vector3(PI / 2 - 0.35, 0, 0))
-	_pt(head, _sph(w * 0.3), md, Vector3(0, h * 0.24, w * 0.05), Vector3(-0.5, 0, 0), Vector3(1.0, 0.25, 1.1))  # lid
+	var ml := _pm(color.lightened(0.3))
+	var vein := _pm(color.darkened(0.15).lerp(Color(0.62, 0.2, 0.25), 0.35), 0.0)
+	var maw := _pm(Color(0.45, 0.08, 0.14), 0.0)
+	var acid := _pm(Color(0.65, 1.0, 0.35), 0.0, Color(0.55, 1.0, 0.3), 0.8)
+	var tooth := _pm(Color(0.95, 0.92, 0.8), 0.01)
+	var base_y := h * 0.24
+	# Root legs: five splayed, two-jointed roots that scuttle when it moves.
 	for i in 5:
-		var a := -0.9 + i * 0.45
-		_pt(head, _cy(0.0, w * 0.04, w * 0.14), _pm(Color(0.95, 0.92, 0.8), 0.01), Vector3(sin(a) * w * 0.26, h * 0.1, -w * 0.12 - cos(a) * w * 0.12), Vector3(PI, 0, 0))  # teeth
-	_eye_pair(head, Vector3(w * 0.14, h * 0.16, -w * 0.24), w * 0.05, Color(1.0, 0.85, 0.3), 0.7, true)
-	# Two whip vines that sway.
+		var a := TAU * i / 5.0 + 0.3
+		var dir := Vector3(sin(a), 0, cos(a))
+		var root := _nd(_rig, dir * w * 0.16 + Vector3(0, base_y, 0), Vector3(0, a, 0))
+		var hip := _nd(root, Vector3.ZERO, Vector3(-1.0, 0, 0))
+		_pt(hip, _cy(w * 0.05, w * 0.085, h * 0.2), md, Vector3(0, -h * 0.08, 0))
+		var knee := _nd(hip, Vector3(0, -h * 0.17, 0), Vector3(1.3, 0, 0))
+		_pt(knee, _cy(w * 0.015, w * 0.05, h * 0.2), md, Vector3(0, -h * 0.09, 0))
+		_limb(hip, a * 2.0, -1.0, 0.35)
+	# The bulb: wide belly, a waist, a flared rim tipped forward.
+	var body := _nd(_rig, Vector3(0, base_y, 0))
+	_breath = body
+	_pt(body, _sph(w * 0.36), m, Vector3(0, h * 0.13, 0), Vector3.ZERO, Vector3(1.0, 1.05, 1.0))
+	_pt(body, _cy(w * 0.2, w * 0.33, h * 0.2), m, Vector3(0, h * 0.3, -w * 0.02), Vector3(-0.12, 0, 0))
+	for i in 6:  # vertical veins over the belly
+		var a := TAU * i / 6.0
+		_pt(body, _cap(w * 0.016, h * 0.36), vein, Vector3(sin(a) * w * 0.335, h * 0.15, cos(a) * w * 0.335), Vector3(0, a, 0))
+	_pt(body, _sph(w * 0.26), ml, Vector3(0, h * 0.08, -w * 0.13), Vector3.ZERO, Vector3(0.8, 0.9, 0.5))  # pale belly
+	for i in 4:  # leaf collar at the waist
+		var a := TAU * i / 4.0 + PI / 4
+		_pt(body, _sph(w * 0.2), md, Vector3(sin(a) * w * 0.28, h * 0.28, cos(a) * w * 0.28), Vector3(0.9, a, 0), Vector3(0.45, 0.08, 1.0))
+	var head := _nd(body, Vector3(0, h * 0.42, -w * 0.05), Vector3(-0.38, 0, 0))
+	var rim := TorusMesh.new()
+	rim.inner_radius = w * 0.2
+	rim.outer_radius = w * 0.3
+	rim.rings = 20
+	rim.ring_segments = 8
+	_pt(head, rim, ml, Vector3.ZERO)
+	_pt(head, _cy(w * 0.21, w * 0.21, h * 0.03), maw, Vector3(0, -h * 0.01, 0))
+	_pt(head, _cy(w * 0.15, w * 0.15, h * 0.02), acid, Vector3(0, h * 0.005, 0))
+	for i in 10:  # inward fangs round the rim
+		var a := TAU * i / 10.0
+		_pt(head, _cy(0.0, w * 0.035, w * 0.12), tooth, Vector3(sin(a) * w * 0.22, h * 0.02, cos(a) * w * 0.22), Vector3(-0.6, a, 0))
+	# Lid hinged at the back of the rim, propped open.
+	var lid := _nd(head, Vector3(0, h * 0.02, w * 0.26), Vector3(-1.05, 0, 0))
+	_pt(lid, _sph(w * 0.3), md, Vector3(0, 0, -w * 0.24), Vector3.ZERO, Vector3(1.0, 0.16, 0.95))
+	_pt(lid, _cy(0.0, w * 0.04, w * 0.16), md, Vector3(0, 0, -w * 0.52), Vector3(-PI / 2, 0, 0))  # lid spur
+	_limb(lid, 0.0, -1.05, 0.25)
+	# Eyes under the rim, small and mean.
+	_eye_pair(body, Vector3(w * 0.12, h * 0.36, -w * 0.25), w * 0.045, Color(1.0, 0.85, 0.3), 0.8, true)
+	# Two whip vines from the shoulders, ending in serrated blades.
 	for side: float in [-1.0, 1.0]:
-		var vine := _nd(stalk, Vector3(side * w * 0.16, h * 0.45, 0))
-		_pt(vine, _cy(w * 0.04, w * 0.07, h * 0.45), m, Vector3(side * w * 0.12, h * 0.15, -w * 0.05), Vector3(-0.4, 0, side * -0.9))
-		_pt(vine, _sph(w * 0.08), md, Vector3(side * w * 0.3, h * 0.3, -w * 0.12))
-		_limb(vine, 0.0 if side > 0 else PI, 0.0, 0.5)
+		var sh := _nd(body, Vector3(side * w * 0.3, h * 0.24, -w * 0.02), Vector3(-0.3, 0, side * -1.25))
+		_pt(sh, _cy(w * 0.04, w * 0.06, h * 0.24), m, Vector3(0, h * 0.11, 0))
+		var el := _nd(sh, Vector3(0, h * 0.22, 0), Vector3(-0.5, 0, side * 1.5))
+		_pt(el, _cy(w * 0.03, w * 0.04, h * 0.22), m, Vector3(0, h * 0.1, 0))
+		var blade := _nd(el, Vector3(0, h * 0.2, 0), Vector3(-0.3, 0, side * 0.5))
+		_pt(blade, _sph(w * 0.2), md, Vector3(0, w * 0.18, 0), Vector3.ZERO, Vector3(0.45, 1.0, 0.1))
+		_pt(blade, _sph(w * 0.17), ml, Vector3(0, w * 0.18, -w * 0.012), Vector3.ZERO, Vector3(0.3, 0.9, 0.06))
+		for k in 3:  # serrations
+			_pt(blade, _cy(0.0, w * 0.025, w * 0.09), md, Vector3(side * w * 0.09, w * (0.08 + k * 0.1), 0), Vector3(0, 0, side * -1.1))
+		_limb(sh, 0.0 if side > 0 else PI, -0.3, 0.55)
+		_limb(el, 0.6 if side > 0 else PI + 0.6, -0.5, 0.4)
 	var n := display_name.to_lower()
 	if "blossom" in n:
-		var crown := _nd(head, Vector3(0, h * 0.3, w * 0.05))
+		var crown := _nd(head, Vector3(0, h * 0.12, w * 0.3), Vector3(0.5, 0, 0))
+		_pt(crown, _cy(w * 0.03, w * 0.04, h * 0.14), m, Vector3(0, -h * 0.06, 0))
+		var petal := _pm(Color(1.0, 0.6, 0.78), 0.015, Color(1.0, 0.45, 0.65), 0.3)
 		for i in 6:
 			var a := TAU * i / 6.0
-			_pt(crown, _sph(w * 0.12), _pm(Color(1.0, 0.62, 0.78), 0.0, Color(1.0, 0.5, 0.7), 0.35), Vector3(cos(a) * w * 0.16, 0, sin(a) * w * 0.16), Vector3.ZERO, Vector3(1.0, 0.3, 1.0))
-		_pt(crown, _sph(w * 0.08), _pm(Color(1.0, 0.9, 0.4), 0.0, Color(1.0, 0.85, 0.3), 0.5), Vector3(0, w * 0.03, 0))
+			_pt(crown, _sph(w * 0.16), petal, Vector3(sin(a) * w * 0.15, 0.02, cos(a) * w * 0.15), Vector3(0.35, a, 0), Vector3(0.6, 0.12, 1.0))
+		_pt(crown, _sph(w * 0.08), _pm(Color(1.0, 0.9, 0.4), 0.0, Color(1.0, 0.85, 0.3), 0.6), Vector3(0, w * 0.04, 0))
 	elif "fruit" in n:
-		var fruit := _nd(stalk, Vector3(w * 0.05, h * 0.42, w * 0.28))
+		var fruit := _nd(head, Vector3(0, h * 0.1, w * 0.3), Vector3(0.35, 0, 0))
 		fruit.name = "Fruit"
-		_pt(fruit, _sph(w * 0.22), _pm(Color(0.95, 0.6, 0.2), 0.0, Color(1.0, 0.55, 0.15), 0.3), Vector3.ZERO, Vector3.ZERO, Vector3(1.0, 1.15, 1.0))
-		_pt(fruit, _cy(0.0, w * 0.04, w * 0.14), md, Vector3(0, w * 0.26, 0))
+		MeshMerge.mark(fruit)
+		var glow := _pm(Color(0.98, 0.62, 0.2), 0.02, Color(1.0, 0.5, 0.12), 0.35)
+		_pt(fruit, _cy(w * 0.03, w * 0.04, h * 0.08), md, Vector3(0, h * 0.0, 0))
+		_pt(fruit, _sph(w * 0.24), glow, Vector3(0, h * 0.12, 0), Vector3.ZERO, Vector3(1.0, 1.1, 1.0))
+		for i in 4:  # ripe spots
+			var a := TAU * i / 4.0 + 0.4
+			_pt(fruit, _sph(w * 0.05), _pm(Color(1.0, 0.88, 0.5), 0.0, Color(1.0, 0.8, 0.4), 0.4), Vector3(sin(a) * w * 0.2, h * 0.14 + (i % 2) * w * 0.08, cos(a) * w * 0.2))
+		_pt(fruit, _cy(0.0, w * 0.05, w * 0.12), md, Vector3(0, h * 0.12 + w * 0.3, 0))
 
 
 ## The fruit node on a Fruiting Snaptrap's rig (null on other mobs).
