@@ -23,6 +23,9 @@ var _t := 0.0
 var _built := false
 
 static var _bar_shader: Shader
+static var _pips_shader: Shader
+var _pips: MeshInstance3D
+var _pips_mat: ShaderMaterial
 static var _cursor_mesh: ArrayMesh
 
 
@@ -127,6 +130,32 @@ func set_info(display_name: String, level: int, threat_gap := 0, boss := false) 
 	_cursor_mat.emission = c
 	if boss:
 		scale = Vector3.ONE * 1.6
+
+
+## Boss HP bar stack: `count` pips under the bar, the `current` one (count
+## down to 1) lit amber. The main bar then shows the current bar's fill.
+func set_bars(count: int, current: int) -> void:
+	if not _built or count <= 1:
+		return
+	if _pips == null:
+		if _pips_shader == null:
+			_pips_shader = load("res://shaders/bar_pips.gdshader")
+		_pips = MeshInstance3D.new()
+		var q := QuadMesh.new()
+		var w := BAR_W * 0.55
+		var h := 0.05
+		q.size = Vector2(w, h)
+		_pips.mesh = q
+		_pips_mat = ShaderMaterial.new()
+		_pips_mat.shader = _pips_shader
+		_pips_mat.set_shader_parameter("aspect", w / h)
+		_pips_mat.render_priority = 9
+		_pips.material_override = _pips_mat
+		_pips.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_pips.position = Vector3(0, -BAR_H * 0.5 - 0.06, 0)
+		add_child(_pips)
+	_pips_mat.set_shader_parameter("bars", count)
+	_pips_mat.set_shader_parameter("current", current)
 
 
 ## HP as a fraction 0..1. A drop leaves the white chip behind for a moment.

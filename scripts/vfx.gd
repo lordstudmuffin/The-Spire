@@ -539,6 +539,222 @@ func windup_glint(enemy: Node3D, seconds: float) -> void:
 	tw.chain().tween_callback(q.queue_free)
 
 
+# --- Floor boss (BossBrain hooks) ---------------------------------------------
+
+const DANGER_COLOR := Color(1.0, 0.16, 0.1)
+const ENRAGE_COLOR := Color(1.0, 0.18, 0.08)
+const BAR_BREAK_COLOR := Color(0.7, 0.95, 1.0)
+var _telegraph_shader: Shader
+var _telegraphs := {}  # boss instance id -> Array[MeshInstance3D]
+
+
+## Boss wakes: a red shock ring at its feet, a ring of dust and a glint at
+## its head as it roars.
+func boss_engage(enemy: Node3D) -> void:
+	if not _valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var feet := Vector3(enemy.global_position.x, _ground_y(enemy.global_position), enemy.global_position.z)
+	var w := maxf(box.size.x, box.size.z)
+	ring(feet, DANGER_COLOR, w * 3.2, 0.6)
+	dust_ring(feet, w * 1.2)
+	var head := Vector3(box.get_center().x, box.end.y - box.size.y * 0.15, box.get_center().z)
+	_glint(head, DANGER_COLOR, w * 0.9, 0.5, true)
+	_shock_ring(head, DANGER_COLOR.darkened(0.3), w * 2.2, 0.45)
+	flash_light(head, DANGER_COLOR, 5.0)
+
+
+## Sweep: a red sector in front of the boss that fills over the wind-up.
+func boss_sweep_warning(enemy: Node3D, reach: float, arc_deg: float, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	var c := enemy.global_position
+	_telegraph(enemy, 1, Vector3(c.x, _ground_y(c), c.z), Vector2.ONE * reach * 2.0, _forward(enemy), secs, deg_to_rad(arc_deg) * 0.5)
+
+
+func boss_sweep_impact(enemy: Node3D, reach: float, arc_deg: float) -> void:
+	if not _valid(enemy):
+		return
+	var fwd := _forward(enemy)
+	var c := enemy.global_position
+	var g := _ground_y(c)
+	slash(c + Vector3(0, _body_bounds(enemy).size.y * 0.45, 0), fwd, 2)
+	var half := deg_to_rad(arc_deg) * 0.5
+	for k in 5:
+		var a := lerpf(-half, half, k / 4.0)
+		var d := fwd.rotated(Vector3.UP, a)
+		puff(Vector3(c.x, g, c.z) + d * reach * 0.8, 1.4)
+	flash(Vector3(c.x, g + 1.0, c.z) + fwd * reach * 0.5, Color(1.0, 0.55, 0.35), 2.5)
+
+
+## Charge: a lane from the boss to where it will stop, filling toward the end.
+func boss_charge_warning(enemy: Node3D, from: Vector3, to: Vector3, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	var d := to - from
+	d.y = 0.0
+	var length := maxf(d.length(), 1.0)
+	var half_w := 1.3 + float(enemy.get("size").z if enemy.get("size") is Vector3 else 2.0) * 0.5 + 1.0
+	var mid := from + d * 0.5
+	var t := _telegraph(enemy, 2, Vector3(mid.x, _ground_y(mid), mid.z), Vector2(half_w * 2.0, length), d.normalized() if d.length() > 0.01 else _forward(enemy), secs)
+	# The end of the run gets a target ring.
+	if t:
+		ring(Vector3(to.x, _ground_y(to), to.z), DANGER_COLOR, half_w * 2.4, secs)
+
+
+func boss_charge_impact(enemy: Node3D, pos: Vector3) -> void:
+	var g := Vector3(pos.x, _ground_y(pos), pos.z)
+	dust_ring(g, 3.0)
+	puff(g, 2.5)
+	flash(g + Vector3(0, 1.2, 0), Color(1.0, 0.6, 0.3), 3.0)
+	flash_light(g + Vector3(0, 1.0, 0), Color(1.0, 0.55, 0.3), 5.0)
+
+
+## Slam: a circle around the impact point; the fill reaching the rim is the hit.
+func boss_slam_warning(enemy: Node3D, pos: Vector3, radius: float, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	_telegraph(enemy, 0, Vector3(pos.x, _ground_y(pos), pos.z), Vector2.ONE * radius * 2.0, Vector3.FORWARD, secs)
+
+
+func boss_slam_impact(enemy: Node3D, pos: Vector3, radius: float) -> void:
+	var g := Vector3(pos.x, _ground_y(pos), pos.z)
+	dust_ring(g, radius)
+	ring(g, Color(1.0, 0.8, 0.6), radius * 2.2, 0.45, "circle_03")
+	_fire(g + Vector3(0, 0.3, 0), "dirt_02", false, Color(0.55, 0.45, 0.35, 1.0), 0.9, 0.9, 4.0, 8.0, Vector3.UP, 40.0, -16.0, 0.25, 0.6, radius * 0.4, false)
+	_shock_ring(g + Vector3(0, 0.6, 0), Color(1.0, 0.7, 0.4), radius * 1.4, 0.3)
+	flash_light(g + Vector3(0, 1.0, 0), Color(1.0, 0.6, 0.3), 6.0)
+	var me := get_tree().get_first_node_in_group("player") as Node3D
+	if me and me.has_method("shake") and me.global_position.distance_to(g) < radius * 2.5:
+		me.call("shake", 0.35)
+
+
+## An HP bar emptied: a ring of glass shards bursts off the boss with a cold
+## flash, like the bar itself breaking.
+func boss_bar_break(enemy: Node3D, bar_left: int, bars: int) -> void:
+	if not _valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var shrink := box.grow(-minf(box.size.x, box.size.z) * 0.2)
+	burst_at(shrink if shrink.size.x > 0.1 else box, BAR_BREAK_COLOR, true)
+	# Flash on the camera side of the body so it is never hidden inside it.
+	var chest := box.get_center() + Vector3(0, box.size.y * 0.1, 0)
+	var cam := get_viewport().get_camera_3d()
+	if cam:
+		chest += (cam.global_position - chest).normalized() * maxf(box.size.x, box.size.z) * 0.6
+	_shock_ring(chest, BAR_BREAK_COLOR, maxf(box.size.x, box.size.z) * 2.6, 0.4)
+	_glint(chest, Color(1, 1, 1), maxf(box.size.y, 1.0) * 1.1, 0.35)
+	flash_light(chest, BAR_BREAK_COLOR, 6.0)
+	if bars > 0 and bar_left == 1:
+		boss_enrage(enemy, 0.0)
+
+
+## Enrage (last bar): the body flares red for `secs`, then keeps a faint red
+## rim until the boss resets or dies. Red embers rise off it while it roars.
+func boss_enrage(enemy: Node3D, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	var mat := _enrage_mat(enemy)
+	var tw := enemy.create_tween()
+	if secs > 0.0:
+		var pulses := maxi(int(secs / 0.45), 1)
+		for i in pulses:
+			tw.tween_property(mat, "shader_parameter/amount", 0.75, 0.12)
+			tw.tween_property(mat, "shader_parameter/amount", 0.3, 0.3)
+		var box := _body_bounds(enemy)
+		_fire(box.get_center(), "flame_04", true, ENRAGE_COLOR, 0.8, minf(secs, 2.0), 1.0, 3.0, Vector3.UP, 35.0, 3.0, 0.3, 0.7, maxf(box.size.x, box.size.z) * 0.4, false)
+		flash_light(box.get_center(), ENRAGE_COLOR, 6.0)
+	tw.tween_property(mat, "shader_parameter/amount", 0.14, 0.4)
+
+
+func boss_reset(enemy: Node3D) -> void:
+	if enemy == null:
+		return
+	var id := enemy.get_instance_id()
+	for t in _telegraphs.get(id, []):
+		if is_instance_valid(t):
+			t.queue_free()
+	_telegraphs.erase(id)
+	if is_instance_valid(enemy) and enemy.has_meta("vfx_enrage"):
+		for mi in enemy.find_children("*", "MeshInstance3D", true, false):
+			if (mi as MeshInstance3D).material_overlay == enemy.get_meta("vfx_enrage"):
+				(mi as MeshInstance3D).material_overlay = null
+		enemy.remove_meta("vfx_enrage")
+
+
+func _enrage_mat(enemy: Node3D) -> ShaderMaterial:
+	if enemy.has_meta("vfx_enrage"):
+		return enemy.get_meta("vfx_enrage")
+	var m := ShaderMaterial.new()
+	m.shader = _glow_shader if _glow_shader else load("res://shaders/shatter_glow.gdshader")
+	m.set_shader_parameter("glow_color", ENRAGE_COLOR)
+	m.set_shader_parameter("amount", 0.0)
+	enemy.set_meta("vfx_enrage", m)
+	var rig = enemy.get("_rig")
+	var root: Node = rig if rig is Node3D and is_instance_valid(rig) else enemy
+	for mi in root.find_children("*", "MeshInstance3D", true, false):
+		if (mi as MeshInstance3D).material_overlay == null:
+			(mi as MeshInstance3D).material_overlay = m
+	return m
+
+
+func _telegraph(owner: Node3D, shape: int, center: Vector3, size: Vector2, forward: Vector3, secs: float, arc := 1.3) -> MeshInstance3D:
+	if _telegraph_shader == null:
+		_telegraph_shader = load("res://shaders/telegraph.gdshader")
+	var mi := MeshInstance3D.new()
+	var pm := PlaneMesh.new()
+	pm.size = size
+	mi.mesh = pm
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var m := ShaderMaterial.new()
+	m.shader = _telegraph_shader
+	m.set_shader_parameter("shape", shape)
+	m.set_shader_parameter("arc", arc)
+	m.set_shader_parameter("progress", 0.0)
+	m.set_shader_parameter("fade", 0.0)
+	m.set_shader_parameter("color", DANGER_COLOR)
+	m.set_shader_parameter("rim_px", clampf(0.35 / maxf(minf(size.x, size.y) * 0.5, 0.5), 0.015, 0.12))
+	m.render_priority = 1
+	mi.material_override = m
+	add_child(mi)
+	var f := Vector3(forward.x, 0.0, forward.z)
+	if f.length_squared() < 0.0001:
+		f = Vector3.FORWARD
+	mi.global_transform = Transform3D(Basis.looking_at(f.normalized(), Vector3.UP), center + Vector3(0, 0.07, 0))
+	var id := owner.get_instance_id()
+	var list: Array = _telegraphs.get(id, [])
+	list = list.filter(func(n): return is_instance_valid(n))
+	list.append(mi)
+	_telegraphs[id] = list
+	var tw := mi.create_tween()
+	tw.tween_property(m, "shader_parameter/fade", 1.0, 0.1)
+	tw.parallel().tween_property(m, "shader_parameter/progress", 1.0, maxf(secs, 0.1))
+	tw.tween_property(m, "shader_parameter/fade", 0.0, 0.22)
+	tw.tween_callback(mi.queue_free)
+	return mi
+
+
+func _valid(n: Node3D) -> bool:
+	return n != null and is_instance_valid(n) and n.is_inside_tree()
+
+
+func _forward(n: Node3D) -> Vector3:
+	var f := -n.global_transform.basis.z
+	f.y = 0.0
+	return f.normalized() if f.length_squared() > 0.0001 else Vector3.FORWARD
+
+
+## Height of the ground under `p` (ray down onto the world layer), so decals
+## sit on the floor whatever the boss's origin is.
+func _ground_y(p: Vector3) -> float:
+	var w := get_world_3d()
+	if w == null:
+		return p.y
+	var q := PhysicsRayQueryParameters3D.create(p + Vector3(0, 3.0, 0), p - Vector3(0, 12.0, 0), 1)
+	var hit := w.direct_space_state.intersect_ray(q)
+	return float(hit["position"].y) if hit else p.y
+
+
 ## Bounds of a mob's body only (its rig), so name plates and labels
 ## floating above it don't count.
 func _body_bounds(enemy: Node3D) -> AABB:
