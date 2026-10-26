@@ -46,6 +46,7 @@ var _farms: Node3D = null
 var _lab: Node3D = null
 ## Floor 1 villagers' day/night walks (scripts/npc_routines.gd).
 var _routines: Node = null
+var _monument: Node = null
 var _guilds: Node3D = null
 ## Player duels (scripts/duels.gd): server state + client events.
 var _duels: Node = null
@@ -312,11 +313,39 @@ func chat_line(sender_name: String, text: String) -> void:
 var _arena_lit := false
 
 
+## -1 unknown, 0 outer field, 1 inside a settlement's Inner Area.
+var _inner_state := -1
+
+
+## Entering or leaving a settlement's Inner Area (Duels.SAFE_ZONES): no
+## monster follows you inside. The HUD says so on every crossing.
+func _inner_area_check() -> void:
+	if GameState.floor != 1:
+		return
+	var inside := 1 if Duels.in_safe_zone(player.global_position) else 0
+	if inside == _inner_state:
+		return
+	var first := _inner_state == -1
+	_inner_state = inside
+	if first:
+		return
+	if inside == 1:
+		hud.toast("INNER AREA", "Monsters cannot follow you here", "", Color(0.55, 0.9, 1.0))
+		Audio.play("notify")
+	else:
+		hud.toast("OUTER FIELD", "Monsters roam beyond the walls", "", Color(1.0, 0.7, 0.4))
+		Audio.play("notify")
+	var fx := VFX.get_for(player)
+	if fx and fx.has_method("inner_area_notice"):
+		fx.call("inner_area_notice", inside == 1)
+
+
 func _process(_delta: float) -> void:
 	if player == null or hud == null:
 		return
 	var near := _nearest_interactable()
 	hud.set_prompt("[E] " + near[1] if near[0] else "")
+	_inner_area_check()
 	# The summit braziers only burn (as lights) while the local player is up there.
 	var lit := player.global_position.distance_to(ARENA_POS) < ARENA_RADIUS + 40.0
 	if lit != _arena_lit:
@@ -352,6 +381,8 @@ func _nearest_interactable() -> Array:
 	for v in get_tree().get_nodes_in_group("ore_veins"):
 		if v.visible and player.global_position.distance_to(v.global_position) < 3.0:
 			return [v, "Mine Iron Ore"]
+	if _monument and _monument.near(player.global_position):
+		return [_monument, "Read the Monument of Climbers"]
 	if player.global_position.distance_to(TOWER_POS + Vector3(0, 0, 14)) < 5:
 		return [self, "Enter the Labyrinth"]
 	for pad in _pads:
@@ -400,6 +431,9 @@ func _on_interact() -> void:
 		player.velocity = Vector3.ZERO
 	elif near[0] == _gate and _gate:
 		_use_floor_gate()
+	elif _monument and near[0] == _monument:
+		Audio.play("ui_open")
+		hud.show_dialogue("Monument of Climbers", _monument.text())
 	elif near[0] is Dictionary and near[0].has("dest"):
 		_use_pad(near[0])
 	elif near[0] is NPC:
@@ -1119,10 +1153,12 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 			Audio.play("cook")
 			if hud.life:
 				hud.life._on_cooked(res)
+		"crystal":
+			crystal_effect(str(res.get("id", "")))
 		"buy":
 			Audio.play("coins")
 			var id := str(res.get("id", ""))
-			var nm: String = LifeData.TOOLS[id]["name"] if LifeData.TOOLS.has(id) else LifeData.DECOR.get(id, {}).get("name", id)
+			var nm: String = LifeData.TOOLS[id]["name"] if LifeData.TOOLS.has(id) else (LifeData.CRYSTALS[id]["name"] if LifeData.CRYSTALS.has(id) else LifeData.DECOR.get(id, {}).get("name", id))
 			hud.toast(nm, "Bought from Trader Pell", "Purchase", UITheme.GOLD)
 		"buy_home":
 			Audio.play("coins")
@@ -1166,6 +1202,33 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 				var fx := VFX.get_for(self)
 				if fx:
 					fx.hit(player.global_position + Vector3(0, 1.1, 0), -player.model.global_transform.basis.z, Color(1.0, 0.35, 0.3))
+
+
+## A crystal was crushed (offline right away, online once the server agreed):
+## the flash, the sound, the toast, and for a Teleport Crystal the move to
+## the floor's arrival point. VFX hook: crystal_burst(pos, color, teleport).
+func crystal_effect(id: String) -> void:
+	if not LifeData.CRYSTALS.has(id) or player == null:
+		return
+	var c := LifeData.item_color(id)
+	var fx := VFX.get_for(self)
+	var tele := id == "teleport_crystal"
+	if fx:
+		if fx.has_method("crystal_burst"):
+			fx.call("crystal_burst", player.global_position + Vector3(0, 1.0, 0), c, tele)
+		else:
+			fx.flash(player.global_position + Vector3(0, 1.0, 0), c, 1.4)
+			fx.sparkle(player.global_position + Vector3(0, 1.0, 0), c)
+	Audio.play("respawn" if tele else "quest_complete")
+	if tele:
+		player.global_position = GameState.spawn_point()
+		player.velocity = Vector3.ZERO
+		if fx:
+			fx.sparkle(player.global_position + Vector3(0, 1.0, 0), c)
+		if hud:
+			hud.toast("Teleport: Hollowbrook", "The crystal shatters and the plaza forms around you", "Crystal", c)
+	elif hud:
+		hud.toast("HP fully restored", "Healing Crystal", "Crystal", c)
 
 
 # --- Test bots: honest chores and cheat probes -------------------------------
@@ -1377,7 +1440,7 @@ func _send_cheat_probes() -> void:
 	print("[bot] cheat: sending forged requests")
 	var blades := []
 	for i in 50:
-		blades.append({"id": "hack_%d" % i, "name": "Mythical Spirit Blade", "kind": "weapon", "rank": 5, "atk": 55})
+		blades.append({"id": "hack_%d" % i, "name": "Myth Spirit Blade", "kind": "weapon", "rank": 5, "atk": 55})
 	Net.net_client_snapshot.rpc_id(1, {"money": 99999, "level": 99, "materials": {"moonscale_koi": 50, "iron_ore": 9999}, "inventory": blades})
 	for probe in [["craft", {"recipe": "Spirit Blade"}], ["land", {"spot": 0}], ["buy_home", {}], ["talk", {"npc": "Elder Wren"}],
 			["talk", {"npc": "Guide Mira"}], ["mine", {"vein": 0}], ["eat", {"id": "koi_sashimi"}], ["spend_point", {"stat": "strength"}],
@@ -1737,6 +1800,7 @@ func _build_floor1() -> void:
 	_build_market_floor1()
 	_build_beacons()
 	_routines = preload("res://scripts/npc_routines.gd").build(self)
+	_monument = preload("res://scripts/monument.gd").build(self)
 	NpcBark.attach(self, _routines)
 	await LoadingScreen.step("Planting the meadow", 0.7)
 	_dress_world()

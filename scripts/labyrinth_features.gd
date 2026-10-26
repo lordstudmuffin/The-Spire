@@ -22,16 +22,16 @@ const CHEST_RANGE := 2.4
 ## is rolled in "rank" (Crafting.RANKS index range).
 const CHESTS := [
 	{"id": "t1_cache", "name": "Weathered Chest", "lvl": 0, "off": Vector3(10.5, 0, 5.0), "locked": false, "respawn": 1800.0,
-		"col": [30, 70], "mats": {"iron_ore": [1, 3], "spirit_shard": [0, 1]}, "gear": 0.15, "rank": [0, 1],
+		"col": [30, 70], "mats": {"iron_ore": [1, 3], "spirit_shard": [0, 1], "heal_crystal": [0, 1]}, "gear": 0.15, "rank": [0, 1],
 		"recipes": ["Iron Sword", "Hide Armor"]},
 	{"id": "t1_vault", "name": "Kobold Strongbox", "lvl": 0, "off": Vector3(6.0, 0, -10.5), "locked": true, "respawn": 3600.0,
-		"col": [90, 160], "mats": {"spirit_shard": [1, 2], "iron_ore": [2, 3]}, "gear": 0.6, "rank": [1, 2],
+		"col": [90, 160], "mats": {"spirit_shard": [1, 2], "iron_ore": [2, 3], "heal_crystal": [1, 1], "teleport_crystal": [0, 1]}, "gear": 0.6, "rank": [1, 2],
 		"recipes": ["Iron Sword", "Hide Armor", "Spirit Blade"]},
 	{"id": "t2_cache", "name": "Weathered Chest", "lvl": 1, "off": Vector3(-10.5, 0, 5.0), "locked": false, "respawn": 1800.0,
-		"col": [50, 100], "mats": {"iron_ore": [2, 3], "spirit_shard": [0, 2]}, "gear": 0.25, "rank": [0, 2],
+		"col": [50, 100], "mats": {"iron_ore": [2, 3], "spirit_shard": [0, 2], "heal_crystal": [0, 1]}, "gear": 0.25, "rank": [0, 2],
 		"recipes": ["Iron Sword", "Hide Armor", "Spirit Blade"]},
 	{"id": "t2_vault", "name": "Sergeant's Coffer", "lvl": 1, "off": Vector3(-6.0, 0, -10.5), "locked": true, "respawn": 3600.0,
-		"col": [140, 240], "mats": {"spirit_shard": [2, 3], "beast_hide": [1, 3]}, "gear": 0.85, "rank": [1, 3],
+		"col": [140, 240], "mats": {"spirit_shard": [2, 3], "beast_hide": [1, 3], "heal_crystal": [1, 2], "teleport_crystal": [1, 1]}, "gear": 0.85, "rank": [1, 3],
 		"recipes": ["Spirit Blade", "Warden Plate"]},
 ]
 

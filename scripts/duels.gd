@@ -4,8 +4,9 @@ extends Node
 ##
 ## Flow: "/duel Name [first|half|full]" sends a challenge; the challenged
 ## player answers with "/duel accept" or "/duel decline" within INVITE_TTL.
-## Both must be online, within INVITE_RANGE of each other and outside the
-## town safe zones. A COUNTDOWN then runs (big centred number), "DUEL!", and
+## Both must be online and within INVITE_RANGE of each other. Duels work
+## anywhere, inside a settlement's Inner Area (SAFE_ZONES) too: by mutual
+## consent a duel is the one way to trade blows there. A COUNTDOWN then runs (big centred number), "DUEL!", and
 ## the fight uses the EXISTING attack paths: Player._hit_cone finds the duel
 ## opponent next to the mobs and sends the hit to the server (net_hit here),
 ## which validates it exactly like Enemy.net_hit (kind, cooldown, range,
@@ -33,7 +34,7 @@ const INVITE_TTL := 30.0
 const INVITE_RANGE := 15.0
 const FORFEIT_RANGE := 40.0
 const ANNOUNCE_RANGE := 40.0
-const COUNTDOWN := 10
+const COUNTDOWN := 60   # Aincrad-style: a full minute to get ready (big numbers for the last 10)
 ## PvP telegraph: a swing on a duel opponent lands this long after the server
 ## accepts it (shorter than a mob's Enemy.WINDUP), so the defender can parry.
 const WINDUP := 0.25
@@ -42,7 +43,7 @@ const PARRY_PUSH := 7.0
 const HIT_RANGE := 4.0
 const FIRST_STRIKE_PCT := 0.05
 const HALF_PCT := 0.5
-const MODES := {"first": "First Strike", "half": "Half", "full": "Full"}
+const MODES := {"first": "First Strike", "half": "Half Loss", "full": "Total Loss"}
 const DEFAULT_MODE := "first"
 ## Where mobs never roam and duels never start: the walled town, Hollowbrook
 ## and Talven (world.gd keeps mobs out of the same circles).
@@ -68,6 +69,7 @@ var pending_invite := {}  # {"from", "mode"}
 var hud: Node = null
 var auto_accept := false  # --duel bots accept any challenge
 var _count_label: Label = null
+var _opp_bar: Control = null  # PlayerStatus duel gauge (visuals thread)
 var _label_serial := 0
 
 # --- --duel soak bot --------------------------------------------------------------
@@ -211,8 +213,6 @@ func _pair_check(a: int, b: int) -> String:
 	var pb = _pos_of(b)
 	if not (pa is Vector3) or not (pb is Vector3):
 		return "No such player online."
-	if in_safe_zone(pa) or in_safe_zone(pb):
-		return "No duels inside town. Step outside the walls."
 	if pa.distance_to(pb) > INVITE_RANGE + Net.RANGE_SLACK:
 		return "%s is too far away (duels start within %d m)." % [_name(b), int(INVITE_RANGE)]
 	return ""
@@ -661,6 +661,7 @@ func _show_big(text: String, secs: float, color := Color(1.0, 0.92, 0.6)) -> voi
 		_count_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_count_label.z_index = 50
 		h.add_child(_count_label)
+		UITheme.style_duel_label(_count_label)
 	_count_label.text = text
 	_count_label.add_theme_color_override("font_color", color)
 	_count_label.reset_size()
@@ -711,11 +712,17 @@ func on_net(kind: String, res: Dictionary) -> void:
 			if h != null and h.has_method("toast"):
 				h.toast("Duel: %s" % my_duel["opponent_name"], str(res.get("mode_name", "")), "Duel", UITheme.GOLD)
 			_show_big(str(int(res.get("count", COUNTDOWN))), 1.1)
+			var hroot = h.get("_root") if h != null else null
+			if hroot is Control:
+				_free_opp_bar()
+				_opp_bar = PlayerStatus.make_duel_gauge(hroot, my_duel["opponent_name"])
 			var fx := _fx()
 			if fx and fx.has_method("duel_countdown"):
 				fx.call("duel_countdown", int(res.get("count", COUNTDOWN)))
 		"count":
 			var n := int(res.get("n", 0))
+			if n > 10 and n % 10 != 0:
+				return  # the long lead-in stays quiet; every 10 s and the last 10 show
 			_show_big(str(n), 1.1, Color(1.0, 0.92, 0.6) if n > 3 else Color(1.0, 0.55, 0.4))
 			Audio.play("ui_tick")
 			var fx := _fx()
@@ -751,6 +758,8 @@ func on_net(kind: String, res: Dictionary) -> void:
 				me.pvp_staggered(float(res.get("stun", PARRY_STUN)), res.get("push", Vector3.ZERO) if res.get("push") is Vector3 else Vector3.ZERO)
 			_line("%s parried your blow." % str(res.get("by", "")))
 		"hit":
+			if _opp_bar != null and is_instance_valid(_opp_bar) and int(res.get("defender", 0)) == opponent_peer() and res.has("hp"):
+				_opp_bar.call("set_hp", float(res["hp"]), float(res.get("max", 100.0)))
 			if me == null or int(res.get("attacker", 0)) != int(me.get("peer_id")):
 				return
 			var t := _player_by_peer(int(res.get("defender", 0)))
@@ -764,6 +773,10 @@ func on_net(kind: String, res: Dictionary) -> void:
 			_line(str(res.get("text", "")))
 			if not bool(res.get("spectator", false)):
 				my_duel = {}
+				var bar := _opp_bar
+				get_tree().create_timer(2.2, false).timeout.connect(func():
+					if bar == _opp_bar:
+						_free_opp_bar())
 				if me != null:
 					me.set("bot_duel_target", null)
 					if auto_accept:
@@ -778,6 +791,12 @@ func on_net(kind: String, res: Dictionary) -> void:
 				fx.call("duel_end", w, l)
 			if fx and fx.has_method("duel_ring"):
 				fx.call("duel_ring", Vector3.ZERO, FORFEIT_RANGE, false)
+
+
+func _free_opp_bar() -> void:
+	if _opp_bar != null and is_instance_valid(_opp_bar):
+		_opp_bar.queue_free()
+	_opp_bar = null
 
 
 ## The chat command's request: a connected client asks the server, the

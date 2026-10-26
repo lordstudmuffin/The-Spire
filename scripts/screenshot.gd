@@ -329,6 +329,16 @@ func _ready() -> void:
 							hfx.hearth_glow(pl)
 						else:
 							hfx.class_art_cast(pl, "Hearthwright" if demo == "hearth_flare" else "Stillblade", demo)
+				"duel":
+					var du = scene.get("_duels")
+					if du:
+						du.on_net("duel", {"ev": "begin", "duel": 1, "opponent": "Mira", "opponent_peer": 99, "mode": "half", "mode_name": "Half-loss", "count": 3})
+						du.on_net("duel", {"ev": "start", "a": "Preview", "b": "Mira", "a_peer": 1, "b_peer": 99, "center": pl.global_position + Vector3(0, 0, -3)})
+						du.on_net("duel", {"ev": "hit", "attacker": 1, "defender": 99, "amount": 30.0, "outcome": "hit", "kind": 0, "hp": 74.0, "max": 120.0})
+					var dfx := VFX.get_for(pl)
+					if dfx:
+						dfx.duel_start(pl, demo_boar)
+						dfx.duel_ring(pl.global_position + Vector3(0, 0, -6), 9.0, true)
 				"chest_open":
 					var cfx := VFX.get_for(pl)
 					if cfx:

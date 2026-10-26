@@ -272,7 +272,7 @@ func _ready() -> void:
 	for rcp in Crafting.RECIPES.values():
 		if rcp["kind"] == "weapon":
 			best_base = maxf(best_base, float(rcp["base"]))
-	_check(Net.weapon_atk_cap(0) < Net.weapon_atk_cap(5) and Net.weapon_atk_cap(5) == ceilf(best_base * Crafting.RANK_MULT[5] * 1.15), "weapon attack cap per rank (%d at Mythical)" % int(Net.weapon_atk_cap(5)))
+	_check(Net.weapon_atk_cap(0) < Net.weapon_atk_cap(5) and Net.weapon_atk_cap(5) == ceilf(best_base * Crafting.RANK_MULT[5] * 1.15), "weapon attack cap per rank (%d at Myth)" % int(Net.weapon_atk_cap(5)))
 	_check(Net.xp_to_next(3) == GameState.xp_to_next() or GameState.level != 3, "server xp curve matches GameState")
 	var snap_char := Net.sanitize_character({"name": "  Rec<script>Tester  ", "origin": "Nope"})
 	_check(snap_char["name"].length() <= 16 and snap_char["origin"] == "Swordsman", "character sanitized")
@@ -306,6 +306,21 @@ func _ready() -> void:
 	_check(Net._srv_action(4242, "eat", {"id": "koi_sashimi"}).has("error"), "eat refused without the food")
 	rs.add_material("boar_stew", 1)
 	_check(Net._srv_action(4242, "eat", {"id": "boar_stew"}).has("id") and rec["buffs"].has("boar_stew") and rec["materials"]["boar_stew"] == 0 and Net.srv_attack_for(4242) > atk_plain * 1.09, "eating on the record buffs the server's attack by 10%")
+	# Crystals: a Healing Crystal restores the record's HP in full and is spent;
+	# refused without one or at full HP.
+	rec["hp"] = 5.0
+	_check(Net._srv_action(4242, "crystal", {"id": "heal_crystal"}).has("error"), "crystal refused without one")
+	rs.add_material("heal_crystal", 1)
+	_check(Net._srv_action(4242, "crystal", {"id": "heal_crystal"}).has("id") and absf(float(rec["hp"]) - rs.max_hp()) < 0.01 and int(rec["materials"]["heal_crystal"]) == 0, "a Healing Crystal heals the record to full and is used up")
+	rs.add_material("heal_crystal", 1)
+	_check(Net._srv_action(4242, "crystal", {"id": "heal_crystal"}).has("error") and int(rec["materials"]["heal_crystal"]) == 1, "a Healing Crystal is refused at full HP")
+	rs.add_material("teleport_crystal", 1)
+	_check(Net._srv_action(4242, "crystal", {"id": "teleport_crystal"}).has("id") and int(rec["materials"]["teleport_crystal"]) == 0 and Net.is_safe_destination(GameState.spawn_point()), "a Teleport Crystal is spent on the record and lands on a safe destination")
+	var col_c := int(rec["money"])
+	rec["money"] = 1000
+	_check(LifeData.buy("heal_crystal", rs) == "" and int(rec["materials"]["heal_crystal"]) == 2 and int(rec["money"]) == 1000 - int(LifeData.CRYSTALS["heal_crystal"]["price"]), "Trader Pell sells Healing Crystals")
+	rec["money"] = col_c
+	rec["materials"].erase("heal_crystal")
 	rec["hp"] = 10.0
 	_check(LifeData.eat("grilled_trout", rs) and rs.regen_tick(1.0) and rec["hp"] > 10.0 and rec["hp"] <= 12.01, "server regen tick heals from the food buff (hp %.1f)" % rec["hp"])
 	rec["buffs"]["boar_stew"]["until"] = 0.0
@@ -1618,6 +1633,10 @@ func _test_farming_skill() -> void:
 	GameState.farming_xp = xp0
 
 
+static func player_pos_for_monument(world: Node3D) -> Vector3:
+	return world.player.global_position + Vector3(1.0, 0, 0)
+
+
 func _test_labyrinth() -> void:
 	print("== Labyrinth chests and traps")
 	GameState.floor = 1
@@ -1632,6 +1651,23 @@ func _test_labyrinth() -> void:
 	if lab == null:
 		world.queue_free()
 		return
+	# Monument of Climbers: sorted by level, then floors, then name; offline
+	# it lists the local character; any "monument" group node gets the list.
+	var Mo = load("res://scripts/monument.gd")
+	var ord: Array = Mo.sorted([{"name": "b", "level": 3, "floors": 0, "online": false}, {"name": "a", "level": 3, "floors": 1, "online": true}, {"name": "c", "level": 9, "floors": 0, "online": false}])
+	_check(ord.size() == 3 and ord[0]["name"] == "c" and ord[1]["name"] == "a" and ord[2]["name"] == "b", "the Monument orders climbers by level, then floors cleared")
+	var face_gd := GDScript.new()
+	face_gd.source_code = "extends Node3D\nvar got: Array = []\nfunc set_names(e: Array) -> void:\n\tgot = e\n"
+	face_gd.reload()
+	var face := Node3D.new()
+	face.set_script(face_gd)
+	face.add_to_group("monument")
+	world.add_child(face)
+	face.global_position = player_pos_for_monument(world)
+	world._monument.refresh()
+	_check(world._monument != null and face.get("got").size() == 1 and str(face.get("got")[0]["name"]) == str(GameState.character.get("name", "Nameless")), "the Monument lists the local character offline and fills the art node")
+	_check(world._nearest_interactable()[0] == world._monument and world._monument.text().begins_with("1. "), "E next to the monument reads it")
+	face.queue_free()
 	var L = load("res://scripts/labyrinth_features.gd")
 	var now := Time.get_unix_time_from_system()
 	var keep_chests: Dictionary = GameState.chests.duplicate()
@@ -1654,6 +1690,38 @@ func _test_labyrinth() -> void:
 	_check(not r.has("error") and (rs.rec["chests"] as Dictionary).has("t2_cache") and int(rs.rec["money"]) > 0, "the server rolls chest loot into the record")
 	_check(lab.srv(1, rs, {"chest": 3}, Vector3(0, 0, 0)).has("error"), "the server refuses a chest opened from afar")
 	_check(L.loot_text({"col": 5, "mats": {"iron_ore": 2}, "gear": {}}) == "5 Col, 2 Iron Ore", "loot line reads well")
+	# Switch: a party mate cutting in on a parry-staggered mob.
+	var mob: Enemy = null
+	for e in get_tree().get_nodes_in_group("enemies"):
+		if e is Enemy and e.visible and not e.is_boss and e.brain == null and world.is_ancestor_of(e):
+			mob = e
+			break
+	if mob != null:
+		mob._posture = 0
+		mob._stagger = 0.0
+		mob._parried(world.player)
+		_check(mob._stagger > 0.0 and mob._switch_from == world.player.peer_id and mob._switch_until > Time.get_ticks_msec(), "a staggering parry opens a Switch window")
+		Net.online = true
+		Net.srv_party_of = {5: 9, 6: 9, 7: 0}
+		mob._switch_from = 5
+		mob._switched = false
+		mob.max_hp = 5000.0
+		mob.hp = 5000.0
+		var st0: float = mob._stagger
+		mob.take_hit(10.0, Vector3.FORWARD, 6, 0)
+		var sw_dmg: float = 5000.0 - mob.hp
+		_check(is_equal_approx(sw_dmg, 10.0 * Enemy.RIPOSTE_MULT * Enemy.SWITCH_MULT) and mob._switched and mob._stagger > st0, "a party mate's Switch lands boosted and keeps the mob reeling")
+		var h1: float = mob.hp
+		mob.take_hit(10.0, Vector3.FORWARD, 6, 0)
+		_check(is_equal_approx(h1 - mob.hp, 10.0 * Enemy.RIPOSTE_MULT), "only the first cut-in counts as the Switch")
+		mob._switched = false
+		var h2: float = mob.hp
+		mob.take_hit(10.0, Vector3.FORWARD, 7, 0)
+		_check(is_equal_approx(h2 - mob.hp, 10.0 * Enemy.RIPOSTE_MULT) and not mob._switched, "no Switch for a player outside the party")
+		Net.online = false
+		Net.srv_party_of = {}
+		mob._stagger = 0.0
+		mob.hp = mob.max_hp
 	# Spike cycle: rest -> warn -> up.
 	var tile: Dictionary = lab.spikes[0]
 	var base_t: float = 1000.0 * float(L.PERIOD) - float(tile["phase"])
@@ -2093,7 +2161,7 @@ func _test_duels() -> void:
 	var Dc = load("res://scripts/duels.gd")
 	for m in Dc.MODES:
 		_check(not str(Dc.MODES[m]).to_lower().contains("sword art") and not str(Dc.MODES[m]).to_lower().contains("overgeared"), "mode '%s' uses an original name" % m)
-	_check(Dc.in_safe_zone(Vector3(0, 0, 10)) and Dc.in_safe_zone(Vector3(-48, 0, 38)) and not Dc.in_safe_zone(Vector3(10, 0, -45)), "town, Hollowbrook and Talven are duel-free; the fields are not")
+	_check(Dc.in_safe_zone(Vector3(0, 0, 10)) and Dc.in_safe_zone(Vector3(-48, 0, 38)) and not Dc.in_safe_zone(Vector3(10, 0, -45)), "town, Hollowbrook and Talven are Inner Areas; the fields are not")
 	# Events the server delivers, per peer.
 	var events := []
 	D.server_event.connect(func(peer, data): events.append([peer, data]))
@@ -2131,8 +2199,6 @@ func _test_duels() -> void:
 	var hp_b := func() -> float: return float(rb["hp"])
 	# --- Invites -----------------------------------------------------------------
 	_check(D.srv_invite(A, "Ashe").has("error") and D.srv_invite(A, "Nobody").has("error") and D.srv_invite(A, "Bram", "sudden").has("error"), "no duel with yourself, a stranger, or an unknown mode")
-	pa.global_position = Vector3(0, 1, 10)
-	_check(str(D.srv_invite(A, "Bram").get("error", "")).begins_with("No duels inside town"), "no challenges from inside the town walls")
 	pa.global_position = field + Vector3(40, 0, 0)
 	_check(str(D.srv_invite(A, "Bram").get("error", "")).contains("too far"), "the other player must be within %d m" % int(Dc.INVITE_RANGE))
 	pa.global_position = field

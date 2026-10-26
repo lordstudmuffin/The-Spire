@@ -22,9 +22,9 @@ const TARGET_RANGE := 16.0
 ## Sword Arts: preset moves with a cooldown and a short recovery ("post-motion").
 ## Damage is a multiplier of normal attack damage; arc is the hit cone in radians.
 const SKILLS := [
-	{"name": "Horizontal", "mult": 1.6, "range": 2.6, "arc": PI, "cooldown": 4.0, "recovery": 0.5, "lunge": 0.0},
-	{"name": "Vertical Arc", "mult": 2.6, "range": 2.4, "arc": 0.9, "cooldown": 8.0, "recovery": 0.8, "lunge": 0.0},
-	{"name": "Rage Spike", "mult": 2.0, "range": 2.4, "arc": 1.2, "cooldown": 10.0, "recovery": 0.6, "lunge": 14.0},
+	{"name": "Sweeping Edge", "mult": 1.6, "range": 2.6, "arc": PI, "cooldown": 4.0, "recovery": 0.5, "lunge": 0.0},
+	{"name": "Twin Crescent", "mult": 2.6, "range": 2.4, "arc": 0.9, "cooldown": 8.0, "recovery": 0.8, "lunge": 0.0},
+	{"name": "Falcon Rush", "mult": 2.0, "range": 2.4, "arc": 1.2, "cooldown": 10.0, "recovery": 0.6, "lunge": 14.0},
 ]
 
 signal skill_used(index: int, cooldown: float)
@@ -354,6 +354,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		var inv := -1.0 if Settings.data.get("invert_y", false) else 1.0
 		cam_pivot.rotation.y -= event.relative.x * MOUSE_SENS * Settings.data["mouse_sens"]
 		spring.rotation.x = clamp(spring.rotation.x - event.relative.y * inv * MOUSE_SENS * Settings.data["mouse_sens"], -1.2, 0.4)
+	elif event.is_action_pressed("quick_heal") or (event.is_action_pressed("interact") and event is InputEventJoypadButton and Input.is_action_pressed("target")):
+		quick_heal()
 	elif event.is_action_pressed("interact"):
 		interact_pressed.emit()
 	elif event.is_action_pressed("target"):
@@ -602,6 +604,8 @@ func _play_swing_fx(kind: int) -> void:
 	_swing_flip = not _swing_flip
 	var fwd := -model.global_transform.basis.z
 	fx.slash(global_position, fwd, kind, _swing_flip)
+	if kind >= 0 and _weapon != null and fx.has_method("blade_glow"):
+		fx.call("blade_glow", _weapon, VFX.kind_color(kind), 0.5)
 	if kind >= 0:
 		fx.ring(global_position, VFX.kind_color(kind), 2.6 if kind != 2 else 3.2, 0.4)
 		fx.flash_light(global_position + Vector3(0, 1.0, 0), VFX.kind_color(kind), 3.0)
@@ -1017,6 +1021,22 @@ func net_defended(outcome: String, from_pos: Vector3, guard_left: float, stun: f
 ## A unique Sword Art (UniqueSkills arts of GameState.unique_skill): a rapid
 ## multi-slash combo. Offline the realm holder check runs here; online the
 ## server re-checks every hit (Enemy.net_hit). Returns false if refused.
+## H (or LT + Y on a pad): crush a Healing Crystal from the pack.
+func quick_heal() -> void:
+	var err := LifeData.use_crystal("heal_crystal")
+	if err == "pending":
+		return
+	var hud := get_tree().get_first_node_in_group("hud")
+	if err != "":
+		Audio.play("ui_error")
+		if hud and hud.has_method("toast"):
+			hud.toast(err, "", "", UITheme.ROSE)
+		return
+	var w := get_tree().current_scene
+	if w and w.has_method("crystal_effect"):
+		w.crystal_effect("heal_crystal")
+
+
 func use_unique(i: int) -> bool:
 	var id := GameState.unique_skill
 	var arts := UniqueSkills.arts(id)
@@ -1157,7 +1177,7 @@ func net_take_damage(amount: float) -> void:
 
 
 ## Generous upper bound on what a legit player of this level can hit for
-## (base + maxed strength + a Mythical weapon). Kept as a sanity ceiling.
+## (base + maxed strength + a Myth-rated weapon). Kept as a sanity ceiling.
 static func attack_cap(lvl: int) -> float:
 	return 8.0 + 3.0 * (6 + 3 * lvl) + lvl + 12.0 * 4.0
 

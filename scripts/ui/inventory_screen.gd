@@ -262,8 +262,11 @@ func _build_centre() -> void:
 	wrap.add_child(_empty_l)
 
 	v.add_child(UITheme.rule())
-	var mh := HBoxContainer.new()
-	mh.add_theme_constant_override("separation", 10)
+	# Flow rows: they wrap to the grid's width instead of widening the
+	# screen past the viewport as materials and provisions grow.
+	var mh := HFlowContainer.new()
+	mh.add_theme_constant_override("h_separation", 10)
+	mh.add_theme_constant_override("v_separation", 8)
 	var mk := UITheme.kicker("Materials")
 	mk.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	mh.add_child(mk)
@@ -308,8 +311,9 @@ func _build_provisions(v: VBoxContainer) -> void:
 	ph.add_child(pk)
 	ph.add_child(UITheme.subtle("Use food for a timed buff", 12))
 	v.add_child(ph)
-	var strip := HBoxContainer.new()
-	strip.add_theme_constant_override("separation", 8)
+	var strip := HFlowContainer.new()
+	strip.add_theme_constant_override("h_separation", 8)
+	strip.add_theme_constant_override("v_separation", 8)
 	v.add_child(strip)
 	for id in GameState.MATERIAL_NAMES:
 		if not LifeData.is_life_item(id):
@@ -324,7 +328,7 @@ func _build_provisions(v: VBoxContainer) -> void:
 		cell.add_theme_stylebox_override("panel", sb)
 		var ch := HBoxContainer.new()
 		ch.add_theme_constant_override("separation", 6)
-		var kind := "fish" if LifeData.is_fish(id) else ("food" if LifeData.is_food(id) else ("rod" if LifeData.TOOLS.has(id) else "herb"))
+		var kind := "fish" if LifeData.is_fish(id) else ("food" if LifeData.is_food(id) else ("rod" if LifeData.TOOLS.has(id) else ("shard" if LifeData.is_crystal(id) else "herb")))
 		ch.add_child(UIGlyph.make(kind, c, 30, 0.6))
 		var cv := VBoxContainer.new()
 		cv.add_theme_constant_override("separation", -2)
@@ -339,6 +343,12 @@ func _build_provisions(v: VBoxContainer) -> void:
 			btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			btn.tooltip_text = LifeData.buff_text(LifeData.RECIPES[id]["buff"])
 			btn.pressed.connect(func(): use_food(id))
+			ch.add_child(btn)
+		elif LifeData.is_crystal(id):
+			btn = UITheme.make_button("Use", "chip")
+			btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			btn.tooltip_text = LifeData.item_desc(id)
+			btn.pressed.connect(func(): use_crystal(id))
 			ch.add_child(btn)
 		cell.add_child(ch)
 		cell.tooltip_text = LifeData.item_desc(id)
@@ -356,6 +366,25 @@ func use_food(id: String) -> bool:
 		return false
 	Audio.play("eat")
 	food_used.emit(id)
+	refresh()
+	return true
+
+
+## Crushes a crystal from the pack. Offline the world plays the effect at
+## once; online it waits for the server's answer (world._on_net_action).
+func use_crystal(id: String) -> bool:
+	var err := LifeData.use_crystal(id)
+	if err == "pending":
+		return true
+	if err != "":
+		Audio.play("ui_error")
+		var hud := get_tree().get_first_node_in_group("hud")
+		if hud and hud.has_method("toast"):
+			hud.toast(err, "", "", UITheme.ROSE)
+		return false
+	var w := get_tree().current_scene
+	if w and w.has_method("crystal_effect"):
+		w.crystal_effect(id)
 	refresh()
 	return true
 
@@ -694,7 +723,7 @@ func _show_detail(idx: int) -> void:
 	_detail["glyph"].set_glyph("sword" if item.get("kind") == "weapon" else "shield", c)
 	_detail["name"].text = str(item.get("name", "")).to_upper()
 	_detail["name"].add_theme_color_override("font_color", c)
-	_detail["rank"].text = Crafting.RANKS[rank].to_upper()
+	_detail["rank"].text = "RATING: %s" % Crafting.RANKS[rank].to_upper()
 	_detail["rank_pill"].visible = true
 	var rs: StyleBoxFlat = _detail["rank_pill"].get_theme_stylebox("panel")
 	rs.bg_color = c

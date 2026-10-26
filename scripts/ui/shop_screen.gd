@@ -1,6 +1,6 @@
 class_name ShopScreen
 extends VBoxContainer
-## Trader Pell's stall: the Willow Rod and the cottage decorations. One row
+## Trader Pell's stall: the Willow Rod, crystals and the cottage decorations. One row
 ## per ware with price, what you own and a Buy button (LifeData.buy). Rows
 ## are built once and refreshed in place.
 
@@ -35,6 +35,9 @@ func _build() -> void:
 	add_child(th)
 	add_child(UITheme.rule())
 	var wares := [["willow_rod", LifeData.TOOLS["willow_rod"]["name"], LifeData.ROD_PRICE, LifeData.TOOLS["willow_rod"]["desc"], "rod", LifeData.item_color("willow_rod")]]
+	for id in LifeData.CRYSTALS:
+		var cr: Dictionary = LifeData.CRYSTALS[id]
+		wares.append([id, cr["name"], int(cr["price"]), cr["desc"], "shard", LifeData.item_color(id)])
 	for id in LifeData.DECOR:
 		var d: Dictionary = LifeData.DECOR[id]
 		wares.append([id, d["name"], int(d["col"]), d["desc"], "home", UITheme.GOLD])
@@ -80,7 +83,7 @@ func refresh() -> void:
 	_col_l.text = "%d Col" % GameState.money
 	for id in _rows:
 		var r: Dictionary = _rows[id]
-		var owned := int(GameState.materials.get(id, 0)) if id == "willow_rod" else int(GameState.decor_owned.get(id, 0))
+		var owned := int(GameState.materials.get(id, 0)) if (id == "willow_rod" or LifeData.CRYSTALS.has(id)) else int(GameState.decor_owned.get(id, 0))
 		(r["own"] as Label).text = ("owned x%d" % owned) if owned > 0 else ""
 		var locked := LifeData.DECOR.has(id) and not LifeData.decor_available(id)
 		var can: bool = GameState.money >= int(r["cost"]) and not locked

@@ -44,6 +44,8 @@ const DEFAULTS := {
 	"class_2": {"kb": [KEY_C], "pad": []},
 	"target": {"kb": [["mouse", MOUSE_BUTTON_MIDDLE]], "pad": [[JOY_AXIS_TRIGGER_LEFT, 1]]},
 	"interact": {"kb": [KEY_E], "pad": [JOY_BUTTON_Y]},
+	# Pad: hold Target (LT) and press Interact (Y) instead (player.gd).
+	"quick_heal": {"kb": [KEY_H], "pad": []},
 	"stats_menu": {"kb": [KEY_TAB], "pad": [JOY_BUTTON_BACK]},
 	"quick_save": {"kb": [KEY_F5], "pad": []},
 	"pause": {"kb": [KEY_ESCAPE], "pad": [JOY_BUTTON_START]},
@@ -61,7 +63,7 @@ const DEFAULTS := {
 const REMAPPABLE := [
 	["move_forward", "Move forward"], ["move_back", "Move back"], ["move_left", "Move left"], ["move_right", "Move right"],
 	["jump", "Jump"], ["sprint", "Sprint"], ["dash", "Dash"], ["attack", "Attack"],
-	["skill_1", "Sword Art 1"], ["skill_2", "Sword Art 2"], ["skill_3", "Sword Art 3"], ["parry", "Parry / guard"], ["skill_4", "Unique Art 1"], ["skill_5", "Unique Art 2"], ["skill_6", "Unique Art 3"], ["class_1", "Class Art 1"], ["class_2", "Class Art 2"], ["target", "Target enemy"],
+	["skill_1", "Sword Art 1"], ["skill_2", "Sword Art 2"], ["skill_3", "Sword Art 3"], ["parry", "Parry / guard"], ["skill_4", "Unique Art 1"], ["skill_5", "Unique Art 2"], ["skill_6", "Unique Art 3"], ["class_1", "Class Art 1"], ["class_2", "Class Art 2"], ["target", "Target enemy"], ["quick_heal", "Healing Crystal"],
 	["interact", "Interact"], ["inventory", "Inventory"], ["quest_log", "Quest log"], ["map", "Map"],
 	["nearby", "Party & nearby"], ["stats_menu", "Character"], ["chat", "Chat"], ["pause", "Pause / back"],
 	["quick_save", "Quick save"], ["map_zoom_in", "Minimap zoom in"], ["map_zoom_out", "Minimap zoom out"],

@@ -1,9 +1,9 @@
 class_name Crafting
 ## Blacksmithing: recipes, rank rolls and item creation.
-## Ranks follow the Normal -> Mythical ladder; higher smithing skill and the
+## Ranks follow the Normal -> Myth ladder; higher smithing skill and the
 ## Forgeborn hidden class shift the odds upward.
 
-const RANKS := ["Normal", "Rare", "Epic", "Unique", "Legendary", "Mythical"]
+const RANKS := ["Normal", "Rare", "Epic", "Unique", "Legendary", "Myth"]
 const RANK_COLORS := ["cfcfcf", "4da6ff", "b04dff", "ffb84d", "ff6b35", "ff2d75"]
 const RANK_MULT := [1.0, 1.3, 1.7, 2.2, 3.0, 4.0]
 
@@ -42,7 +42,7 @@ static func roll_rank(smithing_level: int, forgeborn := false) -> int:
 		8.0 + l * 2.5,             # Epic
 		2.0 + l * 1.5,             # Unique
 		0.3 + l * 0.6,             # Legendary
-		0.02 + l * 0.08,           # Mythical
+		0.02 + l * 0.08,           # Myth
 	]
 	var total := 0.0
 	for w in weights:

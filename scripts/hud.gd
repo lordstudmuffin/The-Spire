@@ -1479,7 +1479,7 @@ func _build_craft() -> void:
 		h.add_child(b)
 		row.add_child(h)
 		_craft_box.add_child(row)
-	var hint := UITheme.subtle("Ranks: Normal < Rare < Epic < Unique < Legendary < Mythical. Higher smithing skill rolls higher.", 12)
+	var hint := UITheme.subtle("Ranks: Normal < Rare < Epic < Unique < Legendary < Myth. Higher smithing skill rolls higher.", 12)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD
 	_craft_box.add_child(hint)
 

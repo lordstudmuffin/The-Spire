@@ -36,9 +36,9 @@ const TIPS := [
 	[2, "Wisp Essence cools to a pale blue when the shrine accepts it. Any other colour, bring it back."],
 	[2, "The Sunken Barrow was sealed from the inside. The Drowned Knight is still in there, and still waiting."],
 	[2, "Mirelord raises the drowned to fight for him. Finish the wisps first, or you will be finishing them forever."],
-	[0, "Sword Arts: Horizontal sweeps wide, Vertical Arc hits hard, Rage Spike closes the distance."],
+	[0, "Sword Arts: Sweeping Edge sweeps wide, Twin Crescent hits hard, Falcon Rush closes the distance."],
 	[0, "Dash (Q) through a charge and the mob will have to turn around. Most of them are slow to turn."],
-	[0, "Every craft rolls a rank, Normal to Mythical. Smithing levels tilt the odds, not the ceiling."],
+	[0, "Every craft rolls a rank, Normal to Myth. Smithing levels tilt the odds, not the ceiling."],
 	[0, "Saves live in three slots. Switching climbers at the title screen keeps every climb where it was."],
 	[0, "The Spire is said to have a hundred floors. So far two have been carved."],
 ]

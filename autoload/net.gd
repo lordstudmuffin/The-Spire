@@ -43,7 +43,7 @@ const SNAPSHOT_MIN_INTERVAL_MS := 20000
 const MAX_INVENTORY := 60
 const LEVEL_CAP := 100
 ## Per-kind minimum interval between two accepted action requests of a peer.
-const RATE_ACTION_MS := {"craft": 400, "cook": 400, "eat": 250, "buy": 400, "buy_home": 1000, "mine": 700, "herb": 400,
+const RATE_ACTION_MS := {"craft": 400, "cook": 400, "eat": 250, "crystal": 500, "buy": 400, "buy_home": 1000, "mine": 700, "herb": 400,
 	"cast": 1500, "land": 800, "talk": 400, "store": 150, "place": 300, "rest": 2000, "spend_point": 100, "equip": 150,
 	"unequip": 150, "enter_labyrinth": 1000, "duel": 400}
 const RATE_ACTION_DEFAULT_MS := 250
@@ -1815,6 +1815,13 @@ func _srv_action(peer: int, kind: String, payload: Dictionary) -> Dictionary:
 		"eat":
 			var id := str(payload.get("id", ""))
 			res = {"id": id} if LifeData.eat(id, rs) else {"error": "You have none of that."}
+		"crystal":
+			var id := str(payload.get("id", ""))
+			var prev := float(rec["hp"])
+			var err := LifeData.use_crystal(id, rs)
+			res = {"error": err} if err != "" else {"id": id}
+			if err == "" and id == "heal_crystal":
+				_send(peer, net_hp, [float(rec["hp"]), rs.max_hp(), prev])
 		"spend_point":
 			var stat := str(payload.get("stat", ""))
 			res = {"stat": stat} if rs.spend_point(stat) else {"error": "No stat points to spend."}

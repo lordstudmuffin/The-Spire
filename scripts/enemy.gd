@@ -59,6 +59,15 @@ var _windup_target: Node3D
 const STAGGER_TIME := 1.5
 const STAGGER_TIME_BOSS := 2.2
 const RIPOSTE_MULT := 1.5
+## Switch: when a parry staggers a mob, a party mate who cuts in within
+## SWITCH_WINDOW lands one boosted blow and keeps the mob reeling a little
+## longer (the parrier "switches" out, the mate steps in).
+const SWITCH_WINDOW_MS := 2000
+const SWITCH_MULT := 1.3
+const SWITCH_EXTEND := 0.6
+var _switch_from := -1
+var _switch_until := 0
+var _switched := false
 var _posture := 0
 var _stagger := 0.0
 var _knock := Vector3.ZERO
@@ -315,6 +324,32 @@ func _parried(t: Node3D) -> void:
 	if brain != null and brain.has_method("stagger_immune") and brain.stagger_immune():
 		return  # the parry deflected, but a roaring Guardian builds no posture
 	_build_posture(1)
+	if _stagger > 0.0 and "peer_id" in t:
+		_switch_from = int(t.peer_id)
+		_switch_until = Time.get_ticks_msec() + SWITCH_WINDOW_MS
+		_switched = false
+
+
+## True when `a` and `b` are different players in the same party (server).
+static func same_party(a: int, b: int) -> bool:
+	if a == b or not Net.online:
+		return false
+	var pa := int(Net.srv_party_of.get(a, 0))
+	return pa != 0 and pa == int(Net.srv_party_of.get(b, 0))
+
+
+## Everyone: a Switch landed (`from` parried, `to` cut in).
+@rpc("authority", "call_local", "reliable")
+func net_switch(from: int, to: int) -> void:
+	var me := multiplayer.get_unique_id() if Net.online else 1
+	var fx := VFX.get_for(self)
+	if fx and fx.has_method("switch_flash"):
+		fx.call("switch_flash", self, from, to)
+	if me == from or me == to:
+		var hud := get_tree().get_first_node_in_group("hud")
+		if hud and hud.has_method("toast"):
+			hud.toast("SWITCH!", "", "", Color(0.5, 0.95, 1.0))
+		Audio.play("crit", global_position, 0.05, 2.0, 1.2)
 
 
 ## Posture from a parry or a posture-breaking art (Breaking Wave): a full
@@ -357,6 +392,9 @@ func _nearest_player() -> Node3D:
 	var best: Node3D = null
 	var best_d := INF
 	for p in get_tree().get_nodes_in_group("players"):
+		# Monsters never follow anyone into a settlement's Inner Area.
+		if GameState.floor == 1 and Duels.in_safe_zone(p.global_position):
+			continue
 		var d: float = p.global_position.distance_to(global_position)
 		if d < best_d:
 			best_d = d
@@ -573,6 +611,11 @@ func take_hit(amount: float, from_dir: Vector3, hitter := 1, kind := -1) -> void
 	if _stagger > 0.0:
 		amount *= RIPOSTE_MULT  # riposte on a staggered mob
 		kind = maxi(kind, 0)    # reads as a heavy (crit) hit
+		if not _switched and Time.get_ticks_msec() < _switch_until and same_party(hitter, _switch_from):
+			_switched = true
+			amount *= SWITCH_MULT
+			_stagger += SWITCH_EXTEND
+			net_switch.rpc(_switch_from, hitter)
 	elif HiddenClasses.is_art_kind(kind) and int(HiddenClasses.art_for_kind(kind).get("posture", 0)) > 0:
 		# Breaking Wave (Stillblade): the blow itself builds posture, so the
 		# follow-up hits land as ripostes.
@@ -1587,7 +1630,7 @@ func _build_drowned_knight() -> void:
 ## Floor 1 kinds only for now; Floor 2 mobs (toads, stags, wisps, Mirelord)
 ## keep their primitive rigs until that floor gets its own pass.
 const MODELS := {
-	"boar": {"pack": "animals", "name": "Pig", "tint": "7a4f36", "fit": 1.15},
+	"boar": {"pack": "animals", "name": "Pig", "tint": "4fa4d4", "fit": 1.15},
 	"wolf": {"pack": "animals", "name": "Wolf", "tint": "9a9aae", "fit": 1.25, "yaw": 90},
 	"kobold": {"pack": "skeletons", "name": "Skeleton_Minion", "tint": "cfd0a4", "fit": 1.5},
 	"sergeant": {"pack": "skeletons", "name": "Skeleton_Warrior", "tint": "d8bf92", "fit": 1.35},

@@ -46,7 +46,9 @@ const MATERIAL_NAMES := {"iron_ore": "Iron Ore", "beast_hide": "Beast Hide", "sp
 	"turnip": "Turnip", "sunwheat": "Sunwheat", "honeymelon": "Honeymelon",
 	"turnip_soup": "Turnip Soup", "harvest_bread": "Harvest Bread", "melon_tart": "Honeymelon Tart",
 	# Labyrinth: opens the terraces' locked vaults (LabyrinthFeatures).
-	"terrace_key": "Terrace Key"}
+	"terrace_key": "Terrace Key",
+	# One-use crystals (LifeData.CRYSTALS).
+	"heal_crystal": "Healing Crystal", "teleport_crystal": "Teleport Crystal"}
 ## Floor layout data the world and the player need before the scene exists:
 ## where a character arrives on each floor (also the respawn point).
 const FLOOR_SPAWNS := {1: Vector3(0, 1, 6), 2: Vector3(0, 1, 37)}
