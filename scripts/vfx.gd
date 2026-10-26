@@ -629,6 +629,81 @@ func boss_slam_impact(enemy: Node3D, pos: Vector3, radius: float) -> void:
 		me.call("shake", 0.35)
 
 
+## Rockfall: a marked ring on the ground, and a stone from the broken crown
+## above the summit that drops to land exactly when the warning runs out.
+func boss_rockfall_warning(enemy: Node3D, pos: Vector3, radius: float, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	var g := Vector3(pos.x, _ground_y(pos), pos.z)
+	_telegraph(enemy, 0, g, Vector2.ONE * radius * 2.0, Vector3.FORWARD, secs)
+	var rock := MeshInstance3D.new()
+	rock.mesh = _rock_mesh()
+	rock.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	add_child(rock)
+	var sz := radius * 0.55
+	rock.global_transform = Transform3D(Basis.from_euler(Vector3(randf() * TAU, randf() * TAU, 0.0)).scaled(Vector3(sz, sz * 0.8, sz)), g + Vector3(0, 16.0, 0))
+	# Track it with the telegraphs so boss_reset clears it too.
+	var id := enemy.get_instance_id()
+	var list: Array = _telegraphs.get(id, [])
+	list.append(rock)
+	_telegraphs[id] = list
+	var fall := minf(0.55, secs)
+	var tw := rock.create_tween()
+	tw.tween_interval(maxf(secs - fall, 0.0))
+	tw.tween_property(rock, "global_position", g + Vector3(0, sz * 0.35, 0), fall).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(rock, "rotation", rock.rotation + Vector3(2.5, 1.2, 0.0), fall)
+	tw.tween_interval(0.9)
+	tw.tween_property(rock, "global_position", g - Vector3(0, sz, 0), 0.6)
+	tw.tween_callback(rock.queue_free)
+	# A trickle of grit from above as the warning starts.
+	_fire(g + Vector3(0, 9.0, 0), "dirt_02", false, Color(0.5, 0.45, 0.4, 0.8), 0.5, 1.2, 0.5, 2.0, Vector3.DOWN, 15.0, -9.0, 0.08, 0.2, radius * 0.3, false)
+
+
+func boss_rockfall_impact(enemy: Node3D, pos: Vector3, radius: float) -> void:
+	var g := Vector3(pos.x, _ground_y(pos), pos.z)
+	dust_ring(g, radius * 0.8)
+	_fire(g + Vector3(0, 0.3, 0), "dirt_02", false, Color(0.55, 0.47, 0.38, 1.0), 0.7, 0.8, 3.0, 7.0, Vector3.UP, 50.0, -18.0, 0.2, 0.5, radius * 0.35, false)
+	_shock_ring(g + Vector3(0, 0.4, 0), Color(1.0, 0.75, 0.5), radius * 1.2, 0.25)
+	var me := get_tree().get_first_node_in_group("player") as Node3D
+	if me and me.has_method("shake") and me.global_position.distance_to(g) < radius * 3.0:
+		me.call("shake", 0.2)
+
+
+var _rock: Mesh
+
+
+## A rough low-poly boulder (unit size), built once.
+func _rock_mesh() -> Mesh:
+	if _rock != null:
+		return _rock
+	var sm := SphereMesh.new()
+	sm.radial_segments = 7
+	sm.rings = 4
+	var arr := sm.get_mesh_arrays()
+	var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	var bumps := {}
+	for i in verts.size():
+		var key := verts[i].snapped(Vector3.ONE * 0.01)
+		if not bumps.has(key):
+			bumps[key] = rng.randf_range(0.75, 1.15)
+		verts[i] *= bumps[key]
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)
+	var idx: PackedInt32Array = arr[Mesh.ARRAY_INDEX]
+	for i in idx:
+		st.add_vertex(verts[i])
+	st.generate_normals()  # smooth group -1: flat facets
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.46, 0.43, 0.4)
+	m.roughness = 0.95
+	st.set_material(m)
+	_rock = st.commit()
+	return _rock
+
+
 ## An HP bar emptied: a ring of glass shards bursts off the boss with a cold
 ## flash, like the bar itself breaking.
 func boss_bar_break(enemy: Node3D, bar_left: int, bars: int) -> void:
