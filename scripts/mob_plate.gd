@@ -10,6 +10,9 @@ const BAR_W := 1.15
 const BAR_H := 0.13
 const CHIP_DELAY := 0.35
 const CHIP_SPEED := 0.9   # bar fractions per second once the chip moves
+## The bar and name draw over the world (no depth test), so beyond this the
+## plate is hidden: far mobs would otherwise speckle walls and slabs.
+const SHOW_RANGE := 34.0
 
 var _name: Label3D
 var _bar: MeshInstance3D
@@ -81,6 +84,8 @@ func _build() -> void:
 	_cursor.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_cursor.position = Vector3(0, BAR_H * 0.5 + 0.48, 0)
 	add_child(_cursor)
+	for g in [_bar, _name, _cursor]:
+		(g as GeometryInstance3D).visibility_range_end = SHOW_RANGE
 
 
 ## Inverted octahedral crystal (a long point down), ~0.22 m tall.
