@@ -1799,6 +1799,7 @@ static func broken_column(parent: Node3D, pos: Vector3, height: float, rune: Col
 static func brazier(parent: Node3D, pos: Vector3, with_light := true) -> Node3D:
 	var n := Node3D.new()
 	n.position = pos
+	n.add_to_group("braziers")  # VFX.boss_engage flares them in turn
 	parent.add_child(n)
 	mesh_node(n, BoxMesh.new(), Vector3(0, 0.3, 0), ruin_mat("ledge"), Vector3.ZERO, Vector3(1.4, 0.6, 1.4))
 	cyl(n, 0.22, 0.3, 0.9, Vector3(0, 1.05, 0), Color("3a3440"), 8)

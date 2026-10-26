@@ -562,6 +562,27 @@ func boss_engage(enemy: Node3D) -> void:
 	_glint(head, DANGER_COLOR, w * 0.9, 0.5, true)
 	_shock_ring(head, DANGER_COLOR.darkened(0.3), w * 2.2, 0.45)
 	flash_light(head, DANGER_COLOR, 5.0)
+	_flare_braziers(enemy.global_position)
+
+
+## The arena's braziers roar up one after another, from the entry toward
+## the Guardian (Aincrad's boss rooms light their torches down the hall as
+## the raid comes in).
+func _flare_braziers(at: Vector3) -> void:
+	var near: Array = []
+	for b in get_tree().get_nodes_in_group("braziers"):
+		if b is Node3D and (b as Node3D).global_position.distance_to(at) < 30.0:
+			near.append(b)
+	near.sort_custom(func(a, b): return a.global_position.distance_to(at) > b.global_position.distance_to(at))
+	for k in near.size():
+		var b: Node3D = near[k]
+		get_tree().create_timer(0.15 + k * 0.22, false).timeout.connect(func():
+			if not is_instance_valid(b):
+				return
+			var top := b.global_position + Vector3(0, 2.4, 0)
+			_fire(top, "flame_03", true, Color(1.0, 0.55, 0.2), 0.9, 0.5, 5.0, 9.0, Vector3.UP, 18.0, 2.0, 0.5, 1.1, 0.4, false)
+			flash_light(top + Vector3(0, 0.8, 0), Color(1.0, 0.6, 0.25), 4.0)
+			Audio.play("cast", top, 0.08, -6.0, 0.6))
 
 
 ## Sweep: a red sector in front of the boss that fills over the wind-up.
