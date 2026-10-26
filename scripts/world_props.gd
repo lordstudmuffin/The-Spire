@@ -1170,3 +1170,52 @@ static func grove_dress(parent: Node3D, center: Vector3, spots: Array, seed := 4
 	var heart := Vector3(-1.5, 0, -2.5)
 	if not near_spot.call(heart, 2.6):
 		prop(parent, "nature", "rock_tallC", center + heart, 0.7, NATURE * 0.9)
+
+
+## Market stall keeper (hook from life/stalls.gd): a townsfolk VRM figure
+## behind the counter, in one of four looks by stall index. Built the first
+## time the keeper is shown (stall rented and stocked), so idle stalls cost
+## nothing. False when headless or without the VRM bodies (the stall then
+## uses its primitive stand-in).
+const KEEPER_LOOKS := [
+	{"body": "seed", "outfit_color": "7a4e2e", "skin_color": "e3bc9a", "hair_color": "3a2a20"},
+	{"body": "alicia", "outfit_color": "4f6a3a", "hair_color": "c98a4b"},
+	{"body": "alicia", "outfit_color": "8a3a3a", "hair_color": "2e2a2a", "skin_color": "d9b08a"},
+	{"body": "seed", "outfit_color": "3a4a6a", "hair_color": "d9d9dd"},
+]
+
+static func stall_keeper(parent: Node3D, pos: Vector3, rot: float, index: int) -> bool:
+	if WorldArt.headless() or Net.dedicated or not VRMCharacter.BODIES.has("alicia"):
+		return false
+	var look: Dictionary = KEEPER_LOOKS[index % KEEPER_LOOKS.size()].duplicate()
+	var build := func():
+		if not parent.visible or parent.get_child_count() > 0:
+			return
+		var v := VRMCharacter.new()
+		v.name = "Keeper"
+		# Behind the counter, a step off the awning's centre pole.
+		v.position = pos + Vector3(sin(rot), 0, cos(rot)) * 0.6 + Vector3(cos(rot), 0, -sin(rot)) * 0.75
+		v.rotation.y = rot
+		parent.add_child(v)
+		v.apply(look)
+		if v.instance == null:
+			v.queue_free()
+			return
+		for mi in v.instance.find_children("robo_arm", "MeshInstance3D", true, false):
+			mi.visible = false
+		var disc := CylinderMesh.new()
+		disc.top_radius = 0.42
+		disc.bottom_radius = 0.42
+		disc.height = 0.02
+		var dm := StandardMaterial3D.new()
+		dm.albedo_color = Color(0.05, 0.05, 0.1, 0.35)
+		dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		disc.material = dm
+		var sh := MeshInstance3D.new()
+		sh.mesh = disc
+		sh.position = v.position + Vector3(0, 0.02, 0)
+		sh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(sh)
+	parent.visibility_changed.connect(build)
+	return true

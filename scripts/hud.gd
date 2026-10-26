@@ -14,6 +14,11 @@ var _chat_panel: PanelContainer
 ## Quest Log, Map). Built in code with UITheme; screens live in scripts/ui.
 
 var _hp_bar: ProgressBar
+var _hp_chip: ProgressBar
+var _guard_bar: ProgressBar
+var _hp_fills: Array = []
+var _hp_band := 0
+var _chip_tw: Tween
 var _xp_bar: ProgressBar
 var _hp_text: Label
 var _xp_text: Label
@@ -65,6 +70,9 @@ var _map: Minimap
 ## Party frames (scripts/ui/party_panel.gd) under the player card and the
 ## Nearby / social panel (scripts/ui/social.gd, key O).
 var _plate_card: PanelContainer
+## What the player sees top left (scripts/ui/player_status.gd). The old card
+## above is kept hidden: its labels and bars still hold the values.
+var _status: PlayerStatus
 var _party_panel: PartyPanel
 var _nearby_panel: PanelContainer
 var _social: Social
@@ -85,6 +93,9 @@ var _boss_card: PanelContainer
 var _boss_name: Label
 var _boss_lv: Label
 var _boss_bar: ProgressBar
+var _boss_pips: HBoxContainer
+var _atk_wear: UITheme.WearGauge
+var _boss_band := -1
 var _boss_hp: Label
 var _boss: Node3D
 var _boss_poll := 0.0
@@ -136,6 +147,7 @@ class RadialSweep extends Control:
 func _ready() -> void:
 	var root := Control.new()
 	_root = root
+	add_to_group("hud")
 	root.theme = UITheme.theme()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -160,6 +172,8 @@ func _ready() -> void:
 	_craft_box = _modal_box(_craft_panel)
 	_build_screens(root)
 	_build_pause(root)
+	_ring = RingMenu.build(self)
+	root.add_child(_ring)
 	life = LifeHUD.attach(self, root)
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	var on_joy := func(id: int, connected: bool):
@@ -179,6 +193,9 @@ func _ready() -> void:
 	GameState.inventory_changed.connect(_on_inventory_changed)
 	GameState.class_unlocked.connect(func(c): toast("%s" % c, "Hidden class unlocked", "Class"))
 	GameState.leveled_up.connect(_on_level_up)
+	GameState.unique_skill_changed.connect(func(id):
+		if id != "":
+			toast(UniqueSkills.display_name(id), "Unique skill awakened  ·  Sword Arts on 4, 5, 6", "Only you hold this", UITheme.GOLD))
 	SaveSystem.saved.connect(func(_s): toast("Game saved"))
 	Net.chat_received.connect(add_chat)
 	_refresh()
@@ -238,10 +255,23 @@ func _build_player_plate(root: Control) -> void:
 	# HP bar with gradient fill and numeric overlay.
 	var hp_wrap := Control.new()
 	hp_wrap.custom_minimum_size = Vector2(320, 22)
+	# Delayed "chip" bar: on a hit the lost chunk stays pale for a moment,
+	# then drains, so big hits read at a glance.
+	_hp_chip = ProgressBar.new()
+	_hp_chip.show_percentage = false
+	_hp_chip.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_hp_chip.add_theme_stylebox_override("fill", UITheme.gradient_fill_box([Color(1, 1, 1, 0.85), Color(1, 0.92, 0.85, 0.85)]))
+	hp_wrap.add_child(_hp_chip)
 	_hp_bar = ProgressBar.new()
 	_hp_bar.show_percentage = false
 	_hp_bar.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_hp_bar.add_theme_stylebox_override("fill", UITheme.gradient_fill_box([Color("c9184a"), UITheme.ROSE, Color("ff8fa3")]))
+	_hp_bar.add_theme_stylebox_override("background", StyleBoxEmpty.new())
+	_hp_fills = [
+		UITheme.gradient_fill_box([Color("3f9c2f"), Color("6fd34a"), Color("a8f07a")]),
+		UITheme.gradient_fill_box([Color("b88a12"), Color("f2c230"), Color("ffe27a")]),
+		UITheme.gradient_fill_box([Color("a3161c"), Color("e6392f"), Color("ff7a6b")]),
+	]
+	_hp_bar.add_theme_stylebox_override("fill", _hp_fills[0])
 	hp_wrap.add_child(_hp_bar)
 	_hp_text = UITheme.label("", 12, UITheme.PARCH, true)
 	_hp_text.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -251,6 +281,14 @@ func _build_player_plate(root: Control) -> void:
 	_hp_text.add_theme_constant_override("outline_size", 4)
 	hp_wrap.add_child(_hp_text)
 	v.add_child(hp_wrap)
+	# Guard bar (parry/guard): only shown while guarding or recovering.
+	_guard_bar = ProgressBar.new()
+	_guard_bar.show_percentage = false
+	_guard_bar.custom_minimum_size = Vector2(320, 5)
+	_guard_bar.max_value = Player.GUARD_MAX
+	UITheme.style_guard_bar(_guard_bar)
+	_guard_bar.visible = false
+	v.add_child(_guard_bar)
 	# Thin XP bar.
 	var xp_row := HBoxContainer.new()
 	xp_row.add_theme_constant_override("separation", 8)
@@ -276,6 +314,10 @@ func _build_player_plate(root: Control) -> void:
 	_floor_label = UITheme.label("", 12, UITheme.CYAN, true)
 	pills.add_child(_pill(_floor_label, UITheme.CYAN))
 	v.add_child(pills)
+	_status = PlayerStatus.new()
+	_status.position = Vector2(24, 18)
+	root.add_child(_status)
+	card.visible = false
 
 
 func _pill(inner: Control, c: Color) -> PanelContainer:
@@ -366,8 +408,9 @@ func _build_quest_tracker(root: Control) -> void:
 func _build_boss_bar(root: Control) -> void:
 	_boss_card = PanelContainer.new()
 	_boss_card.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_boss_card.offset_left = -300
-	_boss_card.offset_right = 300
+	# 520 wide: clears the player status gauge at the top left.
+	_boss_card.offset_left = -260
+	_boss_card.offset_right = 260
 	_boss_card.offset_top = 22
 	_boss_card.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	var sb := UITheme.box(Color(UITheme.NAVY.r, UITheme.NAVY.g, UITheme.NAVY.b, 0.78), Color(UITheme.ROSE.r, UITheme.ROSE.g, UITheme.ROSE.b, 0.6), 12, 1, 12)
@@ -411,6 +454,14 @@ func _build_boss_bar(root: Control) -> void:
 	_boss_hp.add_theme_constant_override("outline_size", 4)
 	wrap.add_child(_boss_hp)
 	v.add_child(wrap)
+	# SAO-style stacked gauges: the main bar shows the bar being chipped (in
+	# the green / yellow / red bands); the pips below are the bars still in
+	# reserve behind it.
+	_boss_pips = HBoxContainer.new()
+	_boss_pips.add_theme_constant_override("separation", 4)
+	_boss_pips.alignment = BoxContainer.ALIGNMENT_END
+	_boss_pips.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(_boss_pips)
 	_boss_card.modulate.a = 0.0
 	_boss_card.hide()
 
@@ -511,6 +562,40 @@ func _slot_card(key: String, name_text: String) -> Dictionary:
 	return {"sweep": sweep, "cd": cd, "name": name_l, "card": slot, "stack": stack}
 
 
+var _unique_slots: Array = []
+var _unique_spacer: Control
+var _class_slots: Array = []
+var _class_spacer: Control
+
+
+## Hidden-class arts (R / C, or LT+X / LT+B): shown once a class with arts
+## is held (Stillblade, Hearthwright), bordered in the class's colour.
+func _update_class_slots(_cls := "") -> void:
+	var cls: String = GameState.hidden_class
+	var arts := HiddenClasses.arts_of(cls)
+	_class_spacer.visible = not arts.is_empty()
+	var tint: Color = Color(0.62, 0.92, 1.0) if cls == "Stillblade" else Color(1.0, 0.62, 0.22)
+	for i in _class_slots.size():
+		var on := i < arts.size()
+		var cs: Dictionary = _class_slots[i]
+		(cs["card"] as Control).visible = on
+		if on:
+			(cs["name"] as Label).text = arts[i]["name"]
+			var sb: StyleBoxFlat = (cs["card"] as PanelContainer).get_theme_stylebox("panel").duplicate()
+			sb.border_color = Color(tint, 0.8)
+			(cs["card"] as PanelContainer).add_theme_stylebox_override("panel", sb)
+
+
+func _update_unique_slots(id: String) -> void:
+	var arts := UniqueSkills.arts(id)
+	_unique_spacer.visible = not arts.is_empty()
+	for i in _unique_slots.size():
+		var on := i < arts.size()
+		(_unique_slots[i]["card"] as Control).visible = on
+		if on:
+			(_unique_slots[i]["name"] as Label).text = arts[i]["name"]
+
+
 func _build_skill_bar(root: Control) -> void:
 	_skill_bar = HBoxContainer.new()
 	_skill_bar.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
@@ -538,6 +623,11 @@ func _build_skill_bar(root: Control) -> void:
 	var al := UITheme.label("Attack", 11, UITheme.MUTED, true)
 	al.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	av.add_child(al)
+	# Weapon wear under the attack key (hidden while the blade is sound).
+	_atk_wear = UITheme.WearGauge.new(1.0, 44.0)
+	_atk_wear.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_atk_wear.visible = false
+	av.add_child(_atk_wear)
 	atk.add_child(av)
 	_skill_bar.add_child(atk)
 	# Dash (Q) with its own short cooldown.
@@ -558,29 +648,59 @@ func _build_skill_bar(root: Control) -> void:
 		b.set_anchors_preset(Control.PRESET_FULL_RECT)
 		b.modulate.a = 0.0
 		(slot["stack"] as Control).add_child(b)
+		# Locked until One-Handed Sword proficiency reaches the art's "prof".
+		var lock := UITheme.LockOverlay.new()
+		(slot["stack"] as Control).add_child(lock)
+		(slot["stack"] as Control).move_child(lock, 2)  # under the key badge and name
+		slot["lock"] = lock
 		_skill_buttons.append(b)
 		_skill_slots.append(slot)
+	# Unique skill arts (keys 4-6): only shown while the realm lists you as
+	# the holder (GameState.unique_skill).
+	_unique_spacer = UITheme.spacer(6)
+	_skill_bar.add_child(_unique_spacer)
+	var arts := UniqueSkills.arts(UniqueSkills.TWIN_FANG)
+	for i in arts.size():
+		var us := _slot_card("skill_%d" % (i + 4), arts[i]["name"])
+		var usb: StyleBoxFlat = (us["card"] as PanelContainer).get_theme_stylebox("panel").duplicate()
+		usb.border_color = Color(UITheme.GOLD.r, UITheme.GOLD.g, UITheme.GOLD.b, 0.75)
+		(us["card"] as PanelContainer).add_theme_stylebox_override("panel", usb)
+		_unique_slots.append(us)
+	_update_unique_slots(GameState.unique_skill)
+	GameState.unique_skill_changed.connect(_update_unique_slots)
+	_class_spacer = UITheme.spacer(6)
+	_skill_bar.add_child(_class_spacer)
+	for i in 2:
+		_class_slots.append(_slot_card("class_%d" % (i + 1), "Class Art"))
+	_update_class_slots()
+	GameState.class_unlocked.connect(_update_class_slots)
 
 
 ## Bottom-right key hints: the screens and their keys.
 func _build_hints(root: Control) -> void:
-	var h := HBoxContainer.new()
-	h.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	h.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	h.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	h.offset_right = -24
-	h.offset_bottom = -28
-	h.add_theme_constant_override("separation", 8)
-	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	h.modulate.a = 0.85
-	root.add_child(h)
+	# A right-aligned column in the bottom-right corner: stays clear of the
+	# skill bar however wide it grows (unique arts, long pad prompts).
+	var col := VBoxContainer.new()
+	col.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	col.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	col.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	col.offset_right = -24
+	col.offset_bottom = -24
+	col.add_theme_constant_override("separation", 5)
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.modulate.a = 0.85
+	root.add_child(col)
 	for pair in KEY_HINTS:
-		h.add_child(UITheme.action_cap(pair[0]))
-		var l := UITheme.label(pair[1], 12, UITheme.MUTED, true)
-		l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
+		var h := HBoxContainer.new()
+		h.alignment = BoxContainer.ALIGNMENT_END
+		h.add_theme_constant_override("separation", 8)
+		h.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		col.add_child(h)
+		var l := UITheme.label(pair[1], 12, Color(0.92, 0.94, 1.0), true)
+		l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.75))
 		l.add_theme_constant_override("outline_size", 4)
 		h.add_child(l)
-		h.add_child(UITheme.spacer(4))
+		h.add_child(UITheme.action_cap(pair[0]))
 
 
 ## Hint actions (InputMap names; the caps follow the device and remaps).
@@ -766,7 +886,7 @@ func _build_party(root: Control) -> void:
 	_party_panel = PartyPanel.build()
 	root.add_child(_party_panel)
 	var place := func():
-		_party_panel.position = Vector2(24, _plate_card.position.y + _plate_card.size.y + 10)
+		_party_panel.position = Vector2(24, _status.position.y + _status.custom_minimum_size.y + 6)
 	_plate_card.resized.connect(place)
 	place.call()
 
@@ -1040,12 +1160,22 @@ func _build_pause(root: Control) -> void:
 
 func _process(delta: float) -> void:
 	_update_vignette()
+	if _death_left > 0.0:
+		_death_left -= delta
+		_death_sub.text = "Returning to %s in %d" % [_death_where, maxi(ceili(_death_left), 1)]
 	_poll_boss(delta)
 	if _map_panel.visible:
 		_update_map_legend()
 	var player := get_tree().get_first_node_in_group("player")
 	if player == null:
 		return
+	if "guard" in player:
+		var show_guard: bool = player.blocking or player.guard < Player.GUARD_MAX - 0.5 or player.is_stunned()
+		_guard_bar.visible = show_guard
+		if show_guard:
+			_guard_bar.value = player.guard
+			_guard_bar.modulate = Color(1, 0.45, 0.4) if player.is_stunned() else Color.WHITE
+		_status.set_guard(show_guard, player.guard, Player.GUARD_MAX, player.is_stunned())
 	_place_t -= delta
 	if _place_t <= 0.0:
 		_place_t = 0.5
@@ -1061,6 +1191,29 @@ func _process(delta: float) -> void:
 		(slot["sweep"] as RadialSweep).set_frac(frac)
 		(slot["cd"] as Label).text = "%.1f" % cd if cd > 0.0 else ""
 		(slot["name"] as Label).modulate.a = 0.45 if cd > 0.0 else 1.0
+		if slot.has("lock"):
+			var need := int(Player.SKILLS[i].get("prof", 0))
+			(slot["lock"] as UITheme.LockOverlay).set_state(GameState.sword_prof, need)
+			if GameState.sword_prof < need:
+				(slot["sweep"] as RadialSweep).set_frac(0.0)
+				(slot["cd"] as Label).text = ""
+				(slot["name"] as Label).modulate.a = 0.5
+	if GameState.unique_skill != "" and "unique_cd" in player:
+		var arts := UniqueSkills.arts(GameState.unique_skill)
+		for i in mini(arts.size(), _unique_slots.size()):
+			var ucd: float = player.unique_cd[i]
+			var us: Dictionary = _unique_slots[i]
+			(us["sweep"] as RadialSweep).set_frac(clampf(ucd / maxf(float(arts[i]["cooldown"]), 0.01), 0.0, 1.0))
+			(us["cd"] as Label).text = "%.1f" % ucd if ucd > 0.0 else ""
+			(us["name"] as Label).modulate.a = 0.45 if ucd > 0.0 else 1.0
+	if GameState.hidden_class != "" and "class_cd" in player and not _class_slots.is_empty():
+		var carts := HiddenClasses.arts_of(GameState.hidden_class)
+		for i in mini(carts.size(), _class_slots.size()):
+			var ccd: float = player.class_cd[i]
+			var cs: Dictionary = _class_slots[i]
+			(cs["sweep"] as RadialSweep).set_frac(clampf(ccd / maxf(float(carts[i]["cooldown"]), 0.01), 0.0, 1.0))
+			(cs["cd"] as Label).text = "%.1f" % ccd if ccd > 0.0 else ""
+			(cs["name"] as Label).modulate.a = 0.45 if ccd > 0.0 else 1.0
 	if not _dash_slot.is_empty() and "_dash_cd" in player:
 		var dcd: float = player._dash_cd
 		(_dash_slot["sweep"] as RadialSweep).set_frac(clamp(dcd / Player.DASH_COOLDOWN, 0.0, 1.0))
@@ -1083,6 +1236,7 @@ func _poll_boss(delta: float) -> void:
 					break
 		if found != _boss:
 			_boss = found
+			_boss_band = -1
 			_set_boss_visible(_boss != null)
 			if _boss != null:
 				var bn := str(_boss.display_name)
@@ -1093,8 +1247,39 @@ func _poll_boss(delta: float) -> void:
 				_boss_bar.max_value = maxf(float(_boss.max_hp), 1.0)
 	if _boss != null and is_instance_valid(_boss) and _boss_card.visible:
 		var hp: float = maxf(float(_boss.hp), 0.0)
-		_boss_bar.value = hp
 		_boss_hp.text = "%d / %d" % [ceili(hp), int(_boss.max_hp)]
+		var br: Node = _boss.get("brain")
+		if br and br.has_method("bar_count"):
+			var n: int = br.bar_count()
+			var cur: int = br.current_bar()
+			var frac: float = br.bar_fraction()
+			_boss_bar.max_value = 1.0
+			_boss_bar.value = frac
+			_set_boss_band(frac)
+			if _boss_pips.get_child_count() != n:
+				for c in _boss_pips.get_children():
+					c.queue_free()
+				for k in n:
+					var pip := ColorRect.new()
+					pip.custom_minimum_size = Vector2(26, 5)
+					pip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+					_boss_pips.add_child(pip)
+			for k in n:
+				# Pip k (from the right) is a reserve bar while k < cur - 1.
+				var pip := _boss_pips.get_child(n - 1 - k) as ColorRect
+				pip.color = Color(0.45, 0.95, 0.5, 0.95) if k < cur - 1 else Color(1, 1, 1, 0.14)
+		else:
+			_boss_bar.max_value = maxf(float(_boss.max_hp), 1.0)
+			_boss_bar.value = hp
+
+
+func _set_boss_band(frac: float) -> void:
+	var band := 2 if frac <= 0.2 else (1 if frac <= 0.5 else 0)
+	if band == _boss_band:
+		return
+	_boss_band = band
+	var cols: Array = PlayerStatus.band_colors(frac)
+	_boss_bar.add_theme_stylebox_override("fill", UITheme.gradient_fill_box([(cols[0] as Color).darkened(0.25), cols[0], cols[1]]))
 
 
 func _set_boss_visible(on: bool) -> void:
@@ -1160,6 +1345,11 @@ func _update_vignette() -> void:
 	if frac < 0.25:
 		pulse = (0.2 + 0.12 * sin(Time.get_ticks_msec() * 0.006)) * (1.0 - frac / 0.25)
 	var strength := maxf(_vignette_flash, pulse)
+	# Heartbeat under 25% HP (not while dead or in a menu).
+	_heart_t -= get_process_delta_time()
+	if frac < 0.25 and GameState.hp > 0.0 and not _menu_paused and not (_death_overlay and _death_overlay.visible) and _heart_t <= 0.0:
+		_heart_t = lerpf(0.75, 1.1, frac / 0.25)
+		Audio.play("heartbeat", null, 0.0)
 	_vignette.visible = strength > 0.003
 	if _vignette.visible:
 		_vignette_mat.set_shader_parameter("strength", strength)
@@ -1220,6 +1410,30 @@ func _on_inventory_changed() -> void:
 	_refresh()
 
 
+## HP bar colour bands (green > 50% > yellow > 25% > red) and the chip drain.
+func _update_hp_look() -> void:
+	var mx := maxf(GameState.max_hp(), 1.0)
+	var f := GameState.hp / mx
+	var band := 0 if f > 0.5 else (1 if f > 0.25 else 2)
+	if band != _hp_band:
+		_hp_band = band
+		_hp_bar.add_theme_stylebox_override("fill", _hp_fills[band])
+	_hp_chip.max_value = mx
+	if GameState.hp >= _hp_chip.value:
+		if _chip_tw:
+			_chip_tw.kill()
+		_hp_chip.value = GameState.hp
+	elif not (_chip_tw and _chip_tw.is_running()):
+		_chip_tw = create_tween()
+		_chip_tw.tween_interval(0.4)
+		_chip_tw.tween_property(_hp_chip, "value", GameState.hp, 0.45).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	else:
+		# Already draining: retarget to the newest HP after the current drain.
+		_chip_tw.kill()
+		_chip_tw = create_tween()
+		_chip_tw.tween_property(_hp_chip, "value", GameState.hp, 0.45).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+
+
 func _refresh() -> void:
 	_info.text = str(GameState.character["name"]).to_upper()
 	_class_label.text = (GameState.class_title() + ("  ·  " + GameState.title if GameState.title != "" else "")).to_upper()
@@ -1228,10 +1442,23 @@ func _refresh() -> void:
 	_floor_label.text = "Floor %d" % GameState.floor
 	_hp_bar.max_value = GameState.max_hp()
 	_hp_bar.value = GameState.hp
+	_update_hp_look()
 	_hp_text.text = "%d / %d" % [ceili(GameState.hp), GameState.max_hp()]
 	_xp_bar.max_value = GameState.xp_to_next()
 	_xp_bar.value = GameState.xp
 	_xp_text.text = "XP %d / %d" % [GameState.xp, GameState.xp_to_next()]
+	_status.set_identity(_info.text, _class_label.text, GameState.level)
+	_status.set_hp(GameState.hp, GameState.max_hp())
+	_status.set_xp(GameState.xp, GameState.xp_to_next())
+	_status.set_money_floor(GameState.money, GameState.floor)
+	_status.set_crystals(int(GameState.materials.get("heal_crystal", 0)), int(GameState.materials.get("teleport_crystal", 0)))
+	var wpn = GameState.equipped.get("weapon")
+	if _atk_wear and wpn is Dictionary:
+		var wf := Durability.fraction(wpn)
+		_atk_wear.visible = wf < Durability.LOW * 2.5
+		_atk_wear.set_frac(wf)
+	elif _atk_wear:
+		_atk_wear.visible = false
 	_refresh_tracker()
 	if _inv_panel.visible:
 		_inventory.refresh()
@@ -1320,7 +1547,38 @@ func _build_craft() -> void:
 		h.add_child(b)
 		row.add_child(h)
 		_craft_box.add_child(row)
-	var hint := UITheme.subtle("Ranks: Normal < Rare < Epic < Unique < Legendary < Mythical. Higher smithing skill rolls higher.", 12)
+	# Repairs: worn gear comes back to full here, for Col (smithing skill
+	# lowers the price).
+	var worn: Array = []
+	for slot in ["weapon", "armor"]:
+		var it = GameState.equipped.get(slot)
+		if it is Dictionary and Durability.repair_cost(it, GameState.smithing_level) > 0:
+			worn.append(slot)
+	if not worn.is_empty():
+		_craft_box.add_child(UITheme.spacer(4))
+		_craft_box.add_child(UITheme.kicker("Repair"))
+		for slot in worn:
+			var it: Dictionary = GameState.equipped[slot]
+			var cost := Durability.repair_cost(it, GameState.smithing_level)
+			var row := PanelContainer.new()
+			row.theme_type_variation = "CardFlat"
+			var h := HBoxContainer.new()
+			h.add_theme_constant_override("separation", 12)
+			var v := VBoxContainer.new()
+			v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			v.add_child(UITheme.label(str(it.get("name", "")), 16, Crafting.rank_color(int(it.get("rank", 0))), true))
+			v.add_child(UITheme.subtle("%s  ·  %d Col" % [Durability.text(it), cost], 13))
+			v.add_child(UITheme.WearGauge.new(Durability.fraction(it), 220.0))
+			h.add_child(v)
+			var b := UITheme.make_button("Repair", "primary" if GameState.money >= cost else "normal")
+			b.custom_minimum_size = Vector2(96, 36)
+			b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			b.disabled = GameState.money < cost
+			b.pressed.connect(func(): _do_repair(slot))
+			h.add_child(b)
+			row.add_child(h)
+			_craft_box.add_child(row)
+	var hint := UITheme.subtle("Ranks: Normal < Rare < Epic < Unique < Legendary < Myth. Higher smithing skill rolls higher.", 12)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD
 	_craft_box.add_child(hint)
 
@@ -1340,6 +1598,27 @@ func _do_craft(recipe_name: String) -> void:
 	var sub := "Smithing Lv %d" % GameState.smithing_level if item.get("skill_up", false) else ""
 	toast(msg, sub, "Forged" if int(item["rank"]) < 3 else "Masterwork forged!", Crafting.rank_color(int(item["rank"])))
 	_build_craft()
+
+
+func _do_repair(slot: String) -> void:
+	var err := Durability.repair(GameState, slot)
+	if err == "pending":
+		return  # online: the server repairs; the world toasts its answer
+	if err != "":
+		Audio.play("craft_fail")
+		toast(err)
+		return
+	var w := get_tree().current_scene
+	if w and w.has_method("repaired"):
+		w.repaired(slot)
+	else:
+		_build_craft()
+
+
+## Rebuilds the anvil panel when it is open (after a repair or a forge).
+func refresh_craft() -> void:
+	if _craft_panel and _craft_panel.visible:
+		_build_craft()
 
 
 ## Hammer blows on the anvil, then the pot clang; a jingle for Epic and up.
@@ -1459,6 +1738,9 @@ func _pop_in(dim: PanelContainer) -> void:
 
 
 var _menu_paused := false
+## The ring menu (scripts/ui/ring_menu.gd) is the menu; the old pause modal
+## is kept only as the parent of the settings modal.
+var _ring: RingMenu
 
 
 ## Offline the whole game pauses. Online the world keeps running (other
@@ -1475,8 +1757,8 @@ func _open_settings() -> void:
 		_settings_form = SettingsPanel.build()
 		_settings_form.closed.connect(func():
 			_settings_panel.hide()
-			_pause_panel.show()
-			(_pause_panel.get_meta("first") as Control).grab_focus())
+			if _menu_paused:
+				_ring.reshow())
 		box.add_child(_settings_form)
 	_pause_panel.hide()
 	_settings_panel.show()
@@ -1489,15 +1771,17 @@ func _toggle_pause() -> void:
 	if _settings_panel and _settings_panel.visible:
 		_settings_panel.hide()
 	_menu_paused = not _menu_paused
-	Audio.play("ui_open" if _menu_paused else "ui_close")
 	if not Net.online:
 		get_tree().paused = _menu_paused
-	_pause_panel.visible = _menu_paused
+	_pause_panel.visible = false
 	if _menu_paused:
 		_hide_screens()
 		_craft_panel.hide()
-		_pop_in(_pause_panel)
-		(_pause_panel.get_meta("first") as Control).grab_focus()
+		_ring.open()
+	else:
+		_ring.close()
+	# The quest card sits where the ring's panels slide out.
+	create_tween().tween_property(_quest_card, "modulate:a", 0.0 if _menu_paused else 1.0, 0.15)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _menu_paused else Input.MOUSE_MODE_CAPTURED
 	var player := get_tree().get_first_node_in_group("player")
 	if player:
@@ -1568,12 +1852,16 @@ var _chat_lines: Array = []
 var _chat_hide_tween: Tween
 
 
-## One chat line. `channel`: say (white), party (cyan), whisper /
-## whisper_to (magenta), system (gold). Names are [url] links that invite.
+## Guild chat channel colour (P8, "/g text").
+const GUILD_CHAT_COLOR := Color("9be38b")
+
+
+## One chat line. `channel`: say (white), party (cyan), guild (green),
+## whisper / whisper_to (magenta), system (gold). Names are [url] links that invite.
 func add_chat(sender_name: String, text: String, channel := "say") -> void:
 	if channel != "system" and Social.is_ignored(sender_name):
 		return
-	var col: Color = Social.CHAT_COLORS.get(channel, UITheme.PARCH)
+	var col: Color = Social.CHAT_COLORS.get(channel, GUILD_CHAT_COLOR if channel == "guild" else UITheme.PARCH)
 	var hex := col.to_html(false)
 	var who := _bb(sender_name)
 	var body := _bb(text)
@@ -1583,6 +1871,8 @@ func add_chat(sender_name: String, text: String, channel := "say") -> void:
 			line = "[color=#%s]%s[/color]" % [hex, body]
 		"party":
 			line = "[color=#%s][Party] [url=%s][b]%s[/b][/url]: %s[/color]" % [hex, who, who, body]
+		"guild":
+			line = "[color=#%s][Guild] [url=%s][b]%s[/b][/url]: %s[/color]" % [hex, who, who, body]
 		"whisper":
 			line = "[color=#%s][url=%s][b]%s[/b][/url] whispers: %s[/color]" % [hex, who, who, body]
 		"whisper_to":
@@ -1644,7 +1934,11 @@ static func _bb(t: String) -> String:
 
 func _on_chat_submitted(text: String) -> void:
 	var t := text.strip_edges()
-	if t != "":
+	if t != "" and preload("res://scripts/life/guilds.gd").chat_command(t, self, func(msg): add_chat("", msg, "system")):
+		pass  # "/g text" guild chat and "/guild ..." (P8)
+	elif t != "" and preload("res://scripts/duels.gd").chat_command(t, self, func(msg): add_chat("", msg, "system")):
+		pass  # "/duel Name [mode]", "/duel accept|decline|yield" (scripts/duels.gd)
+	elif t != "":
 		Social.handle(t, send_chat if send_chat.is_valid() else func(_x): pass, func(msg): add_chat("", msg, "system"))
 	close_chat()
 
@@ -1692,10 +1986,98 @@ func set_prompt(text: String) -> void:
 
 
 var _toast_tween: Tween
+var _heart_t := 0.0
+
+
+# --- Death and realm notices -------------------------------------------------
+
+var _death_overlay: ColorRect
+var _death_label: Label
+var _death_sub: Label
+var _death_cost: Label
+var _death_tw: Tween
+var _death_left := 0.0
+var _death_where := ""
+
+
+## Grey-out with "You are dead" and a countdown; the player script respawns
+## when it ends (see Player.death_sequence). Input is blocked meanwhile.
+func show_death(seconds: float, where: String) -> void:
+	if _death_overlay == null:
+		_death_overlay = ColorRect.new()
+		_death_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_death_overlay.color = Color(0.08, 0.08, 0.1, 0.0)
+		_death_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+		_root.add_child(_death_overlay)
+		var v := VBoxContainer.new()
+		v.set_anchors_preset(Control.PRESET_CENTER)
+		v.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		v.grow_vertical = Control.GROW_DIRECTION_BOTH
+		v.alignment = BoxContainer.ALIGNMENT_CENTER
+		_death_overlay.add_child(v)
+		_death_label = UITheme.heading("YOU ARE DEAD", 44, Color(0.95, 0.3, 0.28))
+		_death_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		v.add_child(_death_label)
+		_death_sub = UITheme.label("", 17, UITheme.PARCH)
+		_death_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		v.add_child(_death_sub)
+		# The death penalty, in rose under the countdown (Player.last_xp_lost).
+		_death_cost = UITheme.label("", 14, UITheme.ROSE)
+		_death_cost.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_death_cost.add_theme_font_override("font", UITheme.spaced(UITheme.ui_font(), 3))
+		v.add_child(_death_cost)
+		UITheme.death_screen(_death_overlay, _death_label, _death_sub)
+	_death_overlay.visible = true
+	_death_overlay.color.a = 0.0
+	_death_label.modulate.a = 0.0
+	if _death_tw:
+		_death_tw.kill()
+	_death_tw = create_tween()
+	_death_tw.tween_property(_death_overlay, "color:a", 0.62, 0.5).set_delay(0.35)
+	_death_tw.parallel().tween_property(_death_label, "modulate:a", 1.0, 0.5).set_delay(0.6)
+	_death_left = seconds
+	_death_where = where
+	_death_sub.text = "Returning to %s in %d" % [where, ceili(seconds)]
+	var lost := 0
+	for p in get_tree().get_nodes_in_group("players"):
+		if p.get("is_local") and p.get("last_xp_lost") != null:
+			lost = int(p.last_xp_lost)
+	_death_cost.text = ("EXP  -%d     ·     GEAR DURABILITY  -10%%" % lost) if lost > 0 else "GEAR DURABILITY  -10%"
+	_death_cost.modulate.a = 0.0
+	_death_tw.parallel().tween_property(_death_cost, "modulate:a", 1.0, 0.5).set_delay(1.3)
+	close_screens()
+
+
+func hide_death() -> void:
+	if _death_overlay == null or not _death_overlay.visible:
+		return
+	if _death_tw:
+		_death_tw.kill()
+	_death_tw = create_tween()
+	_death_tw.tween_property(_death_overlay, "color:a", 0.0, 0.4)
+	_death_tw.parallel().tween_property(_death_label, "modulate:a", 0.0, 0.3)
+	_death_tw.parallel().tween_property(_death_cost, "modulate:a", 0.0, 0.3)
+	_death_tw.tween_callback(func(): _death_overlay.visible = false)
+
+
+func is_dead_screen() -> bool:
+	return _death_overlay != null and _death_overlay.visible
+
+
+## Server-wide notice (unique skill granted, last limited slot taken...).
+## Called by Net on every client through group "hud".
+func realm_announce(text: String) -> void:
+	Audio.play("realm_announce")
+	RealmBanner.show_on(_root, text)
 
 
 ## Centre-top notice. `sub` is a smaller second line, `kicker` a small
 ## label above the title, `accent` tints the title and border.
+## SAO-style result window after a fight (BattleResults tallies it).
+func show_battle_result(data: Dictionary) -> void:
+	BattleResult.show_in(_root, data)
+
+
 func toast(text: String, sub := "", kicker := "", accent: Color = UITheme.GOLD) -> void:
 	_toast.text = text
 	_toast.add_theme_color_override("font_color", accent)
