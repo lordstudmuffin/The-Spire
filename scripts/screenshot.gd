@@ -34,6 +34,8 @@ func _ready() -> void:
 	GameState.character["name"] = "Preview"
 	if body != "":
 		GameState.character["body"] = body
+	if "--permadeath" in args:
+		GameState.character["permadeath"] = true  # one-life HUD marks
 	for i in args.size():
 		if args[i] == "--floor" and i + 1 < args.size():
 			GameState.floor = clampi(int(args[i + 1]), 1, 2)
