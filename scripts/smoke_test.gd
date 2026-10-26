@@ -475,6 +475,15 @@ func _ready() -> void:
 	var far_d := 0.0
 	for e in get_tree().get_nodes_in_group("enemies"):
 		far_d = maxf(far_d, (e as Node3D).global_position.distance_to(Vector3(0, 0, 15)))
+	var wp: Node3D = preload("res://scripts/quest_waypoint.gd").build(world)
+	var t_open = wp.target_for("boar_trouble", {"progress": 0, "goal": 5})
+	var t_done = wp.target_for("boar_trouble", {"progress": 5, "goal": 5})
+	var t_vein = wp.target_for("ore_delivery", {"progress": 0, "goal": 3})
+	_check(t_open is Vector3 and t_open.z > 60.0 and t_done is Vector3 and t_done.distance_to(Vector3(5, 0, 10)) < 3.0
+		and t_vein is Vector3 and wp.target_for("forge_trial", {"progress": 0, "goal": 2}) == null,
+		"quest waypoint: objective while open (south field, nearest vein), the giver when done, none for anvil work")
+	wp._process(1.0)
+	wp.queue_free()
 	_check(world.HOLLOWBROOK.distance_to(Vector3(0, 0, 15)) > 120.0 and world.TOWER_POS.distance_to(Vector3(0, 0, 15)) > 220.0 and far_d > 180.0,
 		"Floor 1 is spread out: Hollowbrook %.0f m, the tower %.0f m and the farthest mob %.0f m from the plaza" % [
 			world.HOLLOWBROOK.distance_to(Vector3(0, 0, 15)), world.TOWER_POS.distance_to(Vector3(0, 0, 15)), far_d])
