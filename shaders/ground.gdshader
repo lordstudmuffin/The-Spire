@@ -130,6 +130,7 @@ void fragment() {
 	// irregular cobbles (only evaluated where the plaza or tower apron is).
 	float cob = 1.0;
 	float cshade = 1.0;
+	vec3 stone_tint = vec3(1.0);
 	if (plaza_m > 0.001 || tower_m > 0.001 || townroad > 0.001) {
 		vec2 cp = p * 2.2;
 		vec2 ci = floor(cp);
@@ -157,14 +158,18 @@ void fragment() {
 		cob *= 0.88 + 0.12 * smoothstep(0.6, 0.0, f1);
 		// Per-stone tone: value and a slight warm/cool shift, so the plaza
 		// reads as laid stones rather than one pale sheet.
-		cshade = 0.74 + 0.26 * hash12(id);
+		cshade = 0.66 + 0.34 * hash12(id);
+		// A few stones run warmer or cooler, as laid stone from different quarries.
+		float tint_h = hash12(id + 41.7);
+		stone_tint = mix(vec3(1.0), tint_h > 0.5 ? vec3(1.05, 1.0, 0.92) : vec3(0.94, 0.97, 1.03), abs(tint_h - 0.5) * 1.6);
 	}
 	float ring = smoothstep(0.1, 0.0, abs(fract(dplaza * 0.2) - 0.5) - 0.42);
-	vec3 stone_base = stone.rgb * 0.82;
+	// Weathered warm-grey stone (the plain grey read pale pink under the warm sun).
+	vec3 stone_base = mix(stone.rgb, vec3(0.62, 0.56, 0.48), 0.35) * 0.74 * stone_tint;
 	float cob_amt = 1.0;
-	vec3 cob_col = mix(stone_base * 0.6, stone_base * cshade, mix(1.0, cob, cob_amt));
+	vec3 cob_col = mix(stone_base * 0.42, stone_base * cshade, mix(1.0, cob, cob_amt));
 	vec3 road_cob = cob_col;
-	cob_col = mix(cob_col, vec3(0.78, 0.68, 0.55), ring * 0.45);
+	cob_col = mix(cob_col, vec3(0.70, 0.58, 0.44), ring * 0.35);
 	cob_col = mix(cob_col, cob_col * 0.93, step(0.6, n2) * 0.5);
 
 	vec3 col = g;

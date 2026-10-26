@@ -2071,6 +2071,9 @@ func _build_floor1() -> void:
 	_results = preload("res://scripts/battle_results.gd").build(self)
 	_results.hud = hud
 	NpcBark.attach(self, _routines)
+	# Cosmetic villagers on the plaza: never on a server or headless run.
+	if not Net.dedicated and DisplayServer.get_name() != "headless":
+		preload("res://scripts/town_crowd.gd").build(self)
 	await LoadingScreen.step("Planting the meadow", 0.7)
 	_dress_world()
 	await LoadingScreen.step("Waking the wilds", 0.92)

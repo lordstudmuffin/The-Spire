@@ -109,11 +109,10 @@ void sky() {
 	// the zenith; at night a few lamps of the town above twinkle on it.
 	if (lid > 0.001 && y > 0.0) {
 		float az = atan(d.z, d.x);
-		// A broad, slow wobble in the rim and a few blunt crags: it should read
-		// as one solid stone plate, not drips.
+		// Only a broad, slow wobble in the rim: it should read as one solid
+		// stone plate, not drips.
 		float rag = (fbm(vec2(az * 2.0, 0.0)) - 0.5) * 0.07 + (vnoise(vec2(az * 11.0, 3.0)) - 0.5) * 0.018;
-		float teeth = smoothstep(0.72, 0.95, vnoise(vec2(az * 19.0, 7.0))) * 0.03;
-		float edge = lid_start + rag - teeth;
+		float edge = lid_start + rag;
 		float m = smoothstep(edge - 0.004, edge + 0.004, y);
 		if (m > 0.0) {
 			vec2 p = d.xz / max(y, 0.05);
