@@ -1,0 +1,46 @@
+# Two Floor 1 instances on one VM (each server is one floor instance of up to
+# 30 climbers). Run from the repository root after exporting the Linux server:
+#   docker compose -f tools/server/compose.yaml up -d --build
+#   docker compose -f tools/server/compose.yaml logs -f
+# Each instance has its OWN data volume: two server processes must never share
+# one data dir (character records and the realm DB are single-writer, see
+# docs/REALM_DB.md), so each instance is its own realm for now. Delete the
+# floor1b service if one instance is enough.
+services:
+  floor1:
+    build:
+      context: ../..
+      dockerfile: tools/server/Dockerfile
+    image: the-spire-server
+    restart: unless-stopped
+    ports:
+      - "4433:4433/udp"
+    environment:
+      SPIRE_PORT: "4433"
+      SPIRE_FLOOR: "1"
+      SPIRE_NAME: "Town of First Light I"
+    volumes:
+      - floor1-data:/data
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
+
+  floor1b:
+    image: the-spire-server
+    restart: unless-stopped
+    depends_on: [floor1]
+    ports:
+      - "4434:4434/udp"
+    environment:
+      SPIRE_PORT: "4434"
+      SPIRE_FLOOR: "1"
+      SPIRE_NAME: "Town of First Light II"
+    volumes:
+      - floor1b-data:/data
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
+
+volumes:
+  floor1-data:
+  floor1b-data:
