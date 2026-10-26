@@ -137,14 +137,25 @@ func _ready() -> void:
 			mlist = MOBS.slice(0, 5)
 		elif group == 2:
 			mlist = MOBS.slice(5)
+		# --only NAME: just the mobs whose name contains NAME (closer camera).
+		# --turn DEG: extra yaw so a profile lineup can be seen 3/4 on.
+		var only := ""
+		var turn := 0.0
+		for i in args.size():
+			if args[i] == "--only" and i + 1 < args.size():
+				only = args[i + 1].to_lower()
+			if args[i] == "--turn" and i + 1 < args.size():
+				turn = deg_to_rad(float(args[i + 1]))
 		for spec in mlist:
+			if only != "" and not only in str(spec["name"]).to_lower():
+				continue
 			var d: Dictionary = spec.duplicate()
 			var sz: Array = d.get("size", [0.9, 0.8, 1.3])
 			x += sz[0] * 0.5 + 0.6
 			d["pos"] = [x, 0.2, 0.0]
 			var en := Enemy.from_data(d)
 			add_child(en)
-			en.rotation.y = PI
+			en.rotation.y = PI + turn
 			en.aggro_range = 0.0
 			en.speed = 0.0
 			en._wander_timer = 999.0
