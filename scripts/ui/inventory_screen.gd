@@ -719,7 +719,7 @@ func refresh() -> void:
 		wg.visible = wf < 0.999
 		wg.set_frac(wf)
 		(b.get_meta("crack") as Control).visible = broken
-		b.tooltip_text = "%s\n%s  ·  %s\nCrafted by %s" % [item.get("name", ""), Crafting.RANKS[rank], _stat_text(item), item.get("crafted_by", "?")]
+		b.tooltip_text = "%s\n%s  ·  %s\nCrafted by %s%s" % [item.get("name", ""), Crafting.RANKS[rank], _stat_text(item), item.get("crafted_by", "?"), _work_suffix(item)]
 	for m in _mats:
 		_mats[m].text = str(GameState.materials.get(m, 0))
 	var any_prov := false
@@ -793,7 +793,14 @@ func _show_detail(idx: int) -> void:
 		_detail["cmp"].text = "Slot is empty"
 		_detail["cmp"].add_theme_color_override("font_color", UITheme.MUTED)
 		_detail["hint"].text = "Equip"
-	_detail["by"].text = "Crafted by %s" % str(item.get("crafted_by", "?"))
+	_detail["by"].text = "Crafted by %s" % str(item.get("crafted_by", "?")) + _work_suffix(item)
+
+
+## "  ·  Fine work" for forged pieces (Forging quality), "" for older items.
+static func _work_suffix(item: Dictionary) -> String:
+	if not item.has("quality"):
+		return ""
+	return "  ·  %s work" % Forging.quality_word(float(item["quality"]) / 100.0)
 
 
 ## Put keyboard focus on the first card (or the slot) when the screen opens.

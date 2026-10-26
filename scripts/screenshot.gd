@@ -427,6 +427,21 @@ func _ready() -> void:
 		if i == 3 and "--summit" in args and scene.has_method("_enter_summit"):
 			scene._enter_summit()
 		# --monument-demo: sample names on the Monument (permadeath, fallen).
+		# --open forge: mid-forge at Haldor's anvil, two strikes landed, a
+		# Perfect just struck (sparks and flash caught in flight).
+		if open_ui == "forge" and i == 30:
+			GameState.add_material("iron_ore", 6)
+			GameState.money += 200
+			if not scene.hud._craft_panel.visible:
+				scene.hud.toggle_craft()
+			scene.hud._start_forge("Iron Sword")
+		if open_ui == "forge" and i == 37 and scene.hud._forge:
+			var fw: ForgeWidget = scene.hud._forge
+			fw.grades = ["good"]
+			fw._land(fw._elapsed())
+			fw.grades[1] = "perfect"
+			fw._pop = "perfect"
+			fw._spray(float(fw.specs[1]["center"]), "perfect")
 		if i == 36 and "--monument-demo" in args:
 			scene.get_tree().call_group("monument", "set_names", [
 				{"name": "Kirika", "level": 14, "floors": 1, "online": true, "permadeath": true},
