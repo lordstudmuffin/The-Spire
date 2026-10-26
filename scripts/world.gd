@@ -44,6 +44,8 @@ var _stalls: Node3D = null
 var _farms: Node3D = null
 ## Floor 1 Labyrinth chests, vaults and spike traps (scripts/labyrinth_features.gd).
 var _lab: Node3D = null
+## Floor 1 villagers' day/night walks (scripts/npc_routines.gd).
+var _routines: Node = null
 var _guilds: Node3D = null
 var _campfires: Array = []  # {"pos", "range", "label", "where"}
 ## Floor 1 waystones around the Talven fields (Scout Fen's visit quest):
@@ -1714,6 +1716,7 @@ func _build_floor1() -> void:
 	_build_life_floor1()
 	_build_market_floor1()
 	_build_beacons()
+	_routines = preload("res://scripts/npc_routines.gd").build(self)
 	await LoadingScreen.step("Planting the meadow", 0.7)
 	_dress_world()
 	await LoadingScreen.step("Waking the wilds", 0.92)

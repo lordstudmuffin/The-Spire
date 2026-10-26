@@ -944,6 +944,30 @@ func _ready() -> void:
 	_check(true, "feed, toast and level banner run headless")
 
 	print("== Floor 2: Mirewood")
+	# Villagers' day/night routines (same world).
+	var rt: Node = world._routines
+	_check(rt != null and rt._npcs.size() == 3, "three villagers keep day/night routines")
+	if rt != null:
+		var dn: DayNight = world.day_night
+		var t0 := dn.time_of_day
+		dn.time_of_day = 21.0
+		rt.settle()
+		var vesna: Node3D = rt._npcs["Trapper Vesna"]["node"]
+		var tavern: Vector3 = world.HOLLOWBROOK + Vector3(-4.0, 0, -4.6)
+		_check(vesna.position.distance_to(tavern) < 0.2 and rt.is_out("Trapper Vesna"), "after dark Vesna stands on the tavern porch")
+		_check(world._srv_npc_near(vesna.global_position, ["Trapper Vesna"]) != null, "the server finds her there for talk checks")
+		var bram: Dictionary = rt._npcs["Old Watchman Bram"]
+		var leg0 := int(bram["leg"])
+		bram["node"].position = rt.goal_of("Old Watchman Bram")
+		rt._step("Old Watchman Bram", 0.1)
+		_check(int(bram["leg"]) == leg0 + 1, "Bram walks a night patrol loop")
+		dn.time_of_day = 12.0
+		var before: Vector3 = vesna.position
+		rt._step("Trapper Vesna", 1.0)
+		_check(vesna.position.distance_to(before) > 1.0 and vesna.position.distance_to(before) < 1.7, "at noon she walks home at a walking pace")
+		rt.settle()
+		_check(vesna.position.distance_to(rt._npcs["Trapper Vesna"]["home"]) < 0.01 and not rt.is_out("Trapper Vesna"), "and is back at her spot by day")
+		dn.time_of_day = t0
 	world.queue_free()
 	await get_tree().process_frame
 	await get_tree().process_frame
