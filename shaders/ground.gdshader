@@ -101,6 +101,9 @@ void fragment() {
 	float pond_m = 1.0 - smoothstep(8.5 + en * 0.5, 10.5 + en * 0.5, pond);
 	float rim = smoothstep(84.0 + en * 2.0, 88.5, length(p));
 	float tower = 1.0 - smoothstep(13.0, 16.0 + en, length(p - vec2(0.0, -70.0)));
+	// Inside the town wall (r 36 round the plaza) the roads are stone-paved,
+	// as in Aincrad's first town; they turn to sand at the gates.
+	float townroad = sand_m * (1.0 - smoothstep(34.0, 36.5, dplaza));
 
 	// Cobbles: a soft per-stone shade and the plaza's concentric ring; the
 	// stone pattern itself comes from the cobblestone detail map.
@@ -108,7 +111,7 @@ void fragment() {
 	// irregular cobbles (only evaluated where the plaza or tower apron is).
 	float cob = 1.0;
 	float cshade = 1.0;
-	if (plaza_m > 0.001 || tower > 0.001) {
+	if (plaza_m > 0.001 || tower > 0.001 || townroad > 0.001) {
 		vec2 cp = p * 2.2;
 		vec2 ci = floor(cp);
 		vec2 cf = fract(cp);
@@ -141,6 +144,7 @@ void fragment() {
 	vec3 stone_base = stone.rgb * 0.82;
 	float cob_amt = 1.0;
 	vec3 cob_col = mix(stone_base * 0.6, stone_base * cshade, mix(1.0, cob, cob_amt));
+	vec3 road_cob = cob_col;
 	cob_col = mix(cob_col, vec3(0.78, 0.68, 0.55), ring * 0.45);
 	cob_col = mix(cob_col, cob_col * 0.93, step(0.6, n2) * 0.5);
 
@@ -150,6 +154,7 @@ void fragment() {
 	col = mix(col, sand.rgb * 0.85, pond_m);
 	col = mix(col, mix(dirt.rgb, stone.rgb, 0.5) * (0.85 + 0.3 * n2), rim);
 	col = mix(col, stone.rgb * (0.8 + 0.2 * cob), tower);
+	col = mix(col, road_cob, townroad);
 	col = mix(col, cob_col, plaza_m);
 
 	// Detail layer: zone weights pick grass / gravel / cobble maps, their
@@ -157,7 +162,7 @@ void fragment() {
 	// Uniform branch: with detail_strength 0 (no maps bound, or the Low preset
 	// via RenderProfile) none of the six texture fetches are issued.
 	if (detail_strength > 0.0005) {
-		float w_cob = max(plaza_m, tower);
+		float w_cob = max(max(plaza_m, tower), townroad);
 		float w_path = max(max(sand_m, max(hb, tv)), max(pond_m, rim)) * (1.0 - w_cob);
 		float w_grass = clamp(1.0 - w_path - w_cob, 0.0, 1.0);
 		vec3 gd = texture(grass_tex, p * grass_tiling).rgb;
