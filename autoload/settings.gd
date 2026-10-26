@@ -26,6 +26,7 @@ var data := {
 	"sfx_volume": 1.0,
 	"show_fps": false,
 	"ignored": [],  # chat ignore list (lower-case names), see scripts/ui/social.gd
+	"last_realm": "",  # id of the realm last joined (main menu server browser)
 }
 var _fps_label: Label
 
