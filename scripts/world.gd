@@ -262,6 +262,10 @@ func _spawn_mob_fn(data: Dictionary) -> Node:
 			brain.spawn_adds = _guardian_adds
 		e.add_child(brain)
 		e.brain = brain
+	if data.get("la") is Dictionary and not data.get("boss", false) and Net.is_authority():
+		var la: Dictionary = data["la"]
+		var foe := str(data.get("name", "the foe"))
+		e.died.connect(func(x): _grant_last_attack(x._last_hitter, la, foe))
 	if data.get("boss", false) and Net.is_authority():
 		_boss = e
 		e.died.connect(_on_boss_died)
@@ -1207,7 +1211,7 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 		"floor_cleared":
 			hud.toast("FLOOR %d CLEARED!" % GameState.floor)
 		"last_attack":
-			hud.toast("LAST ATTACK BONUS", str(res.get("item", "")), "Only one in the realm", UITheme.GOLD)
+			_show_last_attack(res)
 		"unique_skill":
 			pass  # GameState.unique_skill_changed already toasts
 		"respawn":
@@ -1629,25 +1633,80 @@ func _iselde_talk(gs = GameState) -> String:
 	})
 
 
-## Last Attack bonus: the first character in the realm to land the killing
-## blow on Floor 1's Guardian gets the one Mantle of the First Floor.
-func _grant_last_attack(killer: int) -> void:
-	if GameState.floor != 1:
-		return
-	if not Net.online or (killer == multiplayer.get_unique_id() and not Net.srv_records.has(killer)):
-		var res := LimitedContent.grant_item(GameState, "la_floor1")
+## Last Attack bonus, as in Aincrad: whoever lands the killing blow gets
+## something nobody else in the fight does. `la` = {"item": LimitedContent id
+## (a realm-capped, bound piece) or "", "xp", "col", "mats": {id: n},
+## "realm": announce to the whole realm}. The first holders get the limited
+## item; once its slots are gone (or the killer already holds one) the bonus
+## is the EXP / Col / materials instead, so a Last Attack always pays. The
+## killer's party hears about it. Defaults to the Floor Guardian's bonus.
+const BOSS_LA := {"item": "la_floor1", "xp": 150, "col": 200, "mats": {"spirit_shard": 2}, "realm": true}
+const SERGEANT_LA := {"item": "la_sergeant", "xp": 60, "col": 40, "mats": {"terrace_key": 1}}
+const GREYTUSK_LA := {"item": "la_greytusk", "xp": 50, "col": 35, "mats": {"beast_hide": 3}}
+
+
+func _grant_last_attack(killer: int, la: Dictionary = {}, foe := "") -> Dictionary:
+	if la.is_empty():
+		if GameState.floor != 1:
+			return {}
+		la = BOSS_LA
+	if foe == "":
+		foe = "the Floor Guardian"
+	var local := not Net.online or (killer == multiplayer.get_unique_id() and not Net.srv_records.has(killer))
+	var gs
+	if local:
+		gs = GameState
+	elif Net.srv_records.has(killer):
+		gs = Net.RecordState.new(Net.srv_records[killer])
+	else:
+		return {}
+	var who := str(GameState.character.get("name", "Someone")) if local else str(Net.srv_records[killer].get("name", "Someone"))
+	var data := {"foe": foe, "item": "", "xp": 0, "col": 0, "mats": {}}
+	var lid := str(la.get("item", ""))
+	if lid != "" and LimitedContent.ITEMS.has(lid):
+		var res := LimitedContent.grant_item(gs, lid)
 		if res.get("ok", false) and not res.get("already", false):
-			hud.toast("LAST ATTACK BONUS", LimitedContent.ITEMS["la_floor1"]["name"], "Only one in the realm", UITheme.GOLD)
-			Net.srv_announce("%s took the Last Attack on the Floor Guardian." % str(GameState.character.get("name", "Someone")))
-		return
-	if not Net.srv_records.has(killer):
-		return
-	var rs = Net.RecordState.new(Net.srv_records[killer])
-	var res := LimitedContent.grant_item(rs, "la_floor1")
-	if res.get("ok", false) and not res.get("already", false):
+			data["item"] = str(LimitedContent.ITEMS[lid]["name"])
+	if data["item"] == "":
+		data["xp"] = int(la.get("xp", 0))
+		data["col"] = int(la.get("col", 0))
+		gs.add_xp(data["xp"])
+		gs.add_money(data["col"])
+		var mats: Dictionary = la.get("mats", {})
+		for m in mats:
+			if GameState.MATERIAL_NAMES.has(m):
+				gs.add_material(m, int(mats[m]))
+				data["mats"][m] = int(mats[m])
+	var text := "%s took the Last Attack on %s%s." % [who, foe, (" and won the %s" % data["item"]) if data["item"] != "" else ""]
+	if bool(la.get("realm", false)):
+		Net.srv_announce(text)
+	if Net.online and multiplayer.is_server():
+		for m in Net._srv_party_members(killer):
+			if m != killer:
+				Net._send(m, Net.net_system, [text])
+	if local:
+		_show_last_attack(data)
+	else:
 		Net.save_record(Net.srv_records[killer])
-		Net.srv_announce("%s took the Last Attack on the Floor Guardian." % str(Net.srv_records[killer]["name"]))
-		Net._srv_reply(killer, "last_attack", {"item": LimitedContent.ITEMS["la_floor1"]["name"]})
+		Net._srv_reply(killer, "last_attack", data)
+	return data
+
+
+## The "LAST ATTACK BONUS" pop-up (hud.show_last_attack when the HUD has it).
+func _show_last_attack(data: Dictionary) -> void:
+	if hud == null:
+		return
+	if hud.has_method("show_last_attack"):
+		hud.show_last_attack(data)
+		return
+	var what := str(data.get("item", ""))
+	if what == "":
+		var parts: Array = ["+%d EXP" % int(data.get("xp", 0)), "+%d Col" % int(data.get("col", 0))]
+		var mats: Dictionary = data.get("mats", {})
+		for m in mats:
+			parts.append("%s x%d" % [GameState.MATERIAL_NAMES.get(m, m), int(mats[m])])
+		what = "  ·  ".join(parts)
+	hud.toast("LAST ATTACK BONUS", what, str(data.get("foe", "")), UITheme.GOLD)
 
 
 ## Shared flow for the chain's gather quests: progress mirrors the material
@@ -2168,6 +2227,8 @@ func _build_arena() -> void:
 		WorldArt.brazier(self, ARENA_POS + p)
 		WorldArt.box_collider(self, Vector3(1.4, 2.2, 1.4), ARENA_POS + p + Vector3(0, 1.1, 0))
 	WorldProps.summit_props(self, ARENA_POS, ARENA_RADIUS, rune, gate_dir, entry_dir)
+	# The Guardian's throne before the sealed gate (it waits there, then leaps down).
+	WorldProps.boss_throne(self, ARENA_POS + Vector3(0, 0, -10.5), rune)
 
 
 func _build_platform(pos: Vector3, radius: float, color: Color) -> void:
@@ -2812,6 +2873,12 @@ func _spawn_mobs() -> void:
 		# Boars paw the ground and charge (telegraphed, parryable, sidestep it).
 		_spawn_mob({"name": "Field Boar", "level": 1, "hp": 40, "dmg": 6, "xp": 25, "money": 5, "color": "8c5940",
 			"pos": [cos(a) * r, 1, sin(a) * r], "quest": "boar_trouble", "drops": {"beast_hide": 0.7}, "rush": true})
+	# Greytusk: a named field elite (Satisfy-style): an old scarred boar that
+	# roams the far end of the south field, comes back slowly, and pays a Last
+	# Attack bonus (three Greytusk Hide Vests in the realm, then EXP and hide).
+	_spawn_mob({"name": "Greytusk, the Old Boar", "level": 6, "hp": 380, "dmg": 15, "xp": 260, "money": 90, "color": "6b5a4a",
+		"size": [1.5, 1.4, 2.2], "speed": 3.6, "aggro": 14, "rush": true, "armor": 0.8, "respawn": 900.0,
+		"pos": [0.0, 1, 82.0], "quest": "boar_trouble", "drops": {"beast_hide": 1.0, "spirit_shard": 0.4}, "la": GREYTUSK_LA})
 	# Wolves hunt as a pack: strike one and the others come running.
 	for i in 7:
 		var p := TOWER_POS + Vector3(_rng.randf_range(-25, 25), 1, _rng.randf_range(16, 30))
@@ -2843,7 +2910,7 @@ func _spawn_mobs() -> void:
 				"color": "6e6258", "size": [0.6, 0.5, 1.0], "speed": 4.2, "aggro": 7, "drops": {"beast_hide": 0.3},
 				"model": {"pack": "creatures", "name": "Rat", "fit": 1.3}, "pos": [base.x + cos(a) * 8, base.y + 1, base.z + sin(a) * 8]})
 	_spawn_mob({"name": "Kobold Sergeant", "level": 7, "hp": 260, "dmg": 16, "xp": 220, "money": 80, "color": "8a5a2b",
-		"size": [1.3, 1.4, 1.5], "speed": 3.4, "aggro": 12, "pack": "kobold", "armor": 0.7, "drops": {"iron_ore": 1.0, "spirit_shard": 0.6, "terrace_key": 1.0},
+		"size": [1.3, 1.4, 1.5], "speed": 3.4, "aggro": 12, "pack": "kobold", "armor": 0.7, "drops": {"iron_ore": 1.0, "spirit_shard": 0.6, "terrace_key": 1.0}, "la": SERGEANT_LA,
 		"pos": [LAB_LEVELS[1].x, LAB_LEVELS[1].y + 1, LAB_LEVELS[1].z - 4]})
 
 
