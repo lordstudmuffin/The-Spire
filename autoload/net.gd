@@ -55,14 +55,14 @@ const RANGE_SLACK := 2.5
 ## below are replaced by what the live world scene exposes (_pads, TOWER_POS,
 ## ARENA_POS, LAB_LEVELS, FLOOR_RADIUS, GameState.spawn_point) in
 ## _refresh_geometry(), so a floor that moves its tower keeps working.
-const FLOOR_RADIUS := 90.0
-const TOWER_POS := Vector3(0, 0, -70)
+const FLOOR_RADIUS := 270.0  # WorldArt.FLOOR1_RADIUS
+const TOWER_POS := Vector3(0, 0, -240)
 const TOWER_REACH := 50.0  # terraces (30 m out, r 14) and bridges hang off the tower
 const SAFE_DESTINATIONS: Array[Vector3] = [
 	Vector3(0, 1, 6),          # town plaza: spawn, respawn, exit portal, "Descend to town" pads
-	Vector3(30, 71, -61),      # Labyrinth gate -> Terrace 1 (LAB_LEVELS[0] + (0,1,9))
-	Vector3(-30, 141, -61),    # Terrace 2 pads (LAB_LEVELS[1] + (0,1,9))
-	Vector3(0, 223, -58),      # summit (ARENA_POS + (0,1,12))
+	Vector3(30, 71, -231),     # Labyrinth gate -> Terrace 1 (LAB_LEVELS[0] + (0,1,9))
+	Vector3(-30, 141, -231),   # Terrace 2 pads (LAB_LEVELS[1] + (0,1,9))
+	Vector3(0, 223, -228),     # summit (ARENA_POS + (0,1,12))
 ]
 const SAFE_DESTINATION_TOLERANCE := 3.0
 static var _geo_dests: Array = []

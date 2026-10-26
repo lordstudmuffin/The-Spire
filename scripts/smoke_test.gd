@@ -271,8 +271,15 @@ func _ready() -> void:
 	print("== Server records / anti-cheat helpers")
 	_check(Net.is_safe_destination(Vector3(0.3, 0.2, 6.1)), "town plaza is a safe destination")
 	_check(not Net.is_safe_destination(Vector3(40, 0, 40)), "open field is not a safe destination")
-	_check(Net.in_world_bounds(Vector3(60, 0, -40)) and not Net.in_world_bounds(Vector3(120, 0, 0)), "island bounds")
-	_check(Net.in_world_bounds(Vector3(-30, 141, -61)) and not Net.in_world_bounds(Vector3(60, 100, 60)), "tower/terrace bounds")
+	_check(Net.in_world_bounds(Vector3(160, 0, -120)) and not Net.in_world_bounds(Vector3(300, 0, 0)), "island bounds")
+	_check(Net.in_world_bounds(Vector3(-30, 141, -231)) and not Net.in_world_bounds(Vector3(60, 100, 60)), "tower/terrace bounds")
+	# The world's zone constants and WorldArt's layout must agree (minimap, shader, safe zones).
+	var WS := preload("res://scripts/world.gd")
+	_check(Vector2(WS.HOLLOWBROOK.x, WS.HOLLOWBROOK.z) == WorldArt.HOLLOWBROOK and Vector2(WS.TALVEN.x, WS.TALVEN.z) == WorldArt.TALVEN
+		and Vector2(WS.GROVE.x, WS.GROVE.z) == WorldArt.GROVE and Audio.HOLLOWBROOK == WS.HOLLOWBROOK and Audio.TALVEN == WS.TALVEN
+		and Duels.SAFE_ZONES[1][0] == WS.HOLLOWBROOK and Duels.SAFE_ZONES[2][0] == WS.TALVEN
+		and PlayerHome.HOME_POS == WS.HOLLOWBROOK + Vector3(0.5, 0, -19), "Floor 1 layout constants agree across world, art, audio, duels and the cottage")
+	_check(Net.TOWER_POS == Vector3(WorldArt.TOWER.x, 0, WorldArt.TOWER.y) and Net.FLOOR_RADIUS == WorldArt.FLOOR1_RADIUS, "net geometry defaults match the Floor 1 layout")
 	var best_base := 0.0
 	for rcp in Crafting.RECIPES.values():
 		if rcp["kind"] == "weapon":
@@ -459,7 +466,13 @@ func _ready() -> void:
 	_check(world.player != null and world.hud != null, "world spawns player and hud")
 	_check(get_tree().get_nodes_in_group("enemies").size() >= 22, "mobs spawned (%d)" % get_tree().get_nodes_in_group("enemies").size())
 	_check(get_tree().get_nodes_in_group("npcs").size() == 14, "14 NPCs spawned (incl. Old Tam, Trader Pell, Smith Kesra, the Hollowbrook chain and the limited-quest givers)")
-	_check(get_tree().get_nodes_in_group("ore_veins").size() == 10, "10 ore veins")
+	_check(get_tree().get_nodes_in_group("ore_veins").size() == 26, "26 ore veins across the bigger floor")
+	var far_d := 0.0
+	for e in get_tree().get_nodes_in_group("enemies"):
+		far_d = maxf(far_d, (e as Node3D).global_position.distance_to(Vector3(0, 0, 15)))
+	_check(world.HOLLOWBROOK.distance_to(Vector3(0, 0, 15)) > 120.0 and world.TOWER_POS.distance_to(Vector3(0, 0, 15)) > 220.0 and far_d > 180.0,
+		"Floor 1 is spread out: Hollowbrook %.0f m, the tower %.0f m and the farthest mob %.0f m from the plaza" % [
+			world.HOLLOWBROOK.distance_to(Vector3(0, 0, 15)), world.TOWER_POS.distance_to(Vector3(0, 0, 15)), far_d])
 
 	# Smith: with 5 crafts done and no trial yet, first talk should offer the trial.
 	GameState.items_crafted = 5
@@ -2381,7 +2394,7 @@ func _test_duels() -> void:
 	var Dc = load("res://scripts/duels.gd")
 	for m in Dc.MODES:
 		_check(not str(Dc.MODES[m]).to_lower().contains("sword art") and not str(Dc.MODES[m]).to_lower().contains("overgeared"), "mode '%s' uses an original name" % m)
-	_check(Dc.in_safe_zone(Vector3(0, 0, 10)) and Dc.in_safe_zone(Vector3(-48, 0, 38)) and not Dc.in_safe_zone(Vector3(10, 0, -45)), "town, Hollowbrook and Talven are Inner Areas; the fields are not")
+	_check(Dc.in_safe_zone(Vector3(0, 0, 10)) and Dc.in_safe_zone(preload("res://scripts/world.gd").HOLLOWBROOK) and Dc.in_safe_zone(preload("res://scripts/world.gd").TALVEN) and not Dc.in_safe_zone(Vector3(10, 0, -45)), "town, Hollowbrook and Talven are Inner Areas; the fields are not")
 	# Events the server delivers, per peer.
 	var events := []
 	D.server_event.connect(func(peer, data): events.append([peer, data]))

@@ -33,7 +33,19 @@ uniform float detail_strength : hint_range(0.0, 1.0) = 0.0;
 uniform float detail_tint : hint_range(0.0, 1.0) = 0.25;
 uniform float normal_strength : hint_range(0.0, 1.0) = 0.45;
 
+// Floor 1 layout, set from WorldArt.bind_floor1_layout (WorldArt.ROADS etc.).
+// Each road segment is (a.x, a.y, b.x, b.y) in world XZ.
+uniform vec4 roads[24];
+uniform int road_count = 0;
+uniform vec2 plaza = vec2(0.0, 15.0);
+uniform vec2 hollowbrook = vec2(-144.0, 84.0);
+uniform vec2 talven = vec2(-42.0, -162.0);
+uniform vec2 pond = vec2(162.0, -72.0);
+uniform vec2 tower = vec2(0.0, -240.0);
+uniform float rim_radius = 264.0;
+
 varying vec3 wpos;
+varying vec3 wnorm;
 
 float hash12(vec2 p) {
 	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -73,6 +85,7 @@ float lum(vec3 c) {
 
 void vertex() {
 	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	wnorm = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
 }
 
 void fragment() {
@@ -89,22 +102,24 @@ void fragment() {
 	g *= mix(vec3(1.0), pa > 0.0 ? vec3(1.12, 1.04, 0.70) : vec3(0.80, 0.90, 0.82), smoothstep(0.1, 0.7, abs(pa)) * 0.6);
 
 	// Roads (segments) -> sand with a noisy edge.
-	float road = seg(p, vec2(0.0, -7.0), vec2(0.0, -57.0));
-	road = min(road, seg(p, vec2(-20.0, 24.0), vec2(-46.0, 36.0)));
-	road = min(road, seg(p, vec2(-5.0, -6.0), vec2(-14.0, -41.0)));
-	road = min(road, seg(p, vec2(0.0, 37.0), vec2(0.0, 62.0)));
-	road = min(road, seg(p, vec2(22.0, 13.0), vec2(48.0, -10.0)));
+	float road = 1e6;
+	for (int i = 0; i < 24; i++) {
+		if (i >= road_count) {
+			break;
+		}
+		road = min(road, seg(p, roads[i].xy, roads[i].zw));
+	}
 	float en = (fbm(p * 0.33) - 0.5) * 1.8;
 	float sand_m = 1.0 - smoothstep(2.2 + en, 3.4 + en, road);
 
-	float dplaza = length(p - vec2(0.0, 15.0));
+	float dplaza = length(p - plaza);
 	float plaza_m = 1.0 - smoothstep(21.6, 22.2, dplaza);
-	float hb = 1.0 - smoothstep(11.0 + en, 13.5 + en, length(p - vec2(-48.0, 38.0)));
-	float tv = 1.0 - smoothstep(8.0 + en, 10.0 + en, length(p - vec2(-14.0, -44.0)));
-	float pond = length(p - vec2(54.0, -14.0));
-	float pond_m = 1.0 - smoothstep(8.5 + en * 0.5, 10.5 + en * 0.5, pond);
-	float rim = smoothstep(84.0 + en * 2.0, 88.5, length(p));
-	float tower = 1.0 - smoothstep(13.0, 16.0 + en, length(p - vec2(0.0, -70.0)));
+	float hb = 1.0 - smoothstep(11.0 + en, 13.5 + en, length(p - hollowbrook));
+	float tv = 1.0 - smoothstep(8.0 + en, 10.0 + en, length(p - talven));
+	float pond_d = length(p - pond);
+	float pond_m = 1.0 - smoothstep(8.5 + en * 0.5, 10.5 + en * 0.5, pond_d);
+	float rim = smoothstep(rim_radius + en * 2.0, rim_radius + 4.5, length(p));
+	float tower_m = 1.0 - smoothstep(13.0, 16.0 + en, length(p - tower));
 	// Inside the town wall (r 36 round the plaza) the roads are stone-paved,
 	// as in Aincrad's first town; they turn to sand at the gates.
 	float townroad = sand_m * (1.0 - smoothstep(34.0, 36.5, dplaza));
@@ -115,7 +130,7 @@ void fragment() {
 	// irregular cobbles (only evaluated where the plaza or tower apron is).
 	float cob = 1.0;
 	float cshade = 1.0;
-	if (plaza_m > 0.001 || tower > 0.001 || townroad > 0.001) {
+	if (plaza_m > 0.001 || tower_m > 0.001 || townroad > 0.001) {
 		vec2 cp = p * 2.2;
 		vec2 ci = floor(cp);
 		vec2 cf = fract(cp);
@@ -157,7 +172,7 @@ void fragment() {
 	col = mix(col, dirt.rgb * (0.9 + 0.2 * n2), max(hb, tv));
 	col = mix(col, sand.rgb * 0.85, pond_m);
 	col = mix(col, mix(dirt.rgb, stone.rgb, 0.5) * (0.85 + 0.3 * n2), rim);
-	col = mix(col, stone.rgb * (0.8 + 0.2 * cob), tower);
+	col = mix(col, stone.rgb * (0.8 + 0.2 * cob), tower_m);
 	col = mix(col, road_cob, townroad);
 	col = mix(col, cob_col, plaza_m);
 
@@ -166,7 +181,7 @@ void fragment() {
 	// Uniform branch: with detail_strength 0 (no maps bound, or the Low preset
 	// via RenderProfile) none of the six texture fetches are issued.
 	if (detail_strength > 0.0005) {
-		float w_cob = max(max(plaza_m, tower), townroad);
+		float w_cob = max(max(plaza_m, tower_m), townroad);
 		float w_path = max(max(sand_m, max(hb, tv)), max(pond_m, rim)) * (1.0 - w_cob);
 		float w_grass = clamp(1.0 - w_path - w_cob, 0.0, 1.0);
 		vec3 gd = texture(grass_tex, p * grass_tiling).rgb;
@@ -182,13 +197,13 @@ void fragment() {
 		float ds = detail_strength * (1.0 - 0.75 * w_cob);
 		col *= mix(vec3(1.0), vec3(rel), ds) * mix(vec3(1.0), d_hue, detail_tint * ds);
 
-		// The disc is flat, so the tangent frame is world XZ: perturb the normal
-		// here instead of relying on mesh tangents (u = +x, v = +z, GL convention).
+		// Detail maps tile in world XZ (u = +x, v = +z, GL convention): tilt the
+		// mesh normal (the hills) by them instead of relying on mesh tangents.
 		vec3 nm = texture(grass_nor, p * grass_tiling).rgb * w_grass
 			+ texture(path_nor, p * path_tiling).rgb * w_path
 			+ texture(cobble_nor, p * cobble_tiling).rgb * w_cob;
 		float depth = normal_strength * detail_strength * mix(0.6, 0.3, w_cob);
-		vec3 n_w = normalize(vec3((nm.r * 2.0 - 1.0) * depth, 1.0, (nm.g * 2.0 - 1.0) * depth));
+		vec3 n_w = normalize(wnorm + vec3((nm.r * 2.0 - 1.0) * depth, 0.0, (nm.g * 2.0 - 1.0) * depth));
 		NORMAL = normalize((VIEW_MATRIX * vec4(n_w, 0.0)).xyz);
 	}
 

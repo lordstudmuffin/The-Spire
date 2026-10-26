@@ -7,15 +7,16 @@ extends Node3D
 ## The gameplay layer (pads, gates, boss, quests, NPCs, mobs) is shared and
 ## reads the per-floor layout variables below.
 
-const FLOOR_RADIUS := 90.0
 const ARENA_RADIUS := 18.0
 const LAB_RADIUS := 14.0
-## Per-floor layout; Floor 1 values by default, _build_floor2 overrides them.
-var TOWER_POS := Vector3(0, 0, -70)
+## Per-floor layout; Floor 1 values by default (WorldArt holds the anchors),
+## _build_floor2 overrides them.
+var FLOOR_RADIUS := WorldArt.FLOOR1_RADIUS
+var TOWER_POS := Vector3(WorldArt.TOWER.x, 0, WorldArt.TOWER.y)
 var GATE_LEVEL := 5
-var ARENA_POS := Vector3(0, 222, -70)  # Top of the Labyrinth tower.
+var ARENA_POS := TOWER_POS + Vector3(0, 222, 0)  # Top of the Labyrinth tower.
 ## Labyrinth: open-air terraces climbing the tower before the summit.
-var LAB_LEVELS := [Vector3(30, 70, -70), Vector3(-30, 140, -70)]
+var LAB_LEVELS := [TOWER_POS + Vector3(30, 70, 0), TOWER_POS + Vector3(-30, 140, 0)]
 var _rune := Color("b06bff")               # summit rune colour
 var _terrace_runes := [Color(0.4, 0.8, 1.0), Color("ff9f4a")]
 var _gate_tint := Color("3b2a66")          # Labyrinth door slab
@@ -61,7 +62,7 @@ var _campfires: Array = []  # {"pos", "range", "label", "where"}
 ## Floor 1 waystones around the Talven fields (Scout Fen's visit quest):
 ## {"pos", "beacon": i, "lit": bool, "fx": Node3D}. Lit state mirrors
 ## GameState.visited ("waystone_i"); the server validates "waystone" actions.
-const BEACONS := [Vector3(-30, 0, -40), Vector3(-20, 0, -58), Vector3(7, 0, -33)]
+const BEACONS := [Vector3(-90, 0, -150), Vector3(-60, 0, -204), Vector3(21, 0, -129)]
 const BEACON_RANGE := 2.8
 var _beacons: Array = []
 var _life_keep: Array = []  # [pos, radius] kept clear of vegetation
@@ -298,6 +299,13 @@ func _spawn_mob_fn(data: Dictionary) -> Node:
 ## Creates a mob on the server (replicated) or locally when offline. Returns
 ## the node on the authority (null on a client, which gets it replicated).
 func _spawn_mob(data: Dictionary) -> Node:
+	# Ground mobs were laid out for the flat disc at y = 1: lift them onto the
+	# hills (terrace and summit mobs are far above the ground and keep theirs).
+	if WorldArt.terrain_on and data.has("pos"):
+		var p: Array = data["pos"]
+		var gy := WorldArt.height_at(Vector2(float(p[0]), float(p[2])))
+		if float(p[1]) < gy + 1.0:
+			data["pos"] = [p[0], gy + 1.0, p[2]]
 	if Net.online:
 		if multiplayer.is_server():
 			return _mob_spawner.spawn(data)
@@ -827,8 +835,8 @@ func _build_life_floor1() -> void:
 	var pond := Vector3(WorldArt.POND.x, 0, WorldArt.POND.y)
 	var pond_spot := pond + Vector3(-9.8, 0, -4.5)
 	_fishing.add_spot(pond_spot, "pond", pond + Vector3(-4.5, 0, -2.0))
-	var stream_spot := Vector3(71.8, 0, -14.4)
-	_fishing.add_spot(stream_spot, "stream", Vector3(71.8, 0, -17.2))
+	var stream_spot := pond + Vector3(17.8, 0, -0.4)
+	_fishing.add_spot(stream_spot, "stream", pond + Vector3(17.8, 0, -3.2))
 	_life_keep.append([pond_spot, 3.0])
 	_life_keep.append([stream_spot, 3.0])
 	var tam := NPC.new()
@@ -866,16 +874,20 @@ func _build_life_floor1() -> void:
 	rng.seed = 31
 	var spots := []
 	var guard := 0
-	while spots.size() < 18 and guard < 400:
+	var mill := Vector3(WorldArt.WINDMILL.x, 0, WorldArt.WINDMILL.y)
+	while spots.size() < 40 and guard < 1200:
 		guard += 1
 		var a := rng.randf() * TAU
-		var r := rng.randf_range(32, 78)
+		var r := rng.randf_range(42, FLOOR_RADIUS - 14)
 		var p := Vector3(cos(a) * r, 0, sin(a) * r)
-		var ok := p.distance_to(Vector3(0, 0, 15)) > 28 and p.distance_to(pond) > 13 and p.distance_to(HOLLOWBROOK) > 18 \
-			and p.distance_to(TALVEN) > 14 and p.distance_to(TOWER_POS) > 24 and p.distance_to(Vector3(-62, 0, -10)) > 9 \
-			and p.distance_to(PlayerHome.HOME_POS) > 9 and not (p.x > 56 and p.z > -22 and p.z < -11) and absf(p.x) > 7
+		var on_road := WorldArt.ground_kind(Vector2(p.x, p.z)) != WorldArt.Ground.GRASS
+		var in_stream := p.x > pond.x + 2.0 and absf(p.z - (pond.z - 3.5)) < 6.0
+		var ok := not on_road and not in_stream and p.distance_to(Vector3(0, 0, 15)) > 40 and p.distance_to(pond) > 13 \
+			and p.distance_to(HOLLOWBROOK) > 18 and p.distance_to(TALVEN) > 14 and p.distance_to(TOWER_POS) > 24 \
+			and p.distance_to(mill) > 9 and p.distance_to(PlayerHome.HOME_POS) > 9
+		p.y = WorldArt.height_at(Vector2(p.x, p.z))
 		for sp in spots:
-			if p.distance_to(sp) < 6.0:
+			if p.distance_to(sp) < 10.0:
 				ok = false
 		if ok:
 			spots.append(p)
@@ -1374,7 +1386,7 @@ func crystal_effect(id: String) -> void:
 ## Col, quest turn-ins and mining from across the island), each of which the
 ## server must refuse with a "[life] refused" / "[anticheat]" line.
 const CHORES := ["vein", "herb", "vein", "tam", "fish", "smith", "elder", "elder"]
-const CHORE_BUDGET := 22.0  # seconds per chore before the bot gives up on it
+const CHORE_BUDGET := 70.0  # seconds per chore before the bot gives up on it (the floor is ~540 m across)
 ## The bot leaves and re-enters town by the north road (spawn -> gate is a
 ## straight run); its errands are picked near that gate.
 const CHORE_GATE := Vector3(0, 0, -21)
@@ -2108,17 +2120,13 @@ func _build_environment() -> void:
 
 
 func _build_ground() -> void:
-	# Walkable floor stays a flat y=0 disc with a cylinder collider; all the
-	# looks (painterly ground shader, cliff rocks, rocky underside) are art.
+	# Walkable floor: flat at y = 0 in every town, camp and road, rolling hills
+	# between them (WorldArt.height_at); a heightmap collider matches the mesh.
+	# The looks (painterly ground shader, cliff rocks, rocky underside) are art.
+	WorldArt.terrain_on = true
 	var body := StaticBody3D.new()
 	body.name = "Floor"
-	var shape := CylinderShape3D.new()
-	shape.radius = FLOOR_RADIUS
-	shape.height = 2.0
-	var cs := CollisionShape3D.new()
-	cs.shape = shape
-	cs.position.y = -1
-	body.add_child(cs)
+	body.add_child(WorldArt.height_shape())
 	add_child(body)
 	WorldArt.build_terrain(self, _art_rng, FLOOR_RADIUS)
 	WorldArt.build_sky(self, _art_rng, FLOOR_RADIUS)
@@ -2212,7 +2220,7 @@ func _build_town() -> void:
 ## gameplay placed (NPCs, ore veins, the gate, villages, the spawn point).
 func _dress_world() -> void:
 	var keep := [[Vector3(0, 0, 6), 4.0], [TOWER_POS + Vector3(0, 0, 14), 8.0], [HOLLOWBROOK, 17.0], [TALVEN, 13.0],
-		[Vector3(-62, 0, -10), 7.0], [Vector3(0, 0, -12.5), 11.0], [Vector3(0, 0, 27), 5.0], [Vector3(17.5, 0, 20), 4.0]]
+		[Vector3(WorldArt.WINDMILL.x, 0, WorldArt.WINDMILL.y), 7.0], [Vector3(0, 0, -12.5), 11.0], [Vector3(0, 0, 27), 5.0], [Vector3(17.5, 0, 20), 4.0]]
 	for n in get_tree().get_nodes_in_group("npcs"):
 		keep.append([n.position, 3.0])
 	for v in _vein_positions:
@@ -2232,19 +2240,23 @@ func _dress_world() -> void:
 func _build_field() -> void:
 	# Fields: pond and stream, a windmill, fences along the roads.
 	WorldArt.build_water(self, FLOOR_RADIUS)
+	var mill := Vector3(WorldArt.WINDMILL.x, 0, WorldArt.WINDMILL.y)
 	if WorldProps.ready():
-		WorldProps.house(self, Vector3(-62, 0, -10), "windmill", "green", 1.2, WorldProps.HOUSE * 1.3)
+		WorldProps.house(self, mill, "windmill", "green", 1.2, WorldProps.HOUSE * 1.3)
 	else:
-		WorldArt.windmill(self, Vector3(-62, 0, -10), 1.2)
+		WorldArt.windmill(self, mill, 1.2)
+	# Fences follow the roads out of the north and south gates, round the
+	# windmill's paddock and the Hollowbrook pasture.
+	var hb := HOLLOWBROOK
 	WorldProps.fences(self, [
-		[Vector3(-4.5, 0, -17), Vector3(-4.5, 0, -40)], [Vector3(4.5, 0, -22), Vector3(4.5, 0, -50)],
-		[Vector3(-4.5, 0, 40), Vector3(-4.5, 0, 58)], [Vector3(4.5, 0, 44), Vector3(4.5, 0, 60)],
-		[Vector3(-70, 0, -4), Vector3(-56, 0, 2)], [Vector3(-56, 0, 2), Vector3(-50, 0, -10)],
-		[Vector3(-56, 0, 26), Vector3(-64, 0, 36)], [Vector3(-64, 0, 36), Vector3(-60, 0, 48)]])
+		[Vector3(-3.7, 0, -17), Vector3(-1.9, 0, -40)], [Vector3(5.7, 0, -22), Vector3(7.9, 0, -50)],
+		[Vector3(-4.4, 0, 40), Vector3(-3.5, 0, 58)], [Vector3(4.8, 0, 44), Vector3(5.6, 0, 60)],
+		[mill + Vector3(-8, 0, 6), mill + Vector3(6, 0, 12)], [mill + Vector3(6, 0, 12), mill + Vector3(12, 0, 0)],
+		[hb + Vector3(-8, 0, -12), hb + Vector3(-16, 0, -2)], [hb + Vector3(-16, 0, -2), hb + Vector3(-12, 0, 10)]])
 	# Hay bales by the windmill and a signpost at the crossroads.
 	var bales := []
 	for k in 4:
-		bales.append(Vector3(-66 + k * 1.9, 0, -17 + (k % 2) * 1.2))
+		bales.append(mill + Vector3(-4 + k * 1.9, 0, -7 + (k % 2) * 1.2))
 	if not WorldProps.hay(self, bales):
 		for b in bales:
 			WorldArt.cyl(self, 0.8, 0.8, 1.4, b + Vector3(0, 0.8, 0), Color("e6c76a"), 12, Vector3(0, 0, PI / 2))
@@ -2706,8 +2718,8 @@ func _show_floor_cleared() -> void:
 	add_child(_exit_portal)
 
 
-const HOLLOWBROOK := Vector3(-48, 0, 38)
-const TALVEN := Vector3(-14, 0, -44)
+const HOLLOWBROOK := Vector3(-144, 0, 84)  # WorldArt.HOLLOWBROOK
+const TALVEN := Vector3(-42, 0, -162)      # WorldArt.TALVEN
 
 
 ## First village outside town: a handful of cottages and the elder's gather quest.
@@ -2930,12 +2942,21 @@ func _still_talk(gs) -> String:
 	return ""
 
 
-func _spawn_ore_veins(count := 10) -> void:
+func _spawn_ore_veins(count := 26) -> void:
 	var rock := WorldArt.rock_mesh()
 	for i in count:
 		var a := _rng.randf() * TAU
 		var r := _rng.randf_range(45, FLOOR_RADIUS - 8)
 		var pos := Vector3(cos(a) * r, 0, sin(a) * r)
+		if GameState.floor != 2:
+			# Off the roads and out of the pond.
+			var guard1 := 0
+			while WorldArt.ground_kind(Vector2(pos.x, pos.z)) != WorldArt.Ground.GRASS and guard1 < 40:
+				guard1 += 1
+				a = _rng.randf() * TAU
+				r = _rng.randf_range(45, FLOOR_RADIUS - 8)
+				pos = Vector3(cos(a) * r, 0, sin(a) * r)
+			pos.y = WorldArt.height_at(Vector2(pos.x, pos.z))
 		if GameState.floor == 2:
 			# Mirewood: keep veins out of the lake, the barrow and the tracks.
 			var guard := 0
@@ -3027,16 +3048,18 @@ func _add_npc(n: String, pos: Vector3, look: Dictionary, quest: String, goal: in
 
 func _spawn_mobs() -> void:
 	# Meadow Slimes on the edge of the south field: the first thing to hit.
-	for i in 5:
+	for i in 9:
 		var a := _rng.randf_range(0.3, PI - 0.3)
-		var r := _rng.randf_range(40, 47)
+		var r := _rng.randf_range(46, 80)
 		_spawn_mob({"name": "Meadow Slime", "level": 1, "hp": 22, "dmg": 3, "xp": 12, "money": 2, "color": "7fd36a",
 			"size": [0.9, 0.7, 0.9], "speed": 2.2, "aggro": 6, "drops": {"spirit_shard": 0.1},
 			"model": {"pack": "creatures", "name": "Slime"}, "pos": [cos(a) * r, 1, sin(a) * r]})
 	# Boars in the south field (easy), wolves near the tower (harder).
-	for i in 8:
+	for i in 18:
 		var a := _rng.randf_range(0.2, PI - 0.2)
-		var r := _rng.randf_range(48, 75)
+		var r := _rng.randf_range(80, 205)
+		if Vector3(cos(a) * r, 0, sin(a) * r).distance_to(HOLLOWBROOK) < 50.0:
+			r = 75.0  # not in the village's back gardens
 		# Boars paw the ground and charge (telegraphed, parryable, sidestep it).
 		_spawn_mob({"name": "Field Boar", "level": 1, "hp": 40, "dmg": 6, "xp": 25, "money": 5, "color": "8c5940",
 			"pos": [cos(a) * r, 1, sin(a) * r], "quest": "boar_trouble", "drops": {"beast_hide": 0.7}, "rush": true})
@@ -3045,10 +3068,12 @@ func _spawn_mobs() -> void:
 	# Attack bonus (three Greytusk Hide Vests in the realm, then EXP and hide).
 	_spawn_mob({"name": "Greytusk, the Old Boar", "level": 6, "hp": 380, "dmg": 15, "xp": 260, "money": 90, "color": "6b5a4a",
 		"size": [1.5, 1.4, 2.2], "speed": 3.6, "aggro": 14, "rush": true, "armor": 0.8, "respawn": 900.0,
-		"pos": [0.0, 1, 82.0], "quest": "boar_trouble", "drops": {"beast_hide": 1.0, "spirit_shard": 0.4}, "la": GREYTUSK_LA})
+		"pos": [WorldArt.GREYTUSK.x, 1, WorldArt.GREYTUSK.y], "quest": "boar_trouble", "drops": {"beast_hide": 1.0, "spirit_shard": 0.4}, "la": GREYTUSK_LA})
 	# Wolves hunt as a pack: strike one and the others come running.
-	for i in 7:
-		var p := TOWER_POS + Vector3(_rng.randf_range(-25, 25), 1, _rng.randf_range(16, 30))
+	# Two dens in the northern woods on either side of the tower road.
+	for i in 12:
+		var side := -1.0 if i % 2 == 0 else 1.0
+		var p := TOWER_POS + Vector3(side * _rng.randf_range(18, 64), 1, _rng.randf_range(26, 80))
 		if Duels.in_safe_zone(p) or p.distance_to(TALVEN) < 18.0:
 			p.x = absf(p.x - TOWER_POS.x) + TOWER_POS.x + 6.0  # never den inside the Talven camp's Inner Area
 		_spawn_mob({"name": "Dire Wolf", "level": 4, "hp": 90, "dmg": 14, "xp": 70, "money": 15, "color": "59596b",
@@ -3086,7 +3111,7 @@ func _spawn_mobs() -> void:
 ## Most are plain; two bear a swollen fruit that bursts when struck and
 ## draws every vine in the grove onto the striker; one is in bloom and drops
 ## the Snaptrap Bloom (Herbalist Hesper's errand).
-const GROVE := Vector3(38, 0, -48)
+const GROVE := Vector3(114, 0, -174)  # WorldArt.GROVE
 const GROVE_SPOTS := [Vector3(0, 0, 0), Vector3(6, 0, 3), Vector3(-5, 0, 4), Vector3(4, 0, -6), Vector3(-6, 0, -4),
 	Vector3(9, 0, -2), Vector3(-2, 0, 8), Vector3(1, 0, -10)]
 
@@ -3124,6 +3149,8 @@ func _add_mob(n: String, lvl: int, hp: float, dmg: float, xp: int, money: int, c
 # section wires gameplay onto it (NPCs, quests, mobs, the second Labyrinth).
 
 func _build_floor2() -> void:
+	FLOOR_RADIUS = 90.0  # Mirewood is frozen at the prototype size (and flat).
+	WorldArt.terrain_on = false
 	TOWER_POS = Floor2Art.TOWER
 	ARENA_POS = TOWER_POS + Vector3(0, 222, 0)
 	LAB_LEVELS = [TOWER_POS + Vector3(-30, 90, 0)]

@@ -21,16 +21,44 @@ const SAGE := Color("dfe5cf")
 const WATER := Color("5fd3e6")
 const LANTERN := Color("ffb35c")
 
+## Floor 1 layout: the one place every zone anchor lives. The town keeps its
+## size; the villages, the pond, the grove and the Labyrinth sit about three
+## times as far from the plaza as in the first prototype (radius 90 -> 270),
+## so the walk between places is a real journey. Zone builders lay their
+## contents out relative to these anchors. shaders/ground.gdshader gets the
+## same values as uniforms (bind_floor1_layout).
+const FLOOR1_RADIUS := 270.0
 const PLAZA := Vector2(0, 15)
 const PLAZA_RADIUS := 22.0
-const POND := Vector2(54, -14)
+const TOWN_WALL_RADIUS := 36.0
+const TOWER := Vector2(0, -240)
+const TOWER_APRON := 16.5
+const HOLLOWBROOK := Vector2(-144, 84)
+const HOLLOWBROOK_DIRT := 14.0
+const TALVEN := Vector2(-42, -162)
+const TALVEN_DIRT := 10.5
+const GROVE := Vector2(114, -174)
+const WINDMILL := Vector2(-186, -60)
+const GREYTUSK := Vector2(0, 216)
+const POND := Vector2(162, -72)
 const POND_RADIUS := 8.0
+## North-half woods between the town and the tower (vegetation density).
+const WOODS_Z := Vector2(-262, -60)
+## Roads as polylines (each a list of points); they bend a little so the long
+## walks read as country roads, not rulers.
 const ROADS := [
-	[Vector2(0, -7), Vector2(0, -57)],
-	[Vector2(-20, 24), Vector2(-46, 36)],
-	[Vector2(-5, -6), Vector2(-14, -41)],
-	[Vector2(0, 37), Vector2(0, 62)],
-	[Vector2(22, 13), Vector2(48, -10)],
+	# North: town gate to the Labyrinth's apron.
+	[Vector2(0, -7), Vector2(5, -70), Vector2(-3, -150), Vector2(0, -222)],
+	# North-west: town to Talven camp.
+	[Vector2(-5, -6), Vector2(-14, -60), Vector2(-30, -112), Vector2(-42, -150)],
+	# West: town to Hollowbrook.
+	[Vector2(-20, 24), Vector2(-66, 46), Vector2(-108, 60), Vector2(-134, 78)],
+	# South: town to the far south field (Greytusk's range).
+	[Vector2(0, 37), Vector2(3, 100), Vector2(-7, 160), Vector2(0, 205)],
+	# East: town to the pond.
+	[Vector2(22, 13), Vector2(70, -18), Vector2(118, -50), Vector2(150, -66)],
+	# Trail off the east road up to the Snaptrap Grove.
+	[Vector2(70, -18), Vector2(92, -90), Vector2(108, -160)],
 ]
 
 enum Ground { GRASS, SAND, COBBLE, DIRT, WATER_K, RIM, TOWER }
@@ -163,22 +191,173 @@ static func _seg_dist(p: Vector2, a: Vector2, b: Vector2) -> float:
 	return (p - (a + ba * h)).length()
 
 
+## Road segments [a, b] flattened from ROADS (shader uniform order).
+static func road_segments() -> Array:
+	var out := []
+	for line in ROADS:
+		for i in line.size() - 1:
+			out.append([line[i], line[i + 1]])
+	return out
+
+
+static var _road_segs: Array = []
+
+
 ## Mirrors shaders/ground.gdshader so vegetation avoids roads and the plaza.
 static func ground_kind(p: Vector2) -> int:
 	if p.distance_to(PLAZA) < PLAZA_RADIUS + 0.5:
 		return Ground.COBBLE
-	if p.length() > 84.0:
+	if p.length() > FLOOR1_RADIUS - 6.0:
 		return Ground.RIM
-	if p.distance_to(Vector2(0, -70)) < 16.5:
+	if p.distance_to(TOWER) < TOWER_APRON:
 		return Ground.TOWER
 	if p.distance_to(POND) < POND_RADIUS + 2.5:
 		return Ground.WATER_K
-	for r in ROADS:
+	if _road_segs.is_empty():
+		_road_segs = road_segments()
+	for r in _road_segs:
 		if _seg_dist(p, r[0], r[1]) < 3.8:
 			return Ground.SAND
-	if p.distance_to(Vector2(-48, 38)) < 14.0 or p.distance_to(Vector2(-14, -44)) < 10.5:
+	if p.distance_to(HOLLOWBROOK) < HOLLOWBROOK_DIRT or p.distance_to(TALVEN) < TALVEN_DIRT:
 		return Ground.DIRT
 	return Ground.GRASS
+
+
+# --- Terrain height (Floor 1) ---------------------------------------------------
+## Rolling meadow hills between the places. Every zone, road, the pond and its
+## stream, the waystones and the rim stay at y = 0 (hills fade in around them),
+## so everything gameplay placed on the old flat disc keeps standing on the
+## ground. One grid (HEIGHT_CELL) feeds the collider, the ground mesh and every
+## placement, and it is deterministic, so server and clients agree.
+const HEIGHT_CELL := 2.0
+const HILL_AMP := 8.5
+## [centre, flat radius, fade width]
+const FLAT_ZONES := [
+	[PLAZA, 52.0, 22.0], [HOLLOWBROOK, 48.0, 18.0], [TALVEN, 28.0, 14.0], [TOWER, 44.0, 20.0],
+	[POND, 24.0, 14.0], [GROVE, 20.0, 14.0], [WINDMILL, 18.0, 12.0],
+	[Vector2(-90, -150), 6.0, 9.0], [Vector2(-60, -204), 6.0, 9.0], [Vector2(21, -129), 6.0, 9.0],
+]
+## Set by world.gd per floor: height_at() is 0 everywhere when off.
+static var terrain_on := false
+static var _hgrid := PackedFloat32Array()
+static var _hn := 0
+
+
+## 0 where the ground must stay flat, 1 where the full hill height applies.
+static func flat_mask(p: Vector2) -> float:
+	var m := 1.0 - smoothstep(FLOOR1_RADIUS - 30.0, FLOOR1_RADIUS - 8.0, p.length())
+	if m <= 0.0:
+		return 0.0
+	for z in FLAT_ZONES:
+		m = minf(m, smoothstep(z[1], z[1] + z[2], p.distance_to(z[0])))
+		if m <= 0.0:
+			return 0.0
+	if _road_segs.is_empty():
+		_road_segs = road_segments()
+	for s in _road_segs:
+		m = minf(m, smoothstep(6.0, 18.0, _seg_dist(p, s[0], s[1])))
+		if m <= 0.0:
+			return 0.0
+	# The stream from the pond to the waterfall at the rim.
+	var sa := POND + Vector2(6, -2)
+	var sb := Vector2(FLOOR1_RADIUS - 0.5, POND.y - 5)
+	m = minf(m, smoothstep(6.0, 16.0, _seg_dist(p, sa, sb)))
+	return m
+
+
+static func _hill_noise() -> FastNoiseLite:
+	var n := FastNoiseLite.new()
+	n.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	n.seed = 1717
+	n.frequency = 0.0065
+	n.fractal_type = FastNoiseLite.FRACTAL_FBM
+	n.fractal_octaves = 2
+	n.fractal_gain = 0.35
+	return n
+
+
+## Builds the height grid once (odd point count, centred on the origin, the
+## same layout HeightMapShape3D uses).
+static func build_heights() -> void:
+	if _hn > 0:
+		return
+	var n := _hill_noise()
+	_hn = int(ceil(FLOOR1_RADIUS / HEIGHT_CELL)) * 2 + 5
+	var half := (_hn - 1) / 2
+	_hgrid.resize(_hn * _hn)
+	for j in _hn:
+		for i in _hn:
+			var p := Vector2((i - half) * HEIGHT_CELL, (j - half) * HEIGHT_CELL)
+			var h := 0.0
+			if p.length() < FLOOR1_RADIUS:
+				var m := flat_mask(p)
+				if m > 0.0:
+					# Mostly rises (soft hills, shallow dells) so roads sit in the low ground.
+					var v := n.get_noise_2dv(p) + 0.18
+					h = clampf(v, -0.15, 1.0) * HILL_AMP * m
+			_hgrid[j * _hn + i] = h
+
+
+## Ground height at a world XZ point (bilinear on the grid; 0 off Floor 1).
+static func height_at(p: Vector2) -> float:
+	if not terrain_on:
+		return 0.0
+	if _hn == 0:
+		build_heights()
+	var half := (_hn - 1) / 2
+	var fx := p.x / HEIGHT_CELL + half
+	var fz := p.y / HEIGHT_CELL + half
+	var i := floori(fx)
+	var j := floori(fz)
+	if i < 0 or j < 0 or i >= _hn - 1 or j >= _hn - 1:
+		return 0.0
+	var tx := fx - i
+	var tz := fz - j
+	var a := lerpf(_hgrid[j * _hn + i], _hgrid[j * _hn + i + 1], tx)
+	var b := lerpf(_hgrid[(j + 1) * _hn + i], _hgrid[(j + 1) * _hn + i + 1], tx)
+	return lerpf(a, b, tz)
+
+
+## A world point on the ground at XZ p.
+static func ground_point(p: Vector2) -> Vector3:
+	return Vector3(p.x, height_at(p), p.y)
+
+
+## Collision for the hills: a HeightMapShape3D over the grid. Outside the
+## island the ground drops away so the rim still ends in a fall.
+static func height_shape() -> CollisionShape3D:
+	build_heights()
+	var hs := HeightMapShape3D.new()
+	hs.map_width = _hn
+	hs.map_depth = _hn
+	var data := _hgrid.duplicate()
+	var half := (_hn - 1) / 2
+	for j in _hn:
+		for i in _hn:
+			if Vector2((i - half) * HEIGHT_CELL, (j - half) * HEIGHT_CELL).length() > FLOOR1_RADIUS + 1.0:
+				data[j * _hn + i] = -300.0
+	hs.map_data = data
+	var cs := CollisionShape3D.new()
+	cs.shape = hs
+	cs.scale = Vector3(HEIGHT_CELL, 1.0, HEIGHT_CELL)
+	return cs
+
+
+## Feeds the Floor 1 layout into the ground shader (roads, zone centres, rim).
+static func bind_floor1_layout(gm: ShaderMaterial) -> void:
+	var segs := road_segments()
+	# vec4 array uniform as flat floats (works on every 4.x renderer).
+	var packed := PackedFloat32Array()
+	for s in segs:
+		packed.append_array([s[0].x, s[0].y, s[1].x, s[1].y])
+	gm.set_shader_parameter("roads", packed)
+	gm.set_shader_parameter("road_count", segs.size())
+	gm.set_shader_parameter("plaza", PLAZA)
+	gm.set_shader_parameter("hollowbrook", HOLLOWBROOK)
+	gm.set_shader_parameter("talven", TALVEN)
+	gm.set_shader_parameter("pond", POND)
+	gm.set_shader_parameter("tower", TOWER)
+	gm.set_shader_parameter("rim_radius", FLOOR1_RADIUS - 6.0)
 
 
 # --- Small helpers ---------------------------------------------------------
@@ -389,25 +568,34 @@ static func xf(pos: Vector3, rot_y := 0.0, scl := Vector3.ONE, tilt := Vector3.Z
 
 # --- Terrain ---------------------------------------------------------------
 
-## Flat walkable disc (collision stays a cylinder in world.gd) with the
-## painterly ground shader, a rocky cliff skirt and the jagged underside.
+## Walkable ground (Floor 1 follows height_at's hills; world.gd builds the
+## matching collider) with the painterly ground shader, a rocky cliff skirt
+## and the jagged underside.
 ## `look` overrides for other floors: "shader" (ground shader name), "sets"
 ## (detail map sets for bind_ground_detail), "cliff_a"/"cliff_b" (skirt
 ## rock tones), "rock_a"/"rock_b" (boulder tints), "lip_a"/"lip_b".
 static func build_terrain(parent: Node3D, rng: RandomNumberGenerator, radius: float, look: Dictionary = {}) -> void:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var rings := 18
-	var segs := 96
+	# Floor 1 (big, hilly): even ~2.6 m rings so the mesh follows the height
+	# grid; the old flat floors keep the cheap 18-ring disc.
+	var hilly := radius > 100.0 and terrain_on
+	var rings := 18 if not hilly else int(radius / 2.6)
+	var segs := 96 if radius <= 100.0 else 320  # keeps the rim edge round on a big floor
 	var ring_r := []
 	for r in rings + 1:
-		ring_r.append(radius * pow(float(r) / rings, 1.25))
+		ring_r.append(radius * (float(r) / rings if hilly else pow(float(r) / rings, 1.25)))
 	for r in rings + 1:
+		# Inner rings need fewer segments; reuse the full count for indexing simplicity.
 		for s in segs:
 			var a := TAU * s / segs
-			st.set_normal(Vector3.UP)
+			var v := Vector3(cos(a) * ring_r[r], 0, sin(a) * ring_r[r])
+			if hilly:
+				v.y = height_at(Vector2(v.x, v.z))
+			else:
+				st.set_normal(Vector3.UP)
 			st.set_uv(Vector2(cos(a), sin(a)) * ring_r[r] / radius)
-			st.add_vertex(Vector3(cos(a) * ring_r[r], 0, sin(a) * ring_r[r]))
+			st.add_vertex(v)
 	for r in rings:
 		for s in segs:
 			var s1 := (s + 1) % segs
@@ -422,10 +610,14 @@ static func build_terrain(parent: Node3D, rng: RandomNumberGenerator, radius: fl
 			st.add_index(i0)
 			st.add_index(i2)
 			st.add_index(i3)
+	if hilly:
+		st.generate_normals()
 	var top := st.commit()
 	var gm := ShaderMaterial.new()
 	gm.shader = shader(look.get("shader", "ground"))
 	bind_ground_detail(gm, look.get("sets", []))
+	if look.get("shader", "ground") == "ground":
+		bind_floor1_layout(gm)
 	var ground := mesh_node(parent, top, Vector3.ZERO, gm)
 	ground.name = "Ground"
 
@@ -433,7 +625,14 @@ static func build_terrain(parent: Node3D, rng: RandomNumberGenerator, radius: fl
 	var ut := SurfaceTool.new()
 	ut.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var levels := [[0.0, 1.0], [-3.0, 1.03], [-9.0, 0.96], [-18.0, 0.82], [-30.0, 0.6], [-42.0, 0.35], [-50.0, 0.12], [-54.0, 0.0]]
-	var usegs := 64
+	# A wider island hangs deeper (the top 9 m keep their shape for the rim).
+	var depth_k := maxf(1.0, sqrt(radius / 90.0))
+	for l in levels.size():
+		if levels[l][0] < -9.0:
+			levels[l][0] = -9.0 + (levels[l][0] + 9.0) * depth_k
+	var usegs := 64 if radius <= 100.0 else 128
+	# Rim boulders keep their spacing round the longer edge.
+	var rim_k := maxf(1.0, radius / 90.0)
 	for l in levels.size():
 		for s in usegs:
 			var a := TAU * s / usegs
@@ -470,7 +669,7 @@ static func build_terrain(parent: Node3D, rng: RandomNumberGenerator, radius: fl
 	var rock := rock_mesh()
 	var xs := []
 	var cs := []
-	for i in 320:
+	for i in int(320 * rim_k):
 		var a := rng.randf() * TAU
 		var r := radius - 2.5 + rng.randf_range(-1.5, 3.5)
 		var s := rng.randf_range(2.5, 6.5)
@@ -478,7 +677,7 @@ static func build_terrain(parent: Node3D, rng: RandomNumberGenerator, radius: fl
 		xs.append(xf(pos, rng.randf() * TAU, Vector3(s, s * rng.randf_range(0.7, 1.3), s * rng.randf_range(0.7, 1.2)), Vector3(rng.randf_range(-0.3, 0.3), 0, rng.randf_range(-0.3, 0.3))))
 		cs.append(rock_a.lerp(rock_b, rng.randf()) * (1.0 if rng.randf() > 0.3 else 1.12))
 	# A second, lower band of larger crags so the skirt reads as layered rock.
-	for i in 140:
+	for i in int(140 * rim_k):
 		var a := rng.randf() * TAU
 		var r := radius * 0.97 + rng.randf_range(-2.0, 1.0)
 		var s := rng.randf_range(5.0, 9.5)
@@ -486,7 +685,7 @@ static func build_terrain(parent: Node3D, rng: RandomNumberGenerator, radius: fl
 		xs.append(xf(pos, rng.randf() * TAU, Vector3(s, s * rng.randf_range(0.9, 1.6), s * rng.randf_range(0.6, 1.0)), Vector3(rng.randf_range(-0.25, 0.25), 0, rng.randf_range(-0.25, 0.25))))
 		cs.append(crag_a.lerp(crag_b, rng.randf()))
 	# Rim lip: a ring of smaller stones on top so the edge reads.
-	for i in 160:
+	for i in int(160 * rim_k):
 		var a := rng.randf() * TAU
 		var r := radius - rng.randf_range(0.8, 3.0)
 		var s := rng.randf_range(0.6, 1.6)
@@ -664,12 +863,44 @@ static func tree_mesh(variant: int) -> ArrayMesh:
 
 ## Grass tufts, flowers, scattered rocks and trees. Trees get trunk colliders
 ## (grouped in one StaticBody) except near the tower so mobs never get stuck.
-static func build_vegetation(parent: Node3D, rng: RandomNumberGenerator, radius: float, keep_clear: Array) -> void:
-	var clear := func(p: Vector2, extra := 0.0) -> bool:
-		for k in keep_clear:
-			if p.distance_to(Vector2(k[0].x, k[0].z)) < k[1] + extra:
-				return true
+## Keep-clear test over [pos, radius] pairs, bucketed in a coarse grid so a
+## big floor's tens of thousands of tufts don't each scan every entry.
+class ClearGrid:
+	const CELL := 16.0
+	var cells := {}
+	var max_r := 0.0
+
+	func _init(keep: Array) -> void:
+		for k in keep:
+			max_r = maxf(max_r, float(k[1]))
+		for k in keep:
+			var c := Vector2i(floori(k[0].x / CELL), floori(k[0].z / CELL))
+			if not cells.has(c):
+				cells[c] = []
+			cells[c].append(k)
+
+	func hit(p: Vector2, extra := 0.0) -> bool:
+		var reach := int(ceil((max_r + extra) / CELL))
+		var c := Vector2i(floori(p.x / CELL), floori(p.y / CELL))
+		for dx in range(-reach, reach + 1):
+			for dz in range(-reach, reach + 1):
+				var bucket = cells.get(c + Vector2i(dx, dz))
+				if bucket == null:
+					continue
+				for k in bucket:
+					if p.distance_to(Vector2(k[0].x, k[0].z)) < float(k[1]) + extra:
+						return true
 		return false
+
+
+static func build_vegetation(parent: Node3D, rng: RandomNumberGenerator, radius: float, keep_clear: Array) -> void:
+	var grid := ClearGrid.new(keep_clear)
+	var clear := func(p: Vector2, extra := 0.0) -> bool:
+		return grid.hit(p, extra)
+	# Counts were tuned on the 90 m prototype disc; scale with the area so a
+	# bigger floor isn't a bare one (trees and rocks a little under linear, so
+	# meadows stay open).
+	var area := (radius * radius) / (90.0 * 90.0)
 	# Trees.
 	var use_pack := AssetLib.has_prop("nature", "tree_oak")
 	var trees := [[], [], []]
@@ -678,29 +909,28 @@ static func build_vegetation(parent: Node3D, rng: RandomNumberGenerator, radius:
 	var trunk_shapes := []
 	var tries := 0
 	var placed := 0
-	while placed < 260 and tries < 6000:
+	var tree_target := int(260 * area * 0.7)
+	var woods_target := int(tree_target * 0.62)
+	var spacing := {}  # Vector2i cell (4.5 m) -> true: one tree per cell
+	var tower_c := TOWER if radius >= FLOOR1_RADIUS - 1.0 else Vector2(0, -70)
+	var talven_c := TALVEN if radius >= FLOOR1_RADIUS - 1.0 else Vector2(-14, -44)
+	while placed < tree_target and tries < tree_target * 24:
 		tries += 1
 		var p: Vector2
-		var woods := placed < 170
+		var woods := placed < woods_target
 		if woods:
-			p = Vector2(rng.randf_range(-82, 82), rng.randf_range(-86, -28))
+			p = Vector2(rng.randf_range(-radius * 0.91, radius * 0.91), rng.randf_range(-radius * 0.96, -radius * 0.31))
 		else:
 			var a := rng.randf() * TAU
-			p = Vector2(cos(a), sin(a)) * rng.randf_range(40, 82)
+			p = Vector2(cos(a), sin(a)) * rng.randf_range(40, radius - 8)
 		if p.length() > radius - 5 or ground_kind(p) != Ground.GRASS or clear.call(p, 3.0):
 			continue
-		if p.distance_to(Vector2(0, -70)) < 24:
+		if p.distance_to(tower_c) < 24:
 			continue
-		var too_close := false
-		for v in 3:
-			for t in trees[v]:
-				if Vector2(t.origin.x, t.origin.z).distance_to(p) < 4.5:
-					too_close = true
-					break
-			if too_close:
-				break
-		if too_close:
+		var cell := Vector2i(floori(p.x / 4.5), floori(p.y / 4.5))
+		if spacing.has(cell):
 			continue
+		spacing[cell] = true
 		var variant := 1 if woods and rng.randf() < 0.45 else (2 if rng.randf() < 0.3 else 0)
 		var s := rng.randf_range(0.9, 1.5)
 		var rot := rng.randf() * TAU
@@ -713,9 +943,9 @@ static func build_vegetation(parent: Node3D, rng: RandomNumberGenerator, radius:
 			var ps := s * WorldProps.NATURE * 1.15
 			if not pack_trees.has(kind):
 				pack_trees[kind] = []
-			pack_trees[kind].append(xf(Vector3(p.x, 0, p.y), rot, Vector3(ps, ps * rng.randf_range(0.95, 1.15), ps)))
+			pack_trees[kind].append(xf(ground_point(p), rot, Vector3(ps, ps * rng.randf_range(0.95, 1.15), ps)))
 		else:
-			trees[variant].append(xf(Vector3(p.x, 0, p.y), rot, Vector3(s, s * rng.randf_range(0.9, 1.2), s)))
+			trees[variant].append(xf(ground_point(p), rot, Vector3(s, s * rng.randf_range(0.9, 1.2), s)))
 			var g := Color("4e9a3c").lerp(Color("8fd36b"), rng.randf())
 			if variant == 1:
 				g = Color("2f7a4a").lerp(Color("5aa86a"), rng.randf())
@@ -723,8 +953,8 @@ static func build_vegetation(parent: Node3D, rng: RandomNumberGenerator, radius:
 				g = Color("e58fb4").lerp(Color("f6c1d3"), rng.randf())  # Sakura.
 			tree_cols[variant].append(g)
 		placed += 1
-		if p.distance_to(Vector2(0, -70)) > 34 and p.distance_to(Vector2(-14, -44)) > 16:
-			trunk_shapes.append(Vector3(p.x, 0, p.y))
+		if p.distance_to(tower_c) > 34 and p.distance_to(talven_c) > 16:
+			trunk_shapes.append(ground_point(p))
 	for v in 3:
 		if trees[v].is_empty():
 			continue
@@ -749,18 +979,18 @@ static func build_vegetation(parent: Node3D, rng: RandomNumberGenerator, radius:
 	var rock_cols := []
 	var pack_rocks := {"rock_largeA": [], "rock_largeB": [], "rock_largeC": [], "rock_tallA": [], "rock_smallA": [], "rock_smallC": []}
 	var pack_keys := pack_rocks.keys()
-	for i in 140:
+	for i in int(140 * area * 0.7):
 		var a := rng.randf() * TAU
-		var p := Vector2(cos(a), sin(a)) * rng.randf_range(30, 82)
+		var p := Vector2(cos(a), sin(a)) * rng.randf_range(30, radius - 8)
 		if ground_kind(p) != Ground.GRASS or clear.call(p, 2.0):
 			continue
 		var s := rng.randf_range(0.5, 2.2)
 		if use_pack:
 			var k: String = pack_keys[(i * 7) % 4]
 			var ps := s * 2.2
-			pack_rocks[k].append(xf(Vector3(p.x, 0, p.y), rng.randf() * TAU, Vector3(ps, ps * rng.randf_range(0.7, 1.0), ps)))
+			pack_rocks[k].append(xf(ground_point(p), rng.randf() * TAU, Vector3(ps, ps * rng.randf_range(0.7, 1.0), ps)))
 			continue
-		rocks.append(xf(Vector3(p.x, -s * 0.2, p.y), rng.randf() * TAU, Vector3(s, s * rng.randf_range(0.6, 1.0), s * rng.randf_range(0.7, 1.3))))
+		rocks.append(xf(ground_point(p) + Vector3(0, -s * 0.2, 0), rng.randf() * TAU, Vector3(s, s * rng.randf_range(0.6, 1.0), s * rng.randf_range(0.7, 1.3))))
 		rock_cols.append(Color("7c7a84").lerp(Color("5a5762"), rng.randf()))
 	# Pond rim stones.
 	for i in 34:
@@ -794,7 +1024,7 @@ static func build_vegetation(parent: Node3D, rng: RandomNumberGenerator, radius:
 	# Grass: dense tufts everywhere the ground is meadow.
 	var gx := []
 	var gc := []
-	var n_grass := 26000
+	var n_grass := int(26000 * area)
 	for i in n_grass:
 		var a := rng.randf() * TAU
 		var r := sqrt(rng.randf()) * (radius - 4)
@@ -802,7 +1032,7 @@ static func build_vegetation(parent: Node3D, rng: RandomNumberGenerator, radius:
 		if ground_kind(p) != Ground.GRASS or clear.call(p, 0.5):
 			continue
 		var s := rng.randf_range(0.6, 1.1)
-		gx.append(xf(Vector3(p.x, 0, p.y), rng.randf() * TAU, Vector3(s, s * rng.randf_range(0.7, 1.1), s)))
+		gx.append(xf(ground_point(p), rng.randf() * TAU, Vector3(s, s * rng.randf_range(0.7, 1.1), s)))
 		gc.append(Color(1, 1, 1).lerp(Color(0.78, 1.0, 0.8), rng.randf()).lerp(Color(0.95, 0.95, 0.7), rng.randf() * 0.25))
 	var gmat := ShaderMaterial.new()
 	gmat.shader = shader("grass")
@@ -814,16 +1044,16 @@ static func build_vegetation(parent: Node3D, rng: RandomNumberGenerator, radius:
 	var fx := []
 	var fc := []
 	var palette := [Color("fff4a8"), Color("ffffff"), Color("f7a1c4"), Color("8fb8ff"), Color("ff9c6b")]
-	for patch in 70:
+	for patch in int(70 * area):
 		var a := rng.randf() * TAU
-		var c := Vector2(cos(a), sin(a)) * rng.randf_range(20, 80)
+		var c := Vector2(cos(a), sin(a)) * rng.randf_range(20, radius - 10)
 		var col: Color = palette[rng.randi() % palette.size()]
 		for i in 40:
 			var p := c + Vector2(rng.randf_range(-4, 4), rng.randf_range(-4, 4))
 			if ground_kind(p) != Ground.GRASS or clear.call(p, 0.5):
 				continue
 			var s := rng.randf_range(0.8, 1.3)
-			fx.append(xf(Vector3(p.x, 0, p.y), rng.randf() * TAU, Vector3(s, s, s)))
+			fx.append(xf(ground_point(p), rng.randf() * TAU, Vector3(s, s, s)))
 			fc.append(col.lerp(Color.WHITE, rng.randf() * 0.3))
 	var fmm := multimesh(parent, flower_mesh(), fx, fc, "Flowers")
 	fmm.material_override = foliage_mat(Color.WHITE, 0.8)
@@ -2057,9 +2287,11 @@ static func build_sky(parent: Node3D, rng: RandomNumberGenerator, radius: float,
 			var s := base_s * rng.randf_range(0.5, 1.0)
 			xs.append(xf(c + off, rng.randf() * TAU, Vector3(s, s * 0.45, s * 0.8)))
 			cs.append(tint)
+	# The far set was placed round a 90 m island; push it out with bigger ones.
+	var far_k := maxf(1.0, radius / 90.0 * 0.8)
 	for far in 26:
 		var a := rng.randf() * TAU
-		var r := rng.randf_range(260, 620)
+		var r := rng.randf_range(260, 620) * far_k
 		var y := rng.randf_range(10, 90)
 		var c := Vector3(cos(a) * r, y, sin(a) * r)
 		var base_s := rng.randf_range(16, 34)
@@ -2078,8 +2310,8 @@ static func build_sky(parent: Node3D, rng: RandomNumberGenerator, radius: float,
 	var tree_xs := [[], [], []]
 	var tree_cs := [[], [], []]
 	for isl in islets:
-		var c: Vector3 = isl[0]
-		var r: float = isl[1]
+		var c: Vector3 = Vector3(isl[0].x * far_k, isl[0].y * sqrt(far_k), isl[0].z * far_k)
+		var r: float = isl[1] * sqrt(far_k)
 		var n := Node3D.new()
 		n.position = c
 		parent.add_child(n)
@@ -2111,7 +2343,8 @@ static func build_sky(parent: Node3D, rng: RandomNumberGenerator, radius: float,
 			multimesh(parent, tree_mesh(v), tree_xs[v], tree_cs[v], "IsletTrees%d" % v)
 
 	# Layered hill silhouettes on the horizon (unlit tints fading into the fog).
-	var hill_layers := [[700.0, hills[0], 0.9], [900.0, hills[1], 1.2], [1150.0, hills[2], 1.5]]
+	var hill_k := maxf(1.0, radius / 90.0 * 0.6)
+	var hill_layers := [[700.0 * hill_k, hills[0], 0.9 * hill_k], [900.0 * hill_k, hills[1], 1.2 * hill_k], [1150.0 * hill_k, hills[2], 1.5 * hill_k]]
 	hill_materials.clear()  # fresh per world build; old ones die with their scene
 	for li in hill_layers.size():
 		var layer: Array = hill_layers[li]

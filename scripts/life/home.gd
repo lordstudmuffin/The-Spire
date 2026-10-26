@@ -10,7 +10,7 @@ extends Node3D
 ## furniture, storage and decorations live in GameState (saved, and sent
 ## with the snapshot online, where the server whitelists them).
 
-const HOME_POS := Vector3(-47.5, 0, 19.0)
+const HOME_POS := Vector3(-143.5, 0, 65.0)  # Hollowbrook + (0.5, 0, -19)
 const INTERIOR := Vector3(0, -22, 0)
 const ROOM := Vector3(11.0, 4.2, 9.0)
 ## Furniture slot positions inside the room (relative to INTERIOR).

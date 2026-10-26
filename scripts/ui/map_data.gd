@@ -33,7 +33,10 @@ static var _landmarks := {}  # floor -> Array
 
 
 static func island_radius() -> float:
-	return float(WorldScript.FLOOR_RADIUS)
+	var w := _world()
+	if w != null:
+		return float(w.FLOOR_RADIUS)
+	return 90.0 if current_floor() == 2 else WorldArt.FLOOR1_RADIUS
 
 
 ## Live world node when one exists (its per-floor layout vars win).
@@ -53,7 +56,7 @@ static func tower_pos() -> Vector2:
 		return Vector2(t.x, t.z)
 	if current_floor() == 2:
 		return Vector2(Floor2Art.TOWER.x, Floor2Art.TOWER.z)
-	return Vector2(0, -70)
+	return WorldArt.TOWER
 
 
 static func current_floor() -> int:
@@ -102,6 +105,8 @@ static func landmarks() -> Array:
 			{"pos": tower_pos(), "kind": "tower", "label": "The Labyrinth", "radius": 12.0},
 			{"pos": tower_pos() + Vector2(0, 14), "kind": "gate", "label": "Sealed Gate", "radius": 2.0},
 			{"pos": pond_pos(), "kind": "water", "label": "Mill Pond", "radius": pond_radius()},
+			{"pos": WorldArt.GROVE, "kind": "camp", "label": "Snaptrap Grove", "radius": 6.0, "area": 16.0},
+			{"pos": WorldArt.WINDMILL, "kind": "farm", "label": "Old Windmill", "radius": 3.0, "area": 10.0},
 		]
 		var mk: Vector3 = load("res://scripts/life/stalls.gd").market_center(hb)
 		var fm: Vector3 = load("res://scripts/life/farms.gd").field_center(hb)

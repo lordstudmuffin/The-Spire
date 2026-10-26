@@ -784,11 +784,14 @@ static func undergrowth(parent: Node3D, rng: RandomNumberGenerator, radius: floa
 		return false
 	var sets := {"plant_bush": [90, 0.9, 1.4], "plant_bushDetailed": [50, 0.8, 1.3], "mushroom_redGroup": [36, 0.7, 1.1],
 		"mushroom_tanGroup": [30, 0.7, 1.1], "stump_round": [16, 0.8, 1.2], "log": [14, 0.8, 1.2], "flower_yellowA": [120, 0.8, 1.2], "flower_redA": [90, 0.8, 1.2]}
+	# Counts were set for a 90 m floor; keep the same density on bigger ones.
+	var area := (radius * radius) / (90.0 * 90.0)
 	for name in sets:
 		var cfg: Array = sets[name]
+		var want := int(cfg[0] * area)
 		var xs := []
 		var tries := 0
-		while xs.size() < cfg[0] and tries < cfg[0] * 6:
+		while xs.size() < want and tries < want * 6:
 			tries += 1
 			var a := rng.randf() * TAU
 			var r := sqrt(rng.randf()) * (radius - 6)
@@ -796,7 +799,7 @@ static func undergrowth(parent: Node3D, rng: RandomNumberGenerator, radius: floa
 			if not ok.call(p):
 				continue
 			var s: float = NATURE * rng.randf_range(cfg[1], cfg[2])
-			xs.append(WorldArt.xf(Vector3(p.x, 0, p.y), rng.randf() * TAU, Vector3.ONE * s))
+			xs.append(WorldArt.xf(WorldArt.ground_point(p), rng.randf() * TAU, Vector3.ONE * s))
 		if not xs.is_empty():
 			AssetLib.multi(parent, "nature", name, xs, true, name.begins_with("plant") or name.begins_with("stump") or name == "log")
 	return true

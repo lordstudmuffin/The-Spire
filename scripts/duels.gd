@@ -47,7 +47,7 @@ const MODES := {"first": "First Strike", "half": "Half Loss", "full": "Total Los
 const DEFAULT_MODE := "first"
 ## Where mobs never roam and duels never start: the walled town, Hollowbrook
 ## and Talven (world.gd keeps mobs out of the same circles).
-const SAFE_ZONES := [[Vector3(0, 0, 15), 36.0], [Vector3(-48, 0, 38), 18.0], [Vector3(-14, 0, -44), 13.0]]
+const SAFE_ZONES := [[Vector3(0, 0, 15), 36.0], [Vector3(-144, 0, 84), 18.0], [Vector3(-42, 0, -162), 13.0]]
 
 ## Test hook: every event the server delivers (peer, data).
 signal server_event(peer: int, data: Dictionary)
@@ -73,7 +73,7 @@ var _opp_bar: Control = null  # PlayerStatus duel gauge (visuals thread)
 var _label_serial := 0
 
 # --- --duel soak bot --------------------------------------------------------------
-const BOT_MEET := Vector3(0, 0, -34)   # just outside the north gate, out of town
+const BOT_MEET := Vector3(2, 0, -34)   # just outside the north gate, out of town
 var _bot_done := false
 var _bot_next_invite := 0.0
 var _bot_t := 0.0

@@ -142,9 +142,9 @@ const POOL_3D := 16
 ## Auto music/ambience zones (match world.gd constants; world.gd is not edited).
 const TOWN_CENTER := Vector3(0, 0, 15)
 const TOWN_RADIUS := 38.0
-const HOLLOWBROOK := Vector3(-48, 0, 38)
+const HOLLOWBROOK := Vector3(-144, 0, 84)
 const VILLAGE_RADIUS := 18.0
-const TALVEN := Vector3(-14, 0, -44)
+const TALVEN := Vector3(-42, 0, -162)
 const CAMP_RADIUS := 16.0
 
 var enabled := true
