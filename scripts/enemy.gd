@@ -105,6 +105,8 @@ var _knock := Vector3.ZERO
 var _mesh: MeshInstance3D
 var _label: Label3D
 var _plate: MobPlate
+## A named field elite (it carries a Last Attack bonus): the plate shows it in gold.
+var elite := false
 var _dead := false
 var _last_hitter := 1
 var _shown_hp := -1.0
@@ -157,6 +159,7 @@ static func from_data(d: Dictionary) -> Enemy:
 	e.rush = bool(d.get("rush", false))
 	e.pack = str(d.get("pack", ""))
 	e.armor = clampf(float(d.get("armor", 1.0)), 0.1, 1.0)
+	e.elite = d.get("la") is Dictionary and not bool(d.get("boss", false))  # named elite: gold plate
 	e.lure = bool(d.get("lure", false))
 	e.respawn_time = clampf(float(d.get("respawn", 8.0)), 1.0, 3600.0)
 	var md = d.get("model", {})
@@ -212,6 +215,8 @@ func _update_label() -> void:
 	_label.text = "%s  Lv%d\n%d / %d" % [display_name, mob_level, ceil(hp), max_hp]
 	if _plate:
 		_plate.set_info(display_name, mob_level, mob_level - GameState.level, is_boss)
+		if elite:
+			_plate.set_elite()
 		var brain := get_node_or_null("BossBrain")
 		if brain and brain.has_method("bar_count") and brain.bar_count() > 1:
 			_plate.set_hp(brain.bar_fraction())
