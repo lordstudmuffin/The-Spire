@@ -1994,6 +1994,7 @@ var _heart_t := 0.0
 var _death_overlay: ColorRect
 var _death_label: Label
 var _death_sub: Label
+var _death_cost: Label
 var _death_tw: Tween
 var _death_left := 0.0
 var _death_where := ""
@@ -2020,6 +2021,11 @@ func show_death(seconds: float, where: String) -> void:
 		_death_sub = UITheme.label("", 17, UITheme.PARCH)
 		_death_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		v.add_child(_death_sub)
+		# The death penalty, in rose under the countdown (Player.last_xp_lost).
+		_death_cost = UITheme.label("", 14, UITheme.ROSE)
+		_death_cost.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_death_cost.add_theme_font_override("font", UITheme.spaced(UITheme.ui_font(), 3))
+		v.add_child(_death_cost)
 		UITheme.death_screen(_death_overlay, _death_label, _death_sub)
 	_death_overlay.visible = true
 	_death_overlay.color.a = 0.0
@@ -2032,6 +2038,13 @@ func show_death(seconds: float, where: String) -> void:
 	_death_left = seconds
 	_death_where = where
 	_death_sub.text = "Returning to %s in %d" % [where, ceili(seconds)]
+	var lost := 0
+	for p in get_tree().get_nodes_in_group("players"):
+		if p.get("is_local") and p.get("last_xp_lost") != null:
+			lost = int(p.last_xp_lost)
+	_death_cost.text = ("EXP  -%d     ·     GEAR DURABILITY  -10%%" % lost) if lost > 0 else "GEAR DURABILITY  -10%"
+	_death_cost.modulate.a = 0.0
+	_death_tw.parallel().tween_property(_death_cost, "modulate:a", 1.0, 0.5).set_delay(1.3)
 	close_screens()
 
 
@@ -2043,6 +2056,7 @@ func hide_death() -> void:
 	_death_tw = create_tween()
 	_death_tw.tween_property(_death_overlay, "color:a", 0.0, 0.4)
 	_death_tw.parallel().tween_property(_death_label, "modulate:a", 0.0, 0.3)
+	_death_tw.parallel().tween_property(_death_cost, "modulate:a", 0.0, 0.3)
 	_death_tw.tween_callback(func(): _death_overlay.visible = false)
 
 

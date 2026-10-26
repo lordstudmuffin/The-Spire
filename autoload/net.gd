@@ -1317,19 +1317,31 @@ func srv_reward_kill(killer: int, xp: int, money: int, pos: Vector3, drops: Dict
 			names.append(srv_name_of(m))
 		print("[party] kill by %s shared with %s: %d xp / %d col each (base %d/%d, +%d%% bonus)" % [
 			srv_name_of(killer), ", ".join(names), share[0], share[1], xp, money, int(PARTY_BONUS_PER_MEMBER * 100.0 * (sharers.size() - 1))])
-	# Drops and quest credit are rolled here, on the killer's record, and
-	# sent as a patch (a client never books its own loot online).
+	# Drops and quest credit are rolled here on the records and sent as a
+	# patch (a client never books its own loot online). As in Aincrad's
+	# party auto-distribution, each drop goes to one random sharer, and a
+	# kill counts for every sharer on that hunt quest. A listen host killing
+	# with no record rolls its own drops (Enemy._grant_share).
 	if srv_records.has(killer):
-		var rs = RecordState.new(srv_records[killer])
+		var takers: Array = sharers.filter(func(m): return srv_records.has(m))
 		var got := {}
 		for mat in drops:
 			if GameState.MATERIAL_NAMES.has(mat) and randf() < float(drops[mat]):
-				rs.add_material(mat)
-				got[mat] = int(got.get(mat, 0)) + 1
-		if quest != "":
-			rs.advance_quest(quest)
-		if not got.is_empty() or quest != "":
-			_srv_reply(killer, "loot", {"drops": got, "quest": quest})
+				var to: int = takers[randi() % takers.size()]
+				if not got.has(to):
+					got[to] = {}
+				got[to][mat] = int(got[to].get(mat, 0)) + 1
+		for m in takers:
+			var rs = RecordState.new(srv_records[m])
+			var mine: Dictionary = got.get(m, {})
+			for mat in mine:
+				rs.add_material(mat, int(mine[mat]))
+			var q := ""
+			if quest != "" and (m == killer or (rs.quests.has(quest) and not rs.quest_done(quest))):
+				rs.advance_quest(quest)
+				q = quest
+			if not mine.is_empty() or q != "":
+				_srv_reply(m, "loot", {"drops": mine, "quest": q, "party": sharers.size()})
 	return out
 
 

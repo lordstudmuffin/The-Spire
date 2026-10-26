@@ -329,7 +329,7 @@ func _ready() -> void:
 							hfx.hearth_glow(pl)
 						else:
 							hfx.class_art_cast(pl, "Hearthwright" if demo == "hearth_flare" else "Stillblade", demo)
-				"boss_swap", "boss_leap", "plated":
+				"boss_swap", "boss_leap", "plated", "boss_whirl":
 					var bs: Node3D = null
 					for e in scene.get_tree().get_nodes_in_group("enemies"):
 						if (e.get("is_boss") and e.get("brain") != null) or (demo == "plated" and "halberdier" in str(e.get("display_name")).to_lower()):
@@ -350,6 +350,9 @@ func _ready() -> void:
 								sfx.boss_leap(bs, bs.global_position, bs.global_position + Vector3(0, 0, 8), 1.0)
 							"plated":
 								sfx.mob_plated_hit(bs, Vector3(0, 0, -1))
+							"boss_whirl":
+								sfx.boss_sweep_warning(bs, 4.2, 360.0, 0.9)
+								scene.get_tree().create_timer(0.9, false).timeout.connect(func(): sfx.boss_sweep_impact(bs, 4.2, 360.0))
 				"battle_result":
 					var bh = scene.get("hud")
 					if bh and bh.has_method("show_battle_result"):
@@ -409,6 +412,11 @@ func _ready() -> void:
 		# --summit: stand on the Labyrinth summit (lights the arena braziers).
 		if i == 3 and "--summit" in args and scene.has_method("_enter_summit"):
 			scene._enter_summit()
+		# --stalls-open: every market stall rented and stocked (keepers, wares).
+		if i == 3 and "--stalls-open" in args and scene.get("_stalls") != null:
+			for st in scene._stalls.stalls:
+				(st["keeper"] as Node3D).visible = true
+				(st["wares"] as Node3D).visible = true
 		# --spawn-boss: raise the floor boss in its arena (for a model check).
 		if i == 4 and "--spawn-boss" in args and scene.has_method("_spawn_boss"):
 			scene._spawn_boss()
@@ -436,6 +444,8 @@ func _ready() -> void:
 			InputSetup.input_device_changed.emit("gamepad")
 		# --open death | realm: the death grey-out / a realm announcement banner.
 		if open_ui == "death" and i == 30 and "hud" in scene and scene.hud:
+			if scene.get("player"):
+				scene.player.last_xp_lost = 37
 			scene.hud.show_death(8.0, "the Town of First Light")
 		if open_ui == "realm" and i == 28 and "hud" in scene and scene.hud:
 			scene.hud.realm_announce("A player has claimed the unique skill «Starfall Edge»")

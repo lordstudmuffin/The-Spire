@@ -7,7 +7,8 @@ extends Node
 ## when the HUD has one, else to a toast.
 ##
 ## data = {"kills": int, "foes": {name: count}, "xp": int, "col": int,
-##         "items": {material_id: count}, "level_ups": int}
+##         "items": {material_id: count}, "level_ups": int,
+##         "party": largest party that shared a kill (1 solo)}
 
 const QUIET := 4.0
 
@@ -26,8 +27,9 @@ static func build(w: Node) -> Node:
 	return n
 
 
-func note_kill(foe: String, xp: int, col: int) -> void:
+func note_kill(foe: String, xp: int, col: int, party := 1) -> void:
 	_open()
+	_tally["party"] = maxi(int(_tally["party"]), party)
 	_tally["kills"] = int(_tally["kills"]) + 1
 	var foes: Dictionary = _tally["foes"]
 	foes[foe] = int(foes.get(foe, 0)) + 1
@@ -45,7 +47,7 @@ func _open() -> void:
 	_quiet = QUIET
 	if _tally.is_empty():
 		_level0 = GameState.level
-		_tally = {"kills": 0, "foes": {}, "xp": 0, "col": 0, "items": {}, "level_ups": 0}
+		_tally = {"kills": 0, "foes": {}, "xp": 0, "col": 0, "items": {}, "level_ups": 0, "party": 1}
 
 
 func _process(delta: float) -> void:
@@ -74,4 +76,7 @@ static func summary(data: Dictionary) -> String:
 	var parts: Array = ["+%d EXP" % int(data["xp"]), "+%d Col" % int(data["col"])]
 	for id in data["items"]:
 		parts.append("%s x%d" % [GameState.MATERIAL_NAMES.get(id, id), int(data["items"][id])])
+	var n := int(data.get("party", 1))
+	if n > 1:
+		parts.append("Party of %d (+%d%%)" % [n, int(round(Net.PARTY_BONUS_PER_MEMBER * 100.0 * (n - 1)))])
 	return "  ·  ".join(parts)

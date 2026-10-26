@@ -13,6 +13,12 @@ const ITEMS := {
 	# first. One in the whole realm, ever.
 	"la_floor1": {"name": "Mantle of the First Floor", "kind": "armor", "rank": 4, "def": 26, "cap": 1,
 		"desc": "Last Attack bonus. Woven from the Guardian's shadow."},
+	# Last Attack bonuses on Floor 1's elites: the first three to land the
+	# killing blow on each (World.SERGEANT_LA / GREYTUSK_LA).
+	"la_sergeant": {"name": "Sergeant's Cleaver", "kind": "weapon", "rank": 2, "atk": 19, "cap": 3,
+		"desc": "Last Attack bonus. The Kobold Sergeant's notched cleaver."},
+	"la_greytusk": {"name": "Greytusk Hide Vest", "kind": "armor", "rank": 2, "def": 16, "cap": 3,
+		"desc": "Last Attack bonus. Cut from the old boar's scarred hide."},
 	# Reward of "The Lantern Below" (one holder).
 	"veil_first_dawn": {"name": "Veil of First Dawn", "kind": "armor", "rank": 4, "def": 24, "cap": 1,
 		"desc": "Iselde's lantern-cloth. It keeps the first light of the floor."},

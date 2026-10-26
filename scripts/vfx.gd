@@ -570,6 +570,18 @@ func boss_sweep_warning(enemy: Node3D, reach: float, arc_deg: float, secs: float
 		return
 	var c := enemy.global_position
 	_telegraph(enemy, 1, Vector3(c.x, _ground_y(c), c.z), Vector2.ONE * reach * 2.0, _forward(enemy), secs, deg_to_rad(arc_deg) * 0.5)
+	if arc_deg >= 300.0:
+		# Whirl (the Warlord's last bar): the whole circle, ringed, with the
+		# blade's glint circling the boss through the wind-up.
+		ring(Vector3(c.x, _ground_y(c) + 0.05, c.z), DANGER_COLOR, reach * 2.0, secs)
+		var box := _body_bounds(enemy)
+		var y := box.position.y + box.size.y * 0.5
+		var steps := 6
+		for k in steps:
+			var a := TAU * k / steps
+			var at := c + _forward(enemy).rotated(Vector3.UP, a) * reach * 0.55
+			get_tree().create_timer(secs * k / steps, false).timeout.connect(func():
+				_glint(Vector3(at.x, y, at.z), DANGER_COLOR, 0.9, 0.3, true))
 
 
 func boss_sweep_impact(enemy: Node3D, reach: float, arc_deg: float) -> void:
@@ -578,6 +590,15 @@ func boss_sweep_impact(enemy: Node3D, reach: float, arc_deg: float) -> void:
 	var fwd := _forward(enemy)
 	var c := enemy.global_position
 	var g := _ground_y(c)
+	if arc_deg >= 300.0:
+		# Whirl: four slashes round the boss, a dust ring and a shock wave.
+		var y := _body_bounds(enemy).size.y * 0.45
+		for k in 4:
+			slash(c + Vector3(0, y, 0), fwd.rotated(Vector3.UP, TAU * k / 4.0), 2)
+		dust_ring(Vector3(c.x, g, c.z), reach)
+		_shock_ring(Vector3(c.x, g + 0.8, c.z), Color(1.0, 0.6, 0.4), reach * 1.6, 0.35)
+		flash_light(Vector3(c.x, g + 1.2, c.z), Color(1.0, 0.55, 0.35), 5.0)
+		return
 	slash(c + Vector3(0, _body_bounds(enemy).size.y * 0.45, 0), fwd, 2)
 	var half := deg_to_rad(arc_deg) * 0.5
 	for k in 5:

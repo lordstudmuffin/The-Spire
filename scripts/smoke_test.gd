@@ -405,6 +405,35 @@ func _ready() -> void:
 	var xp0: int = Net.srv_records[5001]["xp"]
 	var shares := Net.srv_reward_kill(5001, 30, 4, Vector3.ZERO)
 	_check(shares.size() == 1 and shares[5001] == [30, 4] and Net.srv_records[5001]["xp"] == xp0 + 30, "solo kill rewards the killer through the record")
+	# Party in range (fake player nodes for the server's positions): EXP and
+	# Col split with the bonus, each drop to one random member, hunt-quest
+	# credit for every member on that quest.
+	var pscript := GDScript.new()
+	pscript.source_code = "extends Node3D\nvar peer_id := 0\n"
+	pscript.reload()
+	var fakes: Array = []
+	for peer in [5001, 5002]:
+		var fp := Node3D.new()
+		fp.set_script(pscript)
+		fp.set("peer_id", peer)
+		fp.add_to_group("players")
+		add_child(fp)
+		fakes.append(fp)
+	Net._srv_invite(5001, 5002)
+	Net._srv_respond(5002, true)
+	Net.srv_records[5002]["quests"]["boar_trouble"] = {"progress": 0, "goal": 99, "done": false}
+	Net.srv_records[5001]["materials"]["beast_hide"] = 0
+	Net.srv_records[5002]["materials"]["beast_hide"] = 0
+	var xp2: int = Net.srv_records[5002]["xp"]
+	for k in 24:
+		shares = Net.srv_reward_kill(5001, 100, 20, Vector3.ZERO, {"beast_hide": 1.0}, "boar_trouble")
+	var h1 := int(Net.srv_records[5001]["materials"].get("beast_hide", 0))
+	var h2 := int(Net.srv_records[5002]["materials"].get("beast_hide", 0))
+	_check(shares.size() == 2 and shares[5002] == Net.party_split(100, 20, 2) and Net.srv_records[5002]["xp"] > xp2, "party kill: the member in range gets the split share")
+	_check(h1 + h2 == 24 and h1 > 0 and h2 > 0, "party kill: drops are shared out at random (%d / %d of 24)" % [h1, h2])
+	_check(int(Net.srv_records[5002]["quests"]["boar_trouble"]["progress"]) == 24, "party kill: hunt-quest credit for the member on the quest")
+	for fp in fakes:
+		fp.queue_free()
 	for i in members.size():
 		Net.srv_records.erase(5001 + i)
 	Net.srv_parties.clear()
@@ -867,7 +896,7 @@ func _ready() -> void:
 	GameState.level = lvl0
 	GameState.hidden_stats = {}
 	# Limited quests and items: realm slots, bound serial items, one copy each.
-	for lid in ["lantern_below", "old_watch_whispers", "veil_first_dawn", "wisplight_rapier", "la_floor1"]:
+	for lid in ["lantern_below", "old_watch_whispers", "veil_first_dawn", "wisplight_rapier", "la_floor1", "la_sergeant", "la_greytusk"]:
 		rdb.release(lid, me_key)
 	GameState.quests.erase("lantern_below")
 	var shards_keep := int(GameState.materials.get("spirit_shard", 0))
@@ -885,8 +914,19 @@ func _ready() -> void:
 	_check(GameState.quest_done("lantern_below") and veil is Dictionary and veil.get("name", "") == "Veil of First Dawn" and LimitedContent.is_bound(veil) and str(veil.get("serial", "")) != "", "turn-in pays the bound, serialled limited item")
 	_check(rdb.is_holder("veil_first_dawn", me_key) and LimitedContent.slots_left("veil_first_dawn") == 0, "the item claim is on the realm")
 	_check(LimitedContent.grant_item(GameState, "veil_first_dawn").get("already", false) and GameState.inventory.size() == inv_n + 1, "a holder never gets a second copy")
-	world._grant_last_attack(1)
-	world._grant_last_attack(1)
+	var la1: Dictionary = world._grant_last_attack(1)
+	var shards_la := int(GameState.materials.get("spirit_shard", 0))
+	var la2: Dictionary = world._grant_last_attack(1)
+	_check(la1.get("item", "") == "Mantle of the First Floor" or rdb.is_holder("la_floor1", me_key), "Last Attack on the Guardian pays the Mantle")
+	_check(la2.get("item", "x") == "" and int(la2.get("xp", 0)) == world.BOSS_LA["xp"] and int(GameState.materials.get("spirit_shard", 0)) == shards_la + 2,
+		"a second Last Attack pays the fallback bonus (+%d EXP, +%d Col, 2 shards)" % [int(la2.get("xp", 0)), int(la2.get("col", 0))])
+	var la3: Dictionary = world._grant_last_attack(1, world.SERGEANT_LA, "Kobold Sergeant")
+	_check(la3.get("item", "") == "Sergeant's Cleaver" and rdb.is_holder("la_sergeant", me_key) and LimitedContent.ITEMS["la_sergeant"]["cap"] == 3, "Last Attack on the Kobold Sergeant: one of three Cleavers")
+	var grey: Enemy = null
+	for e in get_tree().get_nodes_in_group("enemies"):
+		if world.is_ancestor_of(e) and e.display_name.begins_with("Greytusk"):
+			grey = e
+	_check(grey != null and grey.rush and grey.respawn_time >= 600.0, "Greytusk, the named field elite, roams the south field")
 	var mantles := 0
 	for it in GameState.inventory:
 		if it is Dictionary and it.get("name", "") == "Mantle of the First Floor":
@@ -898,7 +938,7 @@ func _ready() -> void:
 	rdb.verify_record(fake)
 	_check(fake["inventory"].size() == 1, "a duplicated limited item is removed on load")
 	# Clean up so local play keeps every slot free.
-	for lid in ["lantern_below", "old_watch_whispers", "veil_first_dawn", "wisplight_rapier", "la_floor1"]:
+	for lid in ["lantern_below", "old_watch_whispers", "veil_first_dawn", "wisplight_rapier", "la_floor1", "la_sergeant", "la_greytusk"]:
 		rdb.release(lid, me_key)
 	GameState.inventory = GameState.inventory.filter(func(it): return not LimitedContent.is_bound(it))
 	GameState.quests.erase("lantern_below")
@@ -1761,6 +1801,7 @@ func _test_labyrinth() -> void:
 	var res_data: Dictionary = br.close()
 	_check(int(res_data.get("kills", 0)) == 2 and int(res_data["xp"]) == 24 and int(res_data["col"]) == 4 and int(res_data["foes"]["Meadow Slime"]) == 2 and int(res_data["items"]["beast_hide"]) == 1 and br.close().is_empty(), "battle results sum the fight's kills, EXP, Col and items")
 	_check(load("res://scripts/battle_results.gd").summary(res_data).contains("+24 EXP") and load("res://scripts/battle_results.gd").summary(res_data).contains("Beast Hide x1"), "the results summary reads +24 EXP / Beast Hide x1")
+	_check(load("res://scripts/battle_results.gd").summary({"xp": 40, "col": 8, "items": {}, "party": 3}).contains("Party of 3 (+20%)"), "the results name the party share")
 	# Field mobs (Aincrad's first floor): the grove, lures, packs, boar rushes.
 	var vines: Array = []
 	var boar: Enemy = null
