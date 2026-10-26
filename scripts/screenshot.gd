@@ -329,7 +329,7 @@ func _ready() -> void:
 							hfx.hearth_glow(pl)
 						else:
 							hfx.class_art_cast(pl, "Hearthwright" if demo == "hearth_flare" else "Stillblade", demo)
-				"boss_swap", "boss_leap", "plated":
+				"boss_swap", "boss_leap", "plated", "boss_whirl":
 					var bs: Node3D = null
 					for e in scene.get_tree().get_nodes_in_group("enemies"):
 						if (e.get("is_boss") and e.get("brain") != null) or (demo == "plated" and "halberdier" in str(e.get("display_name")).to_lower()):
@@ -350,6 +350,9 @@ func _ready() -> void:
 								sfx.boss_leap(bs, bs.global_position, bs.global_position + Vector3(0, 0, 8), 1.0)
 							"plated":
 								sfx.mob_plated_hit(bs, Vector3(0, 0, -1))
+							"boss_whirl":
+								sfx.boss_sweep_warning(bs, 4.2, 360.0, 0.9)
+								scene.get_tree().create_timer(0.9, false).timeout.connect(func(): sfx.boss_sweep_impact(bs, 4.2, 360.0))
 				"battle_result":
 					var bh = scene.get("hud")
 					if bh and bh.has_method("show_battle_result"):
