@@ -33,6 +33,15 @@ const HIDDEN_CLASSES := {
 	"Hearthwright": {"bonus": {"endurance": 2, "spirit": 2, "agility": 1}, "perk": "Food lasts longer and works harder. Cook anywhere. Hearth Flare scatters coals and leaves you glowing."},
 }
 const STAT_NAMES := ["strength", "agility", "endurance", "spirit"]
+# One-line descriptions for the stat rows. Keep the numbers in step with
+# max_hp(), attack_damage(), move_speed() and art_power().
+const STAT_INFO := {
+	"strength": "Hit harder. +3 attack per point.",
+	"agility": "Move faster. +5% run speed per point.",
+	"endurance": "Take more punishment. +12 max HP per point.",
+	"spirit": "Focus for Sword Arts. +4% art damage per point.",
+}
+const ART_POWER_PER_SPIRIT := 0.04
 const POINTS_PER_LEVEL := 3
 const CREATOR_POINTS := 5
 const MATERIAL_NAMES := {"iron_ore": "Iron Ore", "beast_hide": "Beast Hide", "spirit_shard": "Spirit Shard",
@@ -530,6 +539,16 @@ func max_hp() -> float:
 
 func attack_damage() -> float:
 	return (8.0 + stats.get("strength", 0) * 3.0 + level + weapon_attack()) * (1.0 + buff_value("atk"))
+
+
+## Sword Art damage multiplier from Spirit (basic swings don't get it).
+## Net.srv_art_power is the server's copy of this formula.
+static func art_power_for(spirit: int) -> float:
+	return 1.0 + spirit * ART_POWER_PER_SPIRIT
+
+
+func art_power() -> float:
+	return art_power_for(int(stats.get("spirit", 0)))
 
 
 func move_speed() -> float:

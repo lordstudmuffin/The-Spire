@@ -776,6 +776,8 @@ func net_hit(kind: int, from_dir: Vector3, swing: int = 0) -> void:
 			cooldown = float(art["cooldown"])
 		elif kind != -1:
 			return
+		if kind != -1:
+			mult *= Net.srv_art_power(sender)
 		var key := "%d:%d" % [sender, kind]
 		var now := Time.get_ticks_msec()
 		var last: Array = _swing_times.get(key, [-100000, -1])

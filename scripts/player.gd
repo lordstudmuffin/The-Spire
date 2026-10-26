@@ -1089,7 +1089,7 @@ func use_unique(i: int) -> bool:
 					net_swing.rpc(h % SKILLS.size()))
 	get_tree().create_timer(0.12 + hits * 0.08, false).timeout.connect(func():
 		if is_inside_tree():
-			_hit_cone(GameState.attack_damage() * float(art["mult"]), float(art["range"]), float(art["arc"]), UniqueSkills.KIND_BASE + i))
+			_hit_cone(GameState.attack_damage() * GameState.art_power() * float(art["mult"]), float(art["range"]), float(art["arc"]), UniqueSkills.KIND_BASE + i))
 	return true
 
 
@@ -1137,7 +1137,7 @@ func use_class_art(i: int) -> bool:
 	get_tree().create_timer(0.12, false).timeout.connect(func():
 		if not is_inside_tree():
 			return
-		var hits := _hit_cone(GameState.attack_damage() * float(art["mult"]), float(art["range"]), float(art["arc"]), kind)
+		var hits := _hit_cone(GameState.attack_damage() * GameState.art_power() * float(art["mult"]), float(art["range"]), float(art["arc"]), kind)
 		# Offline / host the hits landed here (take_hit), so the art's
 		# self-buff is granted here too; a remote client's comes from the
 		# server with the validated hit (Enemy.net_hit).
@@ -1180,7 +1180,7 @@ func _use_skill(i: int) -> void:
 	# Short delay so a lunge connects at the end of the move.
 	get_tree().create_timer(0.12, false).timeout.connect(func():
 		if is_inside_tree():
-			_hit_cone(GameState.attack_damage() * sk["mult"], sk["range"], sk["arc"], i))
+			_hit_cone(GameState.attack_damage() * GameState.art_power() * sk["mult"], sk["range"], sk["arc"], i))
 
 
 ## Offline / host: damages the local GameState. On the server for a remote

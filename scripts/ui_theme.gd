@@ -423,9 +423,6 @@ static func make_button(text: String, kind: String = "normal") -> Button:
 			b.custom_minimum_size = Vector2(34, 34)
 	hover_fx(b)
 	b.pressed.connect(func(): Audio.play("ui_click"))
-	b.mouse_entered.connect(func():
-		if not b.disabled:
-			Audio.play("ui_hover"))
 	return b
 
 

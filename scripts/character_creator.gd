@@ -497,7 +497,7 @@ func _pick_color(key: String, html: String) -> void:
 	_mark_swatches(key, html)
 
 
-func _stat_row(s: String) -> HBoxContainer:
+func _stat_row(s: String) -> VBoxContainer:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
 	var name_l := UITheme.label(s.capitalize(), 16, UITheme.PARCH, true)
@@ -525,7 +525,11 @@ func _stat_row(s: String) -> HBoxContainer:
 	plus.pressed.connect(func(): _adjust(s, 1))
 	row.add_child(plus)
 	_stat_plus[s] = plus
-	return row
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 0)
+	box.add_child(row)
+	box.add_child(UITheme.subtle(GameState.STAT_INFO[s], 12))
+	return box
 
 
 # --- State ------------------------------------------------------------------

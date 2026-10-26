@@ -288,6 +288,11 @@ func _ready() -> void:
 	_check(rec["level"] == 2 and rec["xp"] == 50 and rec["money"] == 60, "server-side reward levels the record")
 	Net.srv_set_reported(4242, 99, 999.0, 9)
 	_check(rec["stats"]["strength"] == 3 and float(rec["weapon_atk"]) == 0.0 and absf(Net.srv_attack_for(4242) - (8.0 + 9.0 + 2.0)) < 0.01, "reported strength/weapon ignored; attack comes from the record")
+	var spi0: int = rec["stats"]["spirit"]
+	_check(absf(Net.srv_art_power(4242) - GameState.art_power_for(spi0)) < 0.001 and Net.srv_art_power(4242) > 1.0, "Sword Art power comes from the record's Spirit")
+	rec["stats"]["spirit"] = 999
+	_check(absf(Net.srv_art_power(4242) - GameState.art_power_for(Net.stat_cap(rec["level"]))) < 0.001, "an inflated Spirit is clamped to the level's stat cap")
+	rec["stats"]["spirit"] = spi0
 	Net.srv_apply_snapshot(4242, {"level": 99, "xp": 9999, "money": 99999, "materials": {"moonscale_koi": 50},
 		"inventory": [{"name": "Hack", "kind": "weapon", "rank": 7, "atk": 5000, "id": "h"}], "equipped": {"weapon": {"id": "h"}},
 		"home_owned": true, "fishing_level": 99, "hidden_class": "Forgeborn"})

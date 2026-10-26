@@ -158,6 +158,7 @@ func _build_left() -> void:
 		b.pressed.connect(func(): Net.spend_point(s))
 		row.add_child(b)
 		v.add_child(row)
+		v.add_child(UITheme.label(GameState.STAT_INFO[s], 11, UITheme.MUTED))
 		_attr_rows[s] = {"val": val, "bar": bar, "btn": b}
 
 	v.add_child(UITheme.spacer(2))
@@ -181,7 +182,6 @@ func _build_slot(kind: String) -> Button:
 	b.custom_minimum_size = Vector2(0, 64)
 	b.focus_mode = Control.FOCUS_ALL
 	b.tooltip_text = "Unequip"
-	b.mouse_entered.connect(func(): Audio.play("ui_hover"))
 	b.pressed.connect(func(): _toggle_slot(kind))
 	var h := HBoxContainer.new()
 	h.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -442,9 +442,7 @@ func _make_card() -> Button:
 	var idx := _cards.size()
 	b.pressed.connect(func(): _activate(idx))
 	b.focus_entered.connect(func(): _show_detail(idx))
-	b.mouse_entered.connect(func():
-		Audio.play("ui_hover")
-		_show_detail(idx))
+	b.mouse_entered.connect(func(): _show_detail(idx))
 	UITheme.hover_fx(b, 1.03)
 	_grid.add_child(b)
 	_cards.append(b)

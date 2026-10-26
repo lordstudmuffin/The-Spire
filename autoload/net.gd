@@ -881,6 +881,15 @@ func srv_attack_for(peer: int) -> float:
 	return (8.0 + strength * 3.0 + float(rec["level"]) + rs.weapon_attack()) * (1.0 + rs.buff_value("atk"))
 
 
+## Server: Sword Art multiplier from the record's Spirit
+## (GameState.art_power, clamped like strength above).
+func srv_art_power(peer: int) -> float:
+	if not srv_records.has(peer):
+		return 1.0
+	var rec: Dictionary = srv_records[peer]
+	return GameState.art_power_for(clampi(int(rec["stats"].get("spirit", 0)), 0, stat_cap(rec["level"])))
+
+
 ## Server: the owner reported its strength and equipped weapon
 ## (Player.net_report_stats). Stats and gear live on the record now, so the
 ## report is only compared with it and a mismatch logged once per peer.

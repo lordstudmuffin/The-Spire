@@ -567,7 +567,7 @@ func srv_hit(sender: int, target: int, kind: int, from_dir: Vector3, swing: int)
 	d["hit_by"][sender] = swing
 	from_dir.y = 0.0
 	from_dir = from_dir.normalized() if from_dir.length_squared() > 0.0001 else Vector3.FORWARD
-	_pending.append({"duel": id, "attacker": sender, "defender": target, "kind": kind, "dmg": float(p.srv_attack) * float(move["mult"]),
+	_pending.append({"duel": id, "attacker": sender, "defender": target, "kind": kind, "dmg": float(p.srv_attack) * float(move["mult"]) * (Net.srv_art_power(sender) if kind != -1 else 1.0),
 		"dir": from_dir, "at": _time + WINDUP})
 	_deliver(target, {"ev": "incoming", "from": sender, "windup": WINDUP, "pos": p_pos})
 	return ""
