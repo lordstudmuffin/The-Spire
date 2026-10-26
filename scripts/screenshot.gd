@@ -357,7 +357,12 @@ func _ready() -> void:
 					var bh = scene.get("hud")
 					if bh and bh.has_method("show_battle_result"):
 						bh.show_battle_result({"kills": 3, "foes": {"Field Boar": 2, "Dire Wolf": 1}, "xp": 86, "col": 24,
-							"items": {"beast_hide": 2, "iron_ore": 1, "heal_crystal": 1}, "level_ups": 1})
+							"items": {"beast_hide": 2, "iron_ore": 1, "heal_crystal": 1}, "level_ups": 1, "party": 3})
+				"last_attack", "last_attack_fallback":
+					var lh = scene.get("hud")
+					if lh and lh.has_method("show_last_attack"):
+						lh.show_last_attack({"foe": "Greytusk, the Old Boar", "item": "" if demo == "last_attack_fallback" else "Greytusk Hide Vest",
+							"xp": 120, "col": 60, "mats": {"beast_hide": 3}})
 				"switch", "inner_area", "outer_field":
 					var wfx := VFX.get_for(pl)
 					if wfx and demo == "switch" and demo_boar:

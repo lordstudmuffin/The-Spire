@@ -4,7 +4,7 @@ extends PanelContainer
 ## in on the right under the quest tracker, counts the EXP and Col up, lists what
 ## dropped, flags a level up, then fades. One at a time; a new result
 ## replaces the old one. Fed by hud.show_battle_result(data) with
-## {kills, foes {name: n}, xp, col, items {id: n}, level_ups}.
+## {kills, foes {name: n}, xp, col, items {id: n}, level_ups, party}.
 
 const W := 300.0
 const HOLD := 4.2
@@ -59,6 +59,14 @@ func _ready() -> void:
 	v.add_child(UITheme.rule())
 	_xp_l = _stat_row(v, "EXP", UITheme.CYAN)
 	_col_l = _stat_row(v, "COL", UITheme.GOLD)
+	var party := int(_data.get("party", 1))
+	if party > 1:
+		var pr := HBoxContainer.new()
+		var pk := UITheme.label("PARTY OF %d" % party, 11, UITheme.MUTED, true)
+		pk.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		pr.add_child(pk)
+		pr.add_child(UITheme.label("+%d%% shared bonus" % int(round(Net.PARTY_BONUS_PER_MEMBER * 100.0 * (party - 1))), 12, UITheme.CYAN, true))
+		v.add_child(pr)
 	var items: Dictionary = _data.get("items", {})
 	if not items.is_empty():
 		v.add_child(UITheme.rule())

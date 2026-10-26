@@ -894,9 +894,9 @@ func _die() -> void:
 		var shares: Dictionary = Net.srv_reward_kill(_last_hitter, xp_reward, money_reward, global_position, drops, quest_id)
 		for peer in shares:
 			if peer == multiplayer.get_unique_id():
-				_grant_share(int(shares[peer][0]), int(shares[peer][1]), peer == _last_hitter)
+				_grant_share(int(shares[peer][0]), int(shares[peer][1]), peer == _last_hitter, shares.size())
 			elif multiplayer.get_peers().has(peer):
-				net_reward_split.rpc_id(peer, int(shares[peer][0]), int(shares[peer][1]), peer == _last_hitter)
+				net_reward_split.rpc_id(peer, int(shares[peer][0]), int(shares[peer][1]), peer == _last_hitter, shares.size())
 	died.emit(self)
 	visible = false
 	_death_fx()
@@ -1077,7 +1077,7 @@ func _grant_local() -> void:
 
 ## `xp`/`money` is this machine's share of the kill (the whole reward solo,
 ## a party_split share online); only the killer rolls drops and quest credit.
-func _grant_share(xp: int, money: int, killer: bool) -> void:
+func _grant_share(xp: int, money: int, killer: bool, party := 1) -> void:
 	var fx := VFX.get_for(self)
 	if fx:
 		fx.sparkle(global_position + Vector3(0, size.y * 0.6, 0))
@@ -1085,7 +1085,7 @@ func _grant_share(xp: int, money: int, killer: bool) -> void:
 	GameState.add_money(maxi(money, 0))
 	var results := get_tree().get_first_node_in_group("battle_results")
 	if results:
-		results.note_kill(display_name, xp, money)
+		results.note_kill(display_name, xp, money, party)
 	if not killer or Net.remote_client():
 		return  # online, drops and quest credit are rolled on the server record (net_apply "loot")
 	for mat in drops:
@@ -1104,10 +1104,10 @@ func net_reward() -> void:
 
 ## Server -> one party member (or the killer): your share of this kill.
 @rpc("authority", "call_remote", "reliable")
-func net_reward_split(xp: int, money: int, killer: bool) -> void:
+func net_reward_split(xp: int, money: int, killer: bool, party := 1) -> void:
 	if multiplayer.get_remote_sender_id() != 1:
 		return
-	_grant_share(clampi(xp, 0, 1000000), clampi(money, 0, 1000000), killer)
+	_grant_share(clampi(xp, 0, 1000000), clampi(money, 0, 1000000), killer, clampi(party, 1, Net.PARTY_MAX))
 
 
 ## Authority: this mob is gone with no reward (boss adds when the Guardian
@@ -2036,6 +2036,10 @@ static var _kaykit_libs := {}      # pack dir + skeleton path -> AnimationLibrar
 
 func _model_spec() -> Dictionary:
 	var spec: Dictionary = MODELS.get(_rig_kind(), {}).duplicate()
+	if display_name.begins_with("Greytusk"):
+		# The named elite boar: grey with age, dressed by MobDress.
+		spec["tint"] = "7abcbc"  # cancels the Pig texture's pink to an old grey
+		spec["dress"] = "greytusk"
 	for k in model:
 		spec[k] = model[k]
 	return spec
