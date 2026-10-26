@@ -37,6 +37,8 @@ var _mob_spawner: MultiplayerSpawner
 var _fishing: Fishing
 var _herbs: HerbField
 var _home: PlayerHome
+## The Hollow Hearth, Rook's tavern in Hollowbrook (scripts/life/tavern.gd); null off Floor 1.
+var _tavern: Tavern
 ## Hollowbrook market stalls (P7, scripts/life/stalls.gd); null off Floor 1.
 var _stalls: Node3D = null
 ## Hollowbrook farm field and the guild notice board (P8, scripts/life/farms.gd,
@@ -428,6 +430,8 @@ func _on_interact() -> void:
 			_farms.open(int(near[0]["plot"]), hud)
 		elif near[0].has("guild_board"):
 			_guilds.open(hud)
+		elif near[0].has("tavern"):
+			_tavern.open(hud, str(near[0]["tavern"]))
 		elif near[0].has("chest"):
 			_lab.interact(int(near[0]["chest"]), hud)
 		elif near[0].has("beacon"):
@@ -605,6 +609,10 @@ func _life_interactable() -> Array:
 		var fp: Dictionary = _farms.nearest(p)
 		if not fp.is_empty():
 			return [fp, fp["label"]]
+	if _tavern:
+		var tv: Dictionary = _tavern.nearest(p)
+		if not tv.is_empty():
+			return [tv, tv["label"]]
 	if _home:
 		var hit := _home.nearest(p)
 		if not hit.is_empty():
@@ -1075,6 +1083,10 @@ func srv_action(peer: int, rs, kind: String, payload: Dictionary, pos: Vector3) 
 			if not rs.visit("waystone_%d" % i):
 				return {"error": "That stone is already awake."}
 			return {"i": i, "lit": GameState.visited_count(rs.visited, "waystone_")}
+		"tavern":
+			if _tavern == null:
+				return {"error": "There is no tavern on this floor."}
+			return _tavern.srv(peer, rs, payload, pos)
 		"stall", "stall_signs":
 			if _stalls == null:
 				return {"error": "There is no market on this floor."}
@@ -1166,6 +1178,10 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 	if kind in ["stall", "stall_signs"]:
 		if _stalls:
 			_stalls.on_net(kind, res)
+		return
+	if kind == "tavern":
+		if _tavern:
+			_tavern.on_net(kind, res)
 		return
 	if kind in ["farm", "farm_signs"]:
 		if _farms:
@@ -1610,6 +1626,9 @@ func _spawn_hollowbrook_chain() -> void:
 	rook.appearance = {"hair_color": "4a3a2a", "outfit_color": "6a3a2a", "hair_style": 0, "eye_color": "5a4a3a", "height": 1.08}
 	rook.position = c + Vector3(-2.2, 0, -6.4)
 	rook.rotation.y = PI * 0.15
+	if _tavern:
+		rook.position = _tavern.interior + Tavern.ROOK_SPOT  # behind his bar
+		rook.rotation.y = PI
 	rook.quest_id = "tavern_stew"
 	_set_talk(rook, _rook_talk)
 	add_child(rook)
@@ -2678,6 +2697,8 @@ func _build_hollowbrook() -> void:
 			WorldProps.house(self, pos, kinds[i], colors[i], face, WorldProps.HOUSE * 0.9)
 		else:
 			WorldArt.house(self, pos, 5.0, 4.5, 3.4, face, [1, 3, 0, 1, 2][i])
+		if kinds[i] == "tavern":
+			_build_tavern(pos, face, WorldProps.footprint("tavern", colors[i], WorldProps.HOUSE * 0.9))
 	# Well in the middle.
 	if WorldProps.ready():
 		WorldProps.house(self, HOLLOWBROOK, "well", "red", 0.6, 4.2)
@@ -2716,6 +2737,15 @@ func _build_hollowbrook() -> void:
 	elder.rotation.y = PI
 	_set_talk(elder, _elder_talk)
 	add_child(elder)
+
+
+## Rook's tavern: its door and exit mat are pads (the server knows the jump)
+## and its hearth is a cooking fire.
+func _build_tavern(pos: Vector3, face: float, footprint: Vector2) -> void:
+	_tavern = Tavern.build(self, pos, face, footprint)
+	_pads.append({"pos": _tavern.door_pos, "label": "Enter the Hollow Hearth", "dest": _tavern.spawn_inside, "toast": "The Hollow Hearth"})
+	_pads.append({"pos": _tavern.exit_pos, "label": "Leave the tavern", "dest": _tavern.door_out + Vector3(0, 1, 0), "toast": "Hollowbrook"})
+	_campfires.append({"pos": _tavern.interior + Tavern.HEARTH + Vector3(1.4, 0, 0), "range": 2.2, "label": "Cook at the tavern hearth", "where": "The Hollow Hearth"})
 
 
 func _elder_talk(gs = GameState) -> String:

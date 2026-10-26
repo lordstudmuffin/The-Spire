@@ -28,6 +28,8 @@ var _farm_panel: PanelContainer
 var _farm
 var _guild_panel: PanelContainer
 var _guild
+var _tavern_panel: PanelContainer
+var _tavern: TavernScreen
 var _tick := 0.0
 
 
@@ -64,6 +66,9 @@ func _build() -> void:
 	_farm_panel = _hud._modal(_root, 0)
 	_farm = FarmScreenScript.build()
 	_hud._modal_box(_farm_panel).add_child(_farm)
+	_tavern_panel = _hud._modal(_root, 0)
+	_tavern = TavernScreen.build()
+	_hud._modal_box(_tavern_panel).add_child(_tavern)
 	_guild_panel = _hud._modal(_root, 0)
 	_guild = GuildScreenScript.build()
 	_hud._modal_box(_guild_panel).add_child(_guild)
@@ -150,7 +155,8 @@ func _process(delta: float) -> void:
 
 func any_open() -> bool:
 	return _cook_panel.visible or _shop_panel.visible or _store_panel.visible or (_stall_panel != null and _stall_panel.visible) \
-		or (_farm_panel != null and _farm_panel.visible) or (_guild_panel != null and _guild_panel.visible)
+		or (_farm_panel != null and _farm_panel.visible) or (_guild_panel != null and _guild_panel.visible) \
+		or (_tavern_panel != null and _tavern_panel.visible)
 
 
 func cooking_open() -> bool:
@@ -167,12 +173,14 @@ func hide_all() -> void:
 		_farm_panel.hide()
 	if _guild_panel:
 		_guild_panel.hide()
+	if _tavern_panel:
+		_tavern_panel.hide()
 
 
 func _open(panel: PanelContainer) -> void:
 	_hud._hide_screens()
-	if "_craft_panel" in _hud:
-		_hud._craft_panel.hide()
+	if _hud.has_method("_hide_craft"):
+		_hud._hide_craft()
 	panel.show()
 	_hud._pop_in(panel)
 	UITheme.focus_first_in(panel)  # D-pad / keyboard start on the first button
@@ -246,6 +254,16 @@ func open_guild(guilds: Node):
 	_guild.open(guilds)
 	_open(_guild_panel)
 	return _guild
+
+
+func open_tavern(tavern: Node, tab := "counter"):
+	_open(_tavern_panel)
+	_tavern.open(tavern, tab)
+	return _tavern
+
+
+func tavern_open() -> bool:
+	return _tavern_panel != null and _tavern_panel.visible
 
 
 func guild_open() -> bool:

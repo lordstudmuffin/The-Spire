@@ -613,7 +613,7 @@ func _ready() -> void:
 	GameState.level = 6
 	world._try_enter_labyrinth()
 	_check(world.player.global_position.distance_to(world.LAB_LEVELS[0]) < 20, "gate opens onto Terrace 1")
-	_check(world._pads.size() == 7, "5 teleport pads placed (+ cottage door and exit)")
+	_check(world._pads.size() == 9, "5 teleport pads placed (+ cottage and tavern doors and exits)")
 	world._use_pad(world._pads[1])
 	_check(world.player.global_position.distance_to(world.LAB_LEVELS[1]) < 20, "pad climbs to Terrace 2")
 	world._use_pad(world._pads[3])
@@ -731,6 +731,7 @@ func _ready() -> void:
 	_check(world.srv_action(4343, vrs, "craft", {"recipe": "Iron Sword"}, npc_pos["Smith Haldor"]).has("name") and vrec["inventory"].size() == 1, "crafting at Haldor's anvil lands on the record")
 	_check(world.srv_action(4343, vrs, "craft", {"recipe": "Spirit Blade"}, npc_pos["Smith Haldor"]).has("error"), "crafting without the shards is refused")
 	_test_forging(world, vrs, vrec, npc_pos["Smith Haldor"], far)
+	_test_tavern(world, vrs, vrec, far)
 	_check(world.srv_action(4343, vrs, "cook", {"id": "grilled_trout"}, far).has("error") and world.srv_action(4343, vrs, "buy", {"id": "rug"}, far).has("error"), "cooking needs a fire, buying needs the trader")
 	vrs.add_material("river_trout", 1)
 	vrs.add_material("wild_herb", 1)
@@ -2796,4 +2797,80 @@ func _test_forging(world: Node, vrs, vrec: Dictionary, anvil: Vector3, far: Vect
 		last = at
 	_check(is_equal_approx(got[0], 1.0) and fw.is_active(), "anvil widget grades a perfect run 1.0 and holds until the piece is forged")
 	fw.queue_free()
+
+
+## The Hollow Hearth (scripts/life/tavern.gd): door pads, Rook behind his
+## bar, meals and rooms on the record, and kitchen orders capped at three
+## cooks per order on a throwaway realm.
+func _test_tavern(world: Node, vrs, vrec: Dictionary, far: Vector3) -> void:
+	print("== Tavern: the Hollow Hearth")
+	var tv: Tavern = world._tavern
+	_check(tv != null and tv.interior.y < -15.0 and Vector2(tv.interior.x, tv.interior.z).distance_to(Vector2(tv.house_pos.x, tv.house_pos.z)) < 0.1, "the tavern's hall sits under its house")
+	var pads := 0
+	for pad in world._pads:
+		if (pad["dest"] is Vector3 and pad["dest"] == tv.spawn_inside) or pad["pos"] == tv.exit_pos:
+			pads += 1
+	_check(pads == 2, "door and exit mat are pads the server knows")
+	var rook: Node3D = null
+	for n in world.get_tree().get_nodes_in_group("npcs"):
+		if n is NPC and n.npc_name == "Innkeeper Rook":
+			rook = n
+	_check(rook != null and rook.global_position.distance_to(tv.interior + Tavern.ROOK_SPOT) < 0.5, "Rook works behind his bar")
+	_check(tv.nearest(tv.interior + Tavern.COUNTER).get("tavern", "") == "counter" and tv.nearest(tv.interior + Tavern.BOARD).get("tavern", "") == "orders" and tv.nearest(far).is_empty(), "bar, orders board and stairs are interactables")
+	var a := Tavern.orders_for(1234)
+	var dishes := {}
+	for o in a:
+		dishes[o["dish"]] = true
+	_check(a == Tavern.orders_for(1234) and a.size() == 3 and dishes.size() == 3 and a != Tavern.orders_for(1235), "a shift's three orders are deterministic, distinct, and change with the shift")
+	# Server: meals and rooms on the record, refused away from the bar.
+	var bar: Vector3 = tv.interior + Tavern.COUNTER
+	vrec["money"] = 200
+	_check(world.srv_action(4343, vrs, "tavern", {"op": "meal", "id": "hearth_stew"}, far).has("error") and vrec["money"] == 200, "ordering away from the bar is refused")
+	var r: Dictionary = world.srv_action(4343, vrs, "tavern", {"op": "meal", "id": "hearth_stew"}, bar)
+	_check(r.get("meal", "") == "hearth_stew" and vrec["money"] == 170 and vrec["buffs"].has("tavern_meal") and r["view"]["orders"].size() == 3, "Hearth Stew: 30 Col, the meal buff on the record, a fresh view")
+	world.srv_action(4343, vrs, "tavern", {"op": "meal", "id": "honey_mead"}, bar)
+	_check(str(vrec["buffs"]["tavern_meal"]["name"]) == "Honey Mead", "one tavern meal at a time (the mead replaces the stew)")
+	vrec["hp"] = 5.0
+	r = world.srv_action(4343, vrs, "tavern", {"op": "room"}, tv.interior + Tavern.STAIRS)
+	_check(r.get("room", false) and float(vrec["hp"]) > 5.0 and vrec["buffs"].has("rested") and vrec["money"] == 170 - 18 - Tavern.ROOM_PRICE, "a room: Col, full heal and Well Rested")
+	# Kitchen orders on a throwaway realm: three cooks per order, first gets the bonus.
+	const TDIR := "user://realm_test_tavern"
+	var d := DirAccess.open(TDIR)
+	if d != null:
+		for f in d.get_files():
+			DirAccess.remove_absolute(TDIR + "/" + f)
+	var rdb = Net.RealmDBScript.open("tavern", TDIR)
+	var now := 1_800_000_000.0
+	var o0: Dictionary = Tavern.orders_for(Tavern.shift_index(now))[0]
+	var cooks := []
+	for k in 4:
+		var rec := Net._new_record(Net.sanitize_character({"name": "Cook%d" % k}), "%032d" % (k + 1), {})
+		rec["materials"][o0["dish"]] = 5
+		cooks.append(Net.RecordState.new(rec))
+	var h := func(k: int) -> String: return Net.RealmDBScript.holder_of_record(cooks[k].rec)
+	_check(Tavern.run(rdb, cooks[0], h.call(0), {"op": "order", "i": 0}, false, now).has("error"), "orders are delivered at the bar")
+	var m0 := int(cooks[0].rec["money"])
+	r = Tavern.run(rdb, cooks[0], h.call(0), {"op": "order", "i": 0}, true, now)
+	_check(r.get("first", false) and int(cooks[0].rec["money"]) == m0 + int(o0["col"]) + int(round(o0["col"] * Tavern.FIRST_BONUS)) and int(cooks[0].rec["materials"][o0["dish"]]) == 5 - int(o0["qty"]) and r["view"]["orders"][0]["mine"], "first cook: dishes taken, Col plus Rook's thanks")
+	_check(Tavern.run(rdb, cooks[0], h.call(0), {"op": "order", "i": 0}, true, now).has("error"), "one delivery per cook per order")
+	var m1 := int(cooks[1].rec["money"])
+	r = Tavern.run(rdb, cooks[1], h.call(1), {"op": "order", "i": 0}, true, now)
+	_check(not r.get("first", true) and int(cooks[1].rec["money"]) == m1 + int(o0["col"]), "the second cook is paid, without the bonus")
+	Tavern.run(rdb, cooks[2], h.call(2), {"op": "order", "i": 0}, true, now)
+	r = Tavern.run(rdb, cooks[3], h.call(3), {"op": "order", "i": 0}, true, now)
+	_check(r.has("error") and int(cooks[3].rec["materials"][o0["dish"]]) == 5 and int(Tavern.view(rdb, h.call(3), now)["orders"][0]["left"]) == 0, "a fourth cook is turned away, keeps the dishes, the order shows 0 places")
+	var later := now + Tavern.SHIFT_SECS
+	r = Tavern.run(rdb, cooks[3], h.call(3), {"op": "order", "i": 1}, true, later)
+	var stale := 0
+	for id in rdb.data["claims"]:
+		if str(id).begins_with("kitchen:%d:" % Tavern.shift_index(now)):
+			stale += 1
+	_check(stale == 0, "a new shift lets the old order claims go")
+	rdb.close()
+	# Offline: the same path on GameState.
+	var gm := GameState.money
+	GameState.money = 100
+	r = Tavern.run(Net.get_realm(), GameState, Net.local_holder(), {"op": "meal", "id": "rooks_plate"}, true)
+	_check(not r.has("error") and GameState.money == 35 and GameState.has_buff("tavern_meal"), "offline: Rook's Plate on GameState")
+	GameState.money = gm
 
