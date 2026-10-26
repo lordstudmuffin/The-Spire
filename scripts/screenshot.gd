@@ -341,6 +341,9 @@ func _ready() -> void:
 			scene._fishing._drop_bobber()
 			scene._fishing._bite()
 			Engine.time_scale = 0.05
+		# --spawn-boss: raise the floor boss in its arena (for a model check).
+		if i == 4 and "--spawn-boss" in args and scene.has_method("_spawn_boss"):
+			scene._spawn_boss()
 		# --pad: draw gamepad prompts. --unique: hold Twin Fang (unique slots).
 		if i == 30 and "--unique" in args:
 			GameState.unique_skill = UniqueSkills.TWIN_FANG

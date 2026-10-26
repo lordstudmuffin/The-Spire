@@ -6,8 +6,8 @@ extends VBoxContainer
 ## invite prompt (Y / N or buttons). Cards are pooled; nothing is rebuilt
 ## per tick.
 
-const HP_COLORS := [Color("c9184a"), UITheme.ROSE, Color("ff8fa3")]
-const HP_LOW := [Color("7a1020"), Color("c9184a")]
+# Same green / yellow / red bands as the player gauge (PlayerStatus).
+const HP_COLORS := [Color("4fb83a"), Color("7fd35a"), Color("9be86a")]
 
 var _header: PanelContainer
 var _count: Label
@@ -30,7 +30,7 @@ func _build() -> void:
 	custom_minimum_size = Vector2(300, 0)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_header = PanelContainer.new()
-	var hs := UITheme.box(Color(UITheme.NAVY.r, UITheme.NAVY.g, UITheme.NAVY.b, 0.72), Color(UITheme.GREEN.r, UITheme.GREEN.g, UITheme.GREEN.b, 0.35), 10, 1)
+	var hs := UITheme.box(Color(UITheme.NAVY.r, UITheme.NAVY.g, UITheme.NAVY.b, 0.5), Color(UITheme.GREEN.r, UITheme.GREEN.g, UITheme.GREEN.b, 0.35), 4, 1)
 	hs.content_margin_left = 12
 	hs.content_margin_right = 8
 	hs.content_margin_top = 4
@@ -62,8 +62,8 @@ func _card_style(c: Color) -> StyleBoxFlat:
 	var key := c.to_html(false)
 	if _styles.has(key):
 		return _styles[key]
-	var s := UITheme.box(Color(UITheme.NAVY.r, UITheme.NAVY.g, UITheme.NAVY.b, 0.72), Color(c.r, c.g, c.b, 0.45), 10, 1)
-	s.border_width_left = 4
+	var s := UITheme.box(Color(UITheme.NAVY.r, UITheme.NAVY.g, UITheme.NAVY.b, 0.38), Color(c.r, c.g, c.b, 0.45), 4, 1)
+	s.border_width_left = 3
 	s.content_margin_left = 12
 	s.content_margin_right = 12
 	s.content_margin_top = 7
@@ -143,10 +143,10 @@ func _make_card() -> Dictionary:
 	bar.show_percentage = false
 	bar.max_value = 100
 	bar.set_anchors_preset(Control.PRESET_FULL_RECT)
-	var bg := UITheme.box(Color(0, 0, 0, 0.5), Color(1, 1, 1, 0.08), 4)
+	var bg := UITheme.box(Color(0.06, 0.08, 0.13, 0.62), Color(1, 1, 1, 0.9), 2)
 	bg.set_content_margin_all(0)
 	bar.add_theme_stylebox_override("background", bg)
-	bar.add_theme_stylebox_override("fill", UITheme.gradient_fill_box(HP_COLORS, 4))
+	bar.add_theme_stylebox_override("fill", UITheme.gradient_fill_box(HP_COLORS, 2))
 	wrap.add_child(bar)
 	var hp := UITheme.label("", 10, UITheme.PARCH, true)
 	hp.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -289,9 +289,11 @@ func _tick(force: bool) -> void:
 		d["bar"].value = hp
 		d["hp"].text = "%d%%" % hp
 		var low := hp <= 30
-		if low != d["low"] or force:
+		var band: Array = PlayerStatus.band_colors(hp / 100.0)
+		if band != d.get("band", []) or force:
 			d["low"] = low
-			d["bar"].add_theme_stylebox_override("fill", UITheme.gradient_fill_box(HP_LOW if low else HP_COLORS, 4))
+			d["band"] = band
+			d["bar"].add_theme_stylebox_override("fill", UITheme.gradient_fill_box(HP_COLORS if band == PlayerStatus.HP_GREEN else band, 2))
 			var c: Color = UITheme.ROSE if low else UITheme.GREEN
 			d["panel"].add_theme_stylebox_override("panel", _card_style(c))
 			d["ring"].set_meta("stroke", c)

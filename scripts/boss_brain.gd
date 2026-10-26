@@ -46,6 +46,10 @@ const PRESETS := {
 		"break_time": 1.2,
 		"enrage_time": 1.8,
 		"adds": [2, 3],
+		# Arena hazard: from this bar on, stones fall from the summit's broken
+		# crown. Rings are marked `secs` ahead; one always lands on a fighter.
+		# Not parryable; a held guard blocks it like the slam.
+		"rockfall": {"from_bar": 2, "cd": [5.0, 7.5], "count": 3, "radius": 2.4, "secs": 1.4, "mult": 1.3},
 		"phases": [
 			{
 				"windup": {"sweep": 0.6, "charge": 0.8, "slam": 1.0},
@@ -95,7 +99,9 @@ var _charge_hit := {}
 var _charge_line: Array = []   # players on the line when the charge started
 var _threatened: Array = []    # players inside the slam ring at the warning
 var _home_set := false
-var _report := {"adds_spawned": 0, "breaks": 0, "resets": 0, "slams": 0, "charges": 0, "sweeps": 0}
+var _hazards: Array = []       # pending rockfalls: {pos, radius, t}
+var _hazard_cd := 0.0
+var _report := {"adds_spawned": 0, "breaks": 0, "resets": 0, "slams": 0, "charges": 0, "sweeps": 0, "rocks": 0}
 
 
 func _ready() -> void:
@@ -176,6 +182,7 @@ func tick(delta: float, _nearest: Node3D) -> Dictionary:
 	_slam_cd = maxf(_slam_cd - delta, 0.0)
 	_check_bars()
 	var fighters := _fighters()
+	_hazard_tick(delta, fighters)
 	if _engaged:
 		if fighters.is_empty():
 			_away += delta
@@ -498,6 +505,62 @@ func _strike(t: Node3D, dmg: float, parryable: bool) -> String:
 	return outcome
 
 
+# ------------------------------------------------------------ arena hazard --
+
+## Rockfall: armed once the boss is engaged and down to tuning.rockfall
+## .from_bar; lands pending stones and marks new ones on its own clock, so it
+## keeps pressure on during wind-ups, staggers and the enrage roar alike.
+func _hazard_tick(delta: float, fighters: Array) -> void:
+	var rf: Dictionary = tuning.get("rockfall", {})
+	for h in _hazards.duplicate():
+		h["t"] = float(h["t"]) - delta
+		if float(h["t"]) <= 0.0:
+			_hazards.erase(h)
+			_land_rock(h["pos"], float(h["radius"]), enemy.damage * float(rf.get("mult", 1.0)))
+	if rf.is_empty() or not _engaged or fighters.is_empty() or current_bar() > int(rf.get("from_bar", 1)):
+		return
+	_hazard_cd -= delta
+	if _hazard_cd > 0.0:
+		return
+	var cd: Array = rf.get("cd", [6.0, 6.0])
+	_hazard_cd = rng.randf_range(float(cd[0]), float(cd[1]))
+	var radius := float(rf.get("radius", 2.4))
+	var secs := float(rf.get("secs", 1.4))
+	for i in int(rf.get("count", 3)):
+		var at: Vector3
+		if i == 0:
+			at = _pos_of(fighters[rng.randi() % fighters.size()])
+		else:
+			var a := rng.randf() * TAU
+			var r := sqrt(rng.randf()) * (arena_radius - radius)
+			at = arena_center + Vector3(cos(a) * r, 0.0, sin(a) * r)
+		at.y = arena_center.y
+		_hazards.append({"pos": at, "radius": radius, "t": secs})
+		_emit("hazard", {"pos": at, "radius": radius, "secs": secs})
+
+
+func _land_rock(at: Vector3, radius: float, dmg: float) -> void:
+	_report["rocks"] += 1
+	for p in get_tree().get_nodes_in_group("players"):
+		if not _alive(p):
+			continue
+		var flat := (_pos_of(p) - at) * Vector3(1, 0, 1)
+		if flat.length() >= radius or absf(_pos_of(p).y - at.y) > 4.0:
+			continue
+		var outcome := ""
+		if p.has_method("is_stunned") and p.is_stunned():
+			outcome = "stunned"
+		elif bool(p.get("blocking")):
+			outcome = "block"
+		enemy._show_defence(p, outcome)
+		enemy._damage_player(p, dmg * (1.0 - Player.BLOCK_REDUCTION) if outcome == "block" else dmg)
+	_emit("hazard_land", {"pos": at, "radius": radius})
+
+
+func pending_hazards() -> int:
+	return _hazards.size()
+
+
 # ------------------------------------------------------- bars / phase / adds --
 
 ## Enemy.take_hit calls this right after hp changes (and tick polls it), so a
@@ -593,12 +656,15 @@ func reset(reason := "leash") -> void:
 	_away = 0.0
 	_cooldown = 0.0
 	_slam_cd = 0.0
+	_hazards.clear()
+	_hazard_cd = 0.0
 	_target = null
 	_emit("reset", {"reason": reason})
 
 
 func _on_boss_died(_e: Enemy) -> void:
 	_cancel()
+	_hazards.clear()
 	clear_adds()
 	state = State.IDLE
 	_emit("death", {})
@@ -606,9 +672,9 @@ func _on_boss_died(_e: Enemy) -> void:
 
 ## One line for world._print_report.
 func report() -> String:
-	return "bar=%d/%d phase=%d state=%s adds=%d spawned=%d breaks=%d resets=%d moves=s%d/c%d/g%d" % [
+	return "bar=%d/%d phase=%d state=%s adds=%d spawned=%d breaks=%d resets=%d moves=s%d/c%d/g%d rocks=%d" % [
 		current_bar(), bars, phase, state_name(), living_adds(), _report["adds_spawned"], _report["breaks"],
-		_report["resets"], _report["sweeps"], _report["charges"], _report["slams"]]
+		_report["resets"], _report["sweeps"], _report["charges"], _report["slams"], _report["rocks"]]
 
 
 # ------------------------------------------------------------------ events --
@@ -693,6 +759,20 @@ func net_event(kind: String, data: Dictionary) -> void:
 			var me := get_tree().get_first_node_in_group("player")
 			if me and me.has_method("shake"):
 				me.shake(0.4)
+		"hazard":
+			var hr := float(data.get("radius", 2.4))
+			var hs := float(data.get("secs", 1.4))
+			Audio.play("skill_charge", pos, 0.1, -4.0, 0.5)
+			if fx and fx.has_method("boss_rockfall_warning"):
+				fx.call("boss_rockfall_warning", e, pos, hr, hs)
+			elif fx:
+				fx.ring(pos + Vector3(0, 0.1, 0), Color(1.0, 0.55, 0.2), hr * 2.0, hs)
+		"hazard_land":
+			Audio.play("slam", pos, 0.1, -2.0, 1.2)
+			if fx and fx.has_method("boss_rockfall_impact"):
+				fx.call("boss_rockfall_impact", e, pos, float(data.get("radius", 2.4)))
+			elif fx:
+				fx.dust_ring(pos, float(data.get("radius", 2.4)))
 		"phase":
 			phase = int(data.get("phase", 2))
 		"reset":

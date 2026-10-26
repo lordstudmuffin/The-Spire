@@ -1567,7 +1567,9 @@ const MODELS := {
 	"kobold": {"pack": "skeletons", "name": "Skeleton_Minion", "tint": "cfd0a4", "fit": 1.5},
 	"sergeant": {"pack": "skeletons", "name": "Skeleton_Warrior", "tint": "d8bf92", "fit": 1.35},
 	"sentinel": {"pack": "adventurers", "name": "Knight", "tint": "9aa4b0", "fit": 1.2},
-	"king": {"pack": "creatures", "name": "Dragon", "tint": "b4a6bc", "fit": 1.35, "yaw": 0},
+	# min_value lifts the pack's near-black paints so the boss reads as
+	# weathered stone-and-scale in daylight instead of a silhouette.
+	"king": {"pack": "creatures", "name": "Dragon", "tint": "b4a6bc", "fit": 1.35, "yaw": 0, "min_value": 0.5},
 	"slime": {"pack": "creatures", "name": "Slime", "tint": "", "fit": 1.0},
 	"rat": {"pack": "creatures", "name": "Rat", "tint": "", "fit": 1.0},
 	"bat": {"pack": "creatures", "name": "Bat", "tint": "", "fit": 1.0, "lift": 1.2, "yaw": 0},
@@ -1666,7 +1668,7 @@ func _build_model(spec: Dictionary) -> bool:
 			continue
 		for s in mi.mesh.get_surface_count():
 			var src: Material = mi.get_active_material(s)
-			mi.set_surface_override_material(s, _creature_material(src, tint).duplicate())
+			mi.set_surface_override_material(s, _creature_material(src, tint, float(spec.get("min_value", 0.0))).duplicate())
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		RenderProfile.register_lod(mi, MOB_LOD_RANGE)
 	_set_anim("idle")
@@ -1739,8 +1741,8 @@ func _model_bounds(inst: Node3D, pack: String, mname: String) -> AABB:
 
 ## Cel version of an imported material (toon_creature.gdshader), tinted.
 ## Templates are shared per source material + tint; callers duplicate.
-static func _creature_material(src: Material, tint: Color) -> ShaderMaterial:
-	var key := "%d|%s" % [src.get_instance_id() if src else 0, tint.to_html(false)]
+static func _creature_material(src: Material, tint: Color, min_value := 0.0) -> ShaderMaterial:
+	var key := "%d|%s|%.2f" % [src.get_instance_id() if src else 0, tint.to_html(false), min_value]
 	if _creature_mats.has(key):
 		return _creature_mats[key]
 	if _creature_shader == null:
@@ -1761,6 +1763,8 @@ static func _creature_material(src: Material, tint: Color) -> ShaderMaterial:
 		var a = src.get_shader_parameter("albedo")
 		if a is Color:
 			base = a
+	if min_value > 0.0 and base.v < min_value:
+		base = Color.from_hsv(base.h, base.s * 0.8, lerpf(base.v, min_value, 0.85))
 	m.set_shader_parameter("albedo", Color(base.r * tint.r, base.g * tint.g, base.b * tint.b, 1.0))
 	_creature_mats[key] = m
 	return m

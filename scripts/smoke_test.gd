@@ -1714,12 +1714,33 @@ func _test_boss() -> void:
 	b.tick(0.05, pl)
 	_check(b.phase == 2 and b.is_enraged() and events.has("phase") and b.state == BossBrain.State.ENGAGE, "the roar ends: phase 2")
 	_check(float(b._ph()["windup"]["sweep"]) < float(P0["windup"]["sweep"]) and float(b._ph()["slam_radius"]) > float(P0["slam_radius"]) and float(b._ph()["charge_speed"]) > float(P0["charge_speed"]) and b._ph() == P1, "phase 2 moveset: faster wind-ups, wider slam, faster charge")
+	# Arena hazard: from bar 2 down, stones fall on marked rings.
+	b._hazards.clear()
+	b._hazard_cd = 0.0
+	b._cooldown = 99.0
+	GameState.heal_full()
+	pl.global_position = boss.global_position + Vector3(0, 0, 8)
+	pl.velocity = Vector3.ZERO
+	b.tick(0.01, pl)
+	var on_me := false
+	for h in b._hazards:
+		if ((h["pos"] as Vector3) - pl.global_position).length() < 1.5:
+			on_me = true
+	_check(b.pending_hazards() == 3 and events.has("hazard") and on_me, "rockfall marks three stones, one on a fighter")
+	hp0 = GameState.hp
+	b.tick(1.5, pl)
+	_check(GameState.hp < hp0 and b.pending_hazards() == 0 and events.has("hazard_land"), "a landing stone hurts the fighter under it")
+	b._hazard_cd = 0.0
+	b.tick(0.01, pl)
+	_check(b.pending_hazards() == 3, "the next volley is marked")
+	GameState.heal_full()
 	# Leash: nobody alive on the summit -> full reset, adds gone.
 	_check(b.living_adds() >= 2, "adds alive before the reset (%d)" % b.living_adds())
 	pl.global_position = Vector3(0, 1, 0)
 	b.tick(5.0, pl)
 	_check(b.state == BossBrain.State.IDLE and boss.hp == boss.max_hp and b.current_bar() == 4 and b.phase == 1 and events[-1] == "reset", "nobody on the summit for the grace period: the Guardian resets to full, phase 1")
 	_check(b.living_adds() == 0 and boss.global_position.distance_to(boss.home) < 0.5, "the reset removes the adds and walks the Guardian home")
+	_check(b.pending_hazards() == 0, "the reset clears falling stones")
 	await get_tree().process_frame
 	_check(b.adds.is_empty() and boss.visible and boss.is_inside_tree(), "vanished adds are freed; the Guardian stays")
 	# Death: adds vanish; the Last Attack bonus still pays.
