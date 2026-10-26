@@ -93,6 +93,11 @@ var arena_radius := 18.0
 const LEASH_PAD := 6.0
 ## World hook (authority): Callable(brain, count) -> Array of Enemy adds.
 var spawn_adds: Callable
+## Where he waits (world: the dais of WorldProps.boss_throne), or ZERO. As in
+## Aincrad, the Guardian sits on his throne at the back of the room and leaps
+## down into the arena when the raid comes in ("descend" telegraph).
+var throne := Vector3.ZERO
+const DESCEND_SECS := 1.1
 var adds: Array = []
 
 var bars := 4
@@ -217,7 +222,7 @@ func tick(delta: float, _nearest: Node3D) -> Dictionary:
 		State.IDLE:
 			var t := _pick_target(fighters)
 			if t == null:
-				return _wander(delta)
+				return _seated(pos) if throne != Vector3.ZERO else _wander(delta)
 			_engaged = true
 			_target = t
 			state = State.ENGAGE
@@ -225,6 +230,8 @@ func tick(delta: float, _nearest: Node3D) -> Dictionary:
 			_emit("engage", {})
 			if int(tuning.get("start_adds", 0)) > 0:
 				_spawn_adds(_add_count(int(tuning["start_adds"])))
+			if throne != Vector3.ZERO and pos.distance_to(throne) < 2.0:
+				_descend(t)
 			return _hold(pos)
 		State.ENGAGE:
 			var t := _pick_target(fighters)
@@ -269,6 +276,35 @@ func tick(delta: float, _nearest: Node3D) -> Dictionary:
 
 func _hold(pos: Vector3) -> Dictionary:
 	return {"target": pos, "spd": 0.0}
+
+
+## On the throne: still, facing the arena.
+func _seated(pos: Vector3) -> Dictionary:
+	var to := arena_center - pos
+	to.y = 0.0
+	return {"target": pos + (to.normalized() * 2.0 if to.length() > 0.1 else Vector3(0, 0, 2)), "spd": 0.0}
+
+
+## The first move of a fight from the throne: a telegraphed leap down onto the
+## arena floor in front of the dais (a slam: whoever stands there is hit).
+func _descend(t: Node3D) -> void:
+	var e := enemy
+	var pos := e.global_position
+	var ph := _ph()
+	move = "slam"
+	state = State.WINDUP
+	_target = t
+	_timer = DESCEND_SECS
+	var to := arena_center - throne
+	to.y = 0.0
+	_slam_at = _clamp(throne + to.normalized() * minf(5.5, to.length()))
+	_slam_at.y = pos.y
+	_threatened = []
+	for p in get_tree().get_nodes_in_group("players"):
+		if _alive(p) and _pos_of(p).distance_to(_slam_at) < float(ph["slam_radius"]) * 1.8:
+			_threatened.append(p)
+	_emit("telegraph", {"move": "slam", "secs": _timer, "pos": _slam_at, "from": pos, "leap": true, "descend": true,
+		"radius": float(ph["slam_radius"])})
 
 
 func _wander(delta: float) -> Dictionary:

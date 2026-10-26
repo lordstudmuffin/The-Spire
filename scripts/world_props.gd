@@ -1219,3 +1219,63 @@ static func stall_keeper(parent: Node3D, pos: Vector3, rot: float, index: int) -
 		parent.add_child(sh)
 	parent.visibility_changed.connect(build)
 	return true
+
+
+## The Guardian's throne at the back of the summit arena (the Floor 1 boss
+## waits on a throne at the far end of its hall and leaps down to fight).
+## A two-step dais, a high pointed back with a rune disc and two great
+## bone horns, armrests, and a red pelt over the seat. Faces +Z (toward
+## the arena entry). Solid.
+static func boss_throne(parent: Node3D, pos: Vector3, rune: Color) -> void:
+	var stone := WorldArt.stone_mat(Color("4a4658"), Color("3a3748"), "castle_brick_07", 0.3, {"detail_strength": 0.45})
+	var dark := WorldArt.stone_mat(Color("2e2b39"), Color("252230"), "rock_wall_10", 0.3, {"detail_strength": 0.4})
+	var bone := WorldArt.mat(Color("e6dcc4"), 0.03)
+	var pelt := WorldArt.mat(Color("7a2a2a"), 0.03)
+	var gold := WorldArt.mat(Color("c9a24a"), 0.03, Color("c9a24a"), 0.15)
+	var bx := func(size: Vector3, at: Vector3, m: Material, rot := Vector3.ZERO) -> MeshInstance3D:
+		var b := BoxMesh.new()
+		b.size = size
+		return WorldArt.mesh_node(parent, b, pos + at, m, rot)
+	# Dais: two steps.
+	bx.call(Vector3(5.0, 0.35, 4.0), Vector3(0, 0.175, 0), stone)
+	bx.call(Vector3(3.8, 0.35, 3.0), Vector3(0, 0.525, -0.3), stone)
+	bx.call(Vector3(3.9, 0.06, 3.1), Vector3(0, 0.73, -0.3), gold)  # gilt edge
+	bx.call(Vector3(3.7, 0.06, 2.9), Vector3(0, 0.75, -0.3), dark)
+	# Seat and back.
+	bx.call(Vector3(2.0, 0.9, 1.6), Vector3(0, 1.2, -0.6), dark)
+	bx.call(Vector3(2.4, 3.6, 0.5), Vector3(0, 2.6, -1.35), stone)
+	var peak := PrismMesh.new()
+	peak.size = Vector3(2.4, 1.2, 0.5)
+	WorldArt.mesh_node(parent, peak, pos + Vector3(0, 5.0, -1.35), stone)
+	WorldArt.rune_ring(parent, pos + Vector3(0, 3.4, -1.08), 0.6, rune, 0.12).rotation.x = PI / 2
+	# Armrests with gilt caps.
+	for sx in [-1.0, 1.0]:
+		bx.call(Vector3(0.45, 0.6, 1.7), Vector3(sx * 1.2, 1.95, -0.55), stone)
+		bx.call(Vector3(0.5, 0.08, 1.75), Vector3(sx * 1.2, 2.28, -0.55), gold)
+		# Great bone horns curving up and out from the top of the back.
+		var horn := Node3D.new()
+		horn.position = pos + Vector3(sx * 1.05, 4.6, -1.35)
+		horn.rotation = Vector3(0, 0, sx * -0.55)
+		parent.add_child(horn)
+		var seg_h := 0.75
+		var r := 0.22
+		var at := Vector3.ZERO
+		var tilt := 0.0
+		for k in 4:
+			var c := CylinderMesh.new()
+			c.top_radius = r * 0.72
+			c.bottom_radius = r
+			c.height = seg_h
+			c.radial_segments = 8
+			var dir := Vector3(sx * sin(tilt), cos(tilt), 0)
+			var mi := WorldArt.mesh_node(horn, c, at + dir * seg_h * 0.5, bone, Vector3(0, 0, -sx * tilt))
+			mi.position = at + dir * seg_h * 0.5
+			at += dir * seg_h
+			r *= 0.72
+			tilt -= 0.38  # curls back inward
+	# A red pelt over the seat, hanging over the front edge.
+	bx.call(Vector3(1.8, 0.08, 1.5), Vector3(0, 1.69, -0.55), pelt)
+	bx.call(Vector3(1.6, 0.7, 0.08), Vector3(0, 1.35, 0.22), pelt, Vector3(0.12, 0, 0))
+	# Collision: dais and the throne body.
+	WorldArt.box_collider(parent, Vector3(5.0, 0.7, 4.0), pos + Vector3(0, 0.35, 0))
+	WorldArt.box_collider(parent, Vector3(2.6, 4.8, 2.2), pos + Vector3(0, 2.4, -0.9))

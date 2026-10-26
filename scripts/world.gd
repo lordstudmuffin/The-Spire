@@ -258,6 +258,8 @@ func _spawn_mob_fn(data: Dictionary) -> Node:
 		brain.preset = str(data["brain"])
 		brain.arena_center = ARENA_POS
 		brain.arena_radius = ARENA_RADIUS
+		if brain.preset == "warlord" and GameState.floor == 1:
+			brain.throne = throne_pos()
 		if Net.is_authority():
 			brain.spawn_adds = _guardian_adds
 		e.add_child(brain)
@@ -2227,6 +2229,8 @@ func _build_arena() -> void:
 		WorldArt.brazier(self, ARENA_POS + p)
 		WorldArt.box_collider(self, Vector3(1.4, 2.2, 1.4), ARENA_POS + p + Vector3(0, 1.1, 0))
 	WorldProps.summit_props(self, ARENA_POS, ARENA_RADIUS, rune, gate_dir, entry_dir)
+	# The Guardian's throne before the sealed gate (it waits there, then leaps down).
+	WorldProps.boss_throne(self, ARENA_POS + Vector3(0, 0, -10.5), rune)
 
 
 func _build_platform(pos: Vector3, radius: float, color: Color) -> void:
@@ -2360,12 +2364,20 @@ func _spawn_boss() -> void:
 	# The Kobold Warlord: four stacked HP bars, a guard of halberdiers on
 	# engage and on every bar break, the weapon swap and second moveset on
 	# the last bar (BossBrain.PRESETS["warlord"]). Twice a man's height.
+	# He waits on his throne at the back of the room and leaps down when the
+	# raid comes in (BossBrain.throne).
+	var tp := throne_pos()
 	_spawn_mob({"name": BOSS_NAME, "level": 7, "hp": 650, "dmg": 18, "xp": 600, "money": 400,
 		"color": "8a6a4a", "size": [2.2, 3.4, 2.2], "speed": 3.0, "aggro": 40, "boss": true, "respawns": false,
-		"brain": "warlord", "drops": {"spirit_shard": 1.0, "iron_ore": 1.0}, "pos": [bp.x, bp.y, bp.z]})
+		"brain": "warlord", "drops": {"spirit_shard": 1.0, "iron_ore": 1.0}, "pos": [tp.x, tp.y, tp.z]})
 
 
 const BOSS_NAME := "Floor Guardian: Vargash the Kobold Warlord"
+
+
+## Top of the throne dais (WorldProps.boss_throne at ARENA_POS + (0, 0, -10.5)).
+func throne_pos() -> Vector3:
+	return ARENA_POS + Vector3(0, 1.0, -10.3)
 
 
 ## The Warlord's guard: plated kobolds with halberds. Their plate halves any

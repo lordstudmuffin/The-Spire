@@ -2151,7 +2151,12 @@ func _test_boss() -> void:
 	pl.global_position = boss.global_position + Vector3(0, 0, 10)
 	pl.velocity = Vector3.ZERO
 	var ctl: Dictionary = b.tick(0.05, pl)
-	_check(b.state == BossBrain.State.ENGAGE and events.has("engage") and ctl.has("target") and ctl.has("spd"), "a player on the summit wakes the Guardian (engage event, brain drives movement)")
+	_check(boss.global_position.distance_to(w.throne_pos()) < 1.5 and b.throne != Vector3.ZERO, "the Guardian waits on his throne")
+	_check(b.state == BossBrain.State.WINDUP and b.move == "slam" and events.has("engage") and ctl.has("target") and ctl.has("spd"), "a player on the summit wakes the Guardian: he crouches to leap down (engage, then a telegraphed descent)")
+	var seat: Vector3 = boss.global_position
+	b._timer = 0.0
+	b.tick(0.05, pl)
+	_check(boss.global_position.distance_to(seat) > 4.0 and boss.global_position.z > seat.z and b.state == BossBrain.State.RECOVER, "the descent lands him on the arena floor, open to punish")
 	_check(b.living_adds() == 2, "his guard steps out on engage: two halberdiers for a lone climber (%d)" % b.living_adds())
 	# Bar breaks fire on the hit that crosses the threshold.
 	var bar_hp: float = b.bar_hp()
