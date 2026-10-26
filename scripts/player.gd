@@ -30,6 +30,8 @@ const SKILLS := [
 
 signal skill_used(index: int, cooldown: float)
 
+## EXP the last death cost (shown after the respawn).
+var last_xp_lost := 0
 ## Peer that owns this player (1 offline or for the host).
 var peer_id := 1
 ## Replicated look so other players see your character.
@@ -1265,10 +1267,15 @@ var _dying := false
 ## the visuals provide it), the screen greys out with a countdown, then the
 ## player respawns at the floor's arrival point. The server already healed
 ## and moved the record; this is the local presentation.
-func die() -> void:
+## `xp_lost`: the death penalty the server already applied (online); offline
+## and on the host it is applied here (Net.death_penalty).
+func die(xp_lost := -1) -> void:
 	if _dying:
 		return
 	_dying = true
+	if xp_lost < 0 and is_local and not Net.remote_client():
+		xp_lost = Net.death_penalty(GameState)
+	last_xp_lost = maxi(xp_lost, 0)
 	input_enabled = false
 	velocity = Vector3.ZERO
 	var fx := VFX.get_for(self)
@@ -1300,6 +1307,8 @@ func die() -> void:
 	if hud and is_instance_valid(hud) and hud.has_method("hide_death"):
 		hud.hide_death()
 	Audio.play("respawn")
+	if last_xp_lost > 0 and hud and is_instance_valid(hud) and hud.has_method("toast"):
+		hud.toast("Lost %d EXP" % last_xp_lost, "Your gear took a beating too  ·  repair at an anvil", "Death", UITheme.ROSE)
 	if fx and is_instance_valid(fx):
 		fx.sparkle(global_position + Vector3(0, 1.0, 0), Color(0.7, 0.95, 1.0))
 

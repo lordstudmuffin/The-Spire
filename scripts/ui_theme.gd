@@ -429,6 +429,80 @@ static func make_button(text: String, kind: String = "normal") -> Button:
 	return b
 
 
+## Small inline action ("Use" on a provision cell): cyan outline pill,
+## 12 px bold text, 24 px tall, so it sits inside a grid cell.
+static func mini_button(text: String) -> Button:
+	var b := make_button(text, "chip")
+	b.add_theme_font_override("font", ui_bold())
+	b.add_theme_font_size_override("font_size", 12)
+	for st in ["normal", "hover", "pressed", "focus"]:
+		var bg := Color(CYAN, 0.16 if st == "normal" else 0.32)
+		var sb := box(bg, Color(CYAN, 0.7 if st != "normal" else 0.45), 999, 1)
+		sb.content_margin_left = 10
+		sb.content_margin_right = 10
+		sb.content_margin_top = 2
+		sb.content_margin_bottom = 2
+		b.add_theme_stylebox_override(st, sb)
+	b.add_theme_color_override("font_color", PARCH)
+	b.custom_minimum_size = Vector2(0, 24)
+	return b
+
+
+## Thin durability / wear gauge: fill in the HP band colours (green, yellow
+## under half, red under a fifth), grey track. set_frac(0..1).
+class WearGauge extends Control:
+	var frac := 1.0
+
+	func _init(f := 1.0, w := 120.0) -> void:
+		frac = f
+		custom_minimum_size = Vector2(w, 5)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func set_frac(f: float) -> void:
+		frac = clampf(f, 0.0, 1.0)
+		queue_redraw()
+
+	func _draw() -> void:
+		var r := Rect2(Vector2(0, (size.y - 5) * 0.5), Vector2(size.x, 5))
+		draw_rect(r, Color(1, 1, 1, 0.12))
+		if frac > 0.0:
+			var cols: Array = PlayerStatus.band_colors(frac)
+			draw_rect(Rect2(r.position, Vector2(r.size.x * frac, r.size.y)), cols[0])
+			draw_rect(Rect2(r.position, Vector2(r.size.x * frac, 1.5)), Color(cols[1], 0.9))
+		else:
+			draw_rect(r, Color(UITheme.ROSE, 0.35))
+
+
+## Broken-gear cover for an item card: a dim wash and a branching crack
+## across the face (fixed pattern per card so it does not flicker).
+class CrackOverlay extends Control:
+	var seed_v := 1
+
+	func _init(sd := 1) -> void:
+		seed_v = sd
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		set_anchors_preset(Control.PRESET_FULL_RECT)
+
+	func _draw() -> void:
+		var bg := StyleBoxFlat.new()
+		bg.bg_color = Color(0.05, 0.03, 0.04, 0.45)
+		bg.set_corner_radius_all(10)
+		draw_style_box(bg, Rect2(Vector2.ZERO, size))
+		var rng := RandomNumberGenerator.new()
+		rng.seed = seed_v
+		var p := Vector2(size.x * rng.randf_range(0.55, 0.8), 0)
+		var pts := PackedVector2Array([p])
+		while p.y < size.y:
+			p += Vector2(rng.randf_range(-18, 14), rng.randf_range(10, 22))
+			pts.append(p)
+			if rng.randf() < 0.3:
+				# A short branch off the main crack.
+				var q := p + Vector2(rng.randf_range(-26, 26), rng.randf_range(6, 16))
+				draw_line(p, q, Color(1, 0.86, 0.86, 0.75), 1.0, true)
+		draw_polyline(pts, Color(0, 0, 0, 0.6), 3.0, true)
+		draw_polyline(pts, Color(1, 0.9, 0.9, 0.9), 1.2, true)
+
+
 ## 150 ms scale pop on hover (pivot kept centred as the button resizes).
 static func hover_fx(b: Control, amount := 1.04) -> void:
 	b.resized.connect(func(): b.pivot_offset = b.size * 0.5)

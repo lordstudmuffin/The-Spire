@@ -333,6 +333,11 @@ func _ready() -> void:
 	rs.unequip("armor")
 	rec["inventory"].pop_back()
 	rec["money"] = col_c
+	rec["xp"] = 40
+	var lose_r: int = mini(int(rs.xp_to_next() * Net.DEATH_XP_LOSS), 40)
+	Net._death_grace.erase(4242)
+	_check(Net.srv_damage(4242, 1.0e5) and int(rec["xp"]) == 40 - lose_r and absf(float(rec["hp"]) - rs.max_hp()) < 0.01, "a death on the server record costs %d EXP and respawns at full HP" % lose_r)
+	Net._death_grace.erase(4242)
 	rec["hp"] = 10.0
 	_check(LifeData.eat("grilled_trout", rs) and rs.regen_tick(1.0) and rec["hp"] > 10.0 and rec["hp"] <= 12.01, "server regen tick heals from the food buff (hp %.1f)" % rec["hp"])
 	rec["buffs"]["boar_stew"]["until"] = 0.0
@@ -963,7 +968,11 @@ func _ready() -> void:
 		GameState.hidden_stats = {}
 	# Death: shatter, grey screen with countdown, respawn at the arrival point.
 	var pl: Player = world.pl if "pl" in world else world.player
+	GameState.xp = 50
+	var lose: int = mini(int(GameState.xp_to_next() * Net.DEATH_XP_LOSS), 50)
+	var lv_d := GameState.level
 	pl.take_damage(1.0e6)
+	_check(GameState.xp == 50 - lose and GameState.level == lv_d and pl.last_xp_lost == lose, "dying costs %d EXP toward the next level, never a level" % lose)
 	_check(pl.is_dying() and hud.is_dead_screen() and not pl.input_enabled, "lethal hit starts the death sequence")
 	pl.take_damage(50.0)
 	_check(pl.is_dying(), "no damage while dying")

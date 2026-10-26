@@ -662,7 +662,7 @@ func _spawn_adds(count: int) -> void:
 
 
 func _prune_adds() -> void:
-	adds = adds.filter(func(a): return is_instance_valid(a) and a is Node and a.is_inside_tree() and a.visible)
+	adds = adds.filter(func(a): return a is Node and is_instance_valid(a) and a.is_inside_tree() and a.visible)
 
 
 func living_adds() -> int:
@@ -673,7 +673,7 @@ func living_adds() -> int:
 ## Adds vanish (no rewards) on boss death or reset.
 func clear_adds() -> void:
 	for a in adds:
-		if is_instance_valid(a) and a is Node:
+		if a is Node and is_instance_valid(a):
 			if a.has_method("vanish"):
 				a.vanish()
 			else:

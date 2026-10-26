@@ -1212,7 +1212,7 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 			pass  # GameState.unique_skill_changed already toasts
 		"respawn":
 			if player:
-				player.die()
+				player.die(int(res.get("xp_lost", 0)))
 		"hp":
 			if player and float(res.get("hp", 0.0)) < float(res.get("prev", 0.0)):
 				var lost: float = float(res["prev"]) - float(res["hp"])

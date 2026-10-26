@@ -1861,6 +1861,25 @@ func _srv_action(peer: int, kind: String, payload: Dictionary) -> Dictionary:
 	return res
 
 
+## Death penalty (Satisfy-style; no level is ever lost): a slice of the
+## EXP earned toward the next level, and a knock to the equipped gear.
+const DEATH_XP_LOSS := 0.1
+const DEATH_WEAR := 0.1
+
+
+## Applies the penalty to GameState or a RecordState. Returns the EXP lost.
+static func death_penalty(gs) -> int:
+	var lost := mini(int(gs.xp_to_next() * DEATH_XP_LOSS), int(gs.xp))
+	gs.xp = int(gs.xp) - lost
+	for slot in ["weapon", "armor"]:
+		var it = gs.equipped.get(slot)
+		if it is Dictionary:
+			Durability.wear(gs, slot, Durability.max_for(it) * DEATH_WEAR)
+	if gs == GameState:
+		GameState.xp_changed.emit(GameState.xp, GameState.xp_to_next())
+	return lost
+
+
 ## Server: one landed swing for `peer` (Enemy.net_hit, once per swing).
 func srv_add_prof(peer: int) -> void:
 	if srv_records.has(peer):
@@ -1945,10 +1964,12 @@ func srv_damage(peer: int, amount: float) -> bool:
 	srv_wear(peer, "armor", Durability.WEAR_HIT)
 	HiddenClasses.note(rs, "hurt")  # a hit ends a clean parry streak
 	if died:
-		print("[life] '%s' fell (%.0f damage at %.0f hp); respawned at full health" % [rec["name"], amount, prev])
+		var lost := death_penalty(rs)
+		rs._sync_weapon()
+		print("[life] '%s' fell (%.0f damage at %.0f hp); respawned at full health, lost %d xp" % [rec["name"], amount, prev, lost])
 		rs.heal_full()
 		_death_grace[peer] = Time.get_ticks_msec() + int(DEATH_GRACE * 1000.0)
-		_srv_reply(peer, "respawn", {"prev_hp": prev})
+		_srv_reply(peer, "respawn", {"prev_hp": prev, "xp_lost": lost})
 		return true
 	_send(peer, net_hp, [float(rec["hp"]), rs.max_hp(), prev])
 	return false

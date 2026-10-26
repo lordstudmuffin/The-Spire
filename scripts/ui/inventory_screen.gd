@@ -343,13 +343,13 @@ func _build_provisions(v: VBoxContainer) -> void:
 		ch.add_child(cv)
 		var btn: Button = null
 		if LifeData.is_food(id):
-			btn = UITheme.make_button("Use", "chip")
+			btn = UITheme.mini_button("Use")
 			btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			btn.tooltip_text = LifeData.buff_text(LifeData.RECIPES[id]["buff"])
 			btn.pressed.connect(func(): use_food(id))
 			ch.add_child(btn)
 		elif LifeData.is_crystal(id):
-			btn = UITheme.make_button("Use", "chip")
+			btn = UITheme.mini_button("Use")
 			btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			btn.tooltip_text = LifeData.item_desc(id)
 			btn.pressed.connect(func(): use_crystal(id))
@@ -506,6 +506,13 @@ func _build_right() -> void:
 	cmp.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cmp.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(cmp)
+	# Durability: small caps line over a wear gauge (not in the big stat).
+	var dur_l := UITheme.label("", 11, UITheme.MUTED, true)
+	dur_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(dur_l)
+	var dur_g := UITheme.WearGauge.new(1.0, 200.0)
+	dur_g.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	v.add_child(dur_g)
 	v.add_child(UITheme.spacer(4))
 	var by := UITheme.subtle("", 12)
 	by.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -526,7 +533,7 @@ func _build_right() -> void:
 	hint2.add_child(UITheme.action_cap("back"))
 	hint2.add_child(UITheme.subtle("Close", 12))
 	v.add_child(hint2)
-	_detail = {"glyph": g, "name": nm, "rank": rk, "rank_pill": rk_pill, "kind": kd, "stat": stat, "cmp": cmp, "by": by, "hint": ht}
+	_detail = {"glyph": g, "name": nm, "rank": rk, "rank_pill": rk_pill, "kind": kd, "stat": stat, "cmp": cmp, "by": by, "hint": ht, "dur": dur_l, "dur_g": dur_g}
 
 
 # --- Behaviour ----------------------------------------------------------------
@@ -693,6 +700,25 @@ func refresh() -> void:
 		(b.get_meta("stat") as Label).text = _stat_text(item)
 		(b.get_meta("by") as Label).text = "by %s" % str(item.get("crafted_by", "?"))
 		(b.get_meta("eq") as Control).visible = worn
+		# Wear: a thin gauge along the card foot, and a crack once broken.
+		var broken := Durability.is_broken(item)
+		var wf := Durability.fraction(item)
+		if not b.has_meta("wear"):
+			var g := UITheme.WearGauge.new(1.0, 10.0)
+			g.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+			g.offset_left = 10
+			g.offset_right = -10
+			g.offset_top = -9
+			g.offset_bottom = -4
+			b.add_child(g)
+			b.set_meta("wear", g)
+			var ck := UITheme.CrackOverlay.new(i * 7919 + 13)
+			b.add_child(ck)
+			b.set_meta("crack", ck)
+		var wg: UITheme.WearGauge = b.get_meta("wear")
+		wg.visible = wf < 0.999
+		wg.set_frac(wf)
+		(b.get_meta("crack") as Control).visible = broken
 		b.tooltip_text = "%s\n%s  ·  %s\nCrafted by %s" % [item.get("name", ""), Crafting.RANKS[rank], _stat_text(item), item.get("crafted_by", "?")]
 	for m in _mats:
 		_mats[m].text = str(GameState.materials.get(m, 0))
@@ -724,6 +750,8 @@ func _show_detail(idx: int) -> void:
 		_detail["rank_pill"].visible = false
 		_detail["kind"].text = "—"
 		_detail["stat"].text = ""
+		_detail["dur"].visible = false
+		(_detail["dur_g"] as Control).visible = false
 		_detail["cmp"].text = "Forge gear at Haldor's anvil, or loot it from the Labyrinth."
 		_detail["by"].text = ""
 		_detail["glyph"].set_glyph("sword", Color(UITheme.MUTED.r, UITheme.MUTED.g, UITheme.MUTED.b, 0.4))
@@ -742,7 +770,13 @@ func _show_detail(idx: int) -> void:
 	rs.bg_color = c
 	rs.border_color = c
 	_detail["kind"].text = str(item.get("kind", "")).to_upper()
-	_detail["stat"].text = "%s  ·  %s" % [("ATK %d" % int(item.get("atk", 0))) if item.get("kind") == "weapon" else ("DEF %d" % int(item.get("def", 0))), Durability.text(item)]
+	_detail["stat"].text = ("ATK %d" % int(item.get("atk", 0))) if item.get("kind") == "weapon" else ("DEF %d" % int(item.get("def", 0)))
+	var dt := Durability.text(item)
+	_detail["dur"].text = dt.to_upper()
+	_detail["dur"].add_theme_color_override("font_color", UITheme.ROSE if Durability.is_broken(item) else UITheme.MUTED)
+	_detail["dur"].visible = dt != ""
+	(_detail["dur_g"] as UITheme.WearGauge).visible = dt != ""
+	(_detail["dur_g"] as UITheme.WearGauge).set_frac(Durability.fraction(item))
 	var worn: Variant = GameState.equipped.get(item.get("kind"))
 	var mine := int(item.get("atk", 0)) + int(item.get("def", 0))
 	if is_equipped(item):

@@ -94,6 +94,7 @@ var _boss_name: Label
 var _boss_lv: Label
 var _boss_bar: ProgressBar
 var _boss_pips: HBoxContainer
+var _atk_wear: UITheme.WearGauge
 var _boss_band := -1
 var _boss_hp: Label
 var _boss: Node3D
@@ -622,6 +623,11 @@ func _build_skill_bar(root: Control) -> void:
 	var al := UITheme.label("Attack", 11, UITheme.MUTED, true)
 	al.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	av.add_child(al)
+	# Weapon wear under the attack key (hidden while the blade is sound).
+	_atk_wear = UITheme.WearGauge.new(1.0, 44.0)
+	_atk_wear.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_atk_wear.visible = false
+	av.add_child(_atk_wear)
 	atk.add_child(av)
 	_skill_bar.add_child(atk)
 	# Dash (Q) with its own short cooldown.
@@ -1446,6 +1452,13 @@ func _refresh() -> void:
 	_status.set_xp(GameState.xp, GameState.xp_to_next())
 	_status.set_money_floor(GameState.money, GameState.floor)
 	_status.set_crystals(int(GameState.materials.get("heal_crystal", 0)), int(GameState.materials.get("teleport_crystal", 0)))
+	var wpn = GameState.equipped.get("weapon")
+	if _atk_wear and wpn is Dictionary:
+		var wf := Durability.fraction(wpn)
+		_atk_wear.visible = wf < Durability.LOW * 2.5
+		_atk_wear.set_frac(wf)
+	elif _atk_wear:
+		_atk_wear.visible = false
 	_refresh_tracker()
 	if _inv_panel.visible:
 		_inventory.refresh()
@@ -1555,6 +1568,7 @@ func _build_craft() -> void:
 			v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			v.add_child(UITheme.label(str(it.get("name", "")), 16, Crafting.rank_color(int(it.get("rank", 0))), true))
 			v.add_child(UITheme.subtle("%s  ·  %d Col" % [Durability.text(it), cost], 13))
+			v.add_child(UITheme.WearGauge.new(Durability.fraction(it), 220.0))
 			h.add_child(v)
 			var b := UITheme.make_button("Repair", "primary" if GameState.money >= cost else "normal")
 			b.custom_minimum_size = Vector2(96, 36)
@@ -2045,6 +2059,11 @@ func realm_announce(text: String) -> void:
 
 ## Centre-top notice. `sub` is a smaller second line, `kicker` a small
 ## label above the title, `accent` tints the title and border.
+## SAO-style result window after a fight (BattleResults tallies it).
+func show_battle_result(data: Dictionary) -> void:
+	BattleResult.show_in(_root, data)
+
+
 func toast(text: String, sub := "", kicker := "", accent: Color = UITheme.GOLD) -> void:
 	_toast.text = text
 	_toast.add_theme_color_override("font_color", accent)

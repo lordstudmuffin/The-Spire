@@ -98,6 +98,7 @@ Built and smoke-green (smoke ~420 checks, realm_test 88, 2-bot soak 0 errors, or
     - Field mobs: boars "rush" (RUSH_WINDUP 0.75 s telegraph, hook mob_rush_warning). Wolves, kobold scouts and the sergeant use "pack" calls (hook mob_pack_call); the sergeant also has armor 0.7.
     - New Snaptrap Grove at world.GROVE (38,0,-48): 8 vines, 2 "Fruiting" with a lure (the first hit bursts the fruit and calls the grove; hook mob_lure_burst, rig node "Fruit"), and 1 "Blossoming" that respawns in 240 s and drops snaptrap_bloom for Hesper's "grove_bloom" quest, which pays the Verdant Edge (Epic).
     - Wolves never den inside Talven's Inner Area.
+  - Death penalty (Net.death_penalty, Satisfy-style, never a level): you lose 10% of the current level's EXP requirement (capped at what you have), and equipped gear loses 10% durability. The server applies it in srv_damage and sends "xp_lost" with "respawn". Player.die(xp_lost) shows a "Lost N EXP" toast after the respawn.
   - Monument of Climbers (scripts/monument.gd): the realm's characters by level. The server scans user://server_db once, merges the live records and pushes net_names every 20 s and to new peers. Art is any Node3D in group "monument" with set_names(entries); E within 4 m reads the top 10.
 - Farming skill: GameState/record farming_level/xp; harvest gives xp (Farms.crop_xp), bonus crop chance 4%/level (cap 50%), +1% seed return per level.
 
