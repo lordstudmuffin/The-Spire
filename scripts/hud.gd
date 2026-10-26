@@ -553,6 +553,26 @@ func _slot_card(key: String, name_text: String) -> Dictionary:
 
 var _unique_slots: Array = []
 var _unique_spacer: Control
+var _class_slots: Array = []
+var _class_spacer: Control
+
+
+## Hidden-class arts (R / C, or LT+X / LT+B): shown once a class with arts
+## is held (Stillblade, Hearthwright), bordered in the class's colour.
+func _update_class_slots(_cls := "") -> void:
+	var cls: String = GameState.hidden_class
+	var arts := HiddenClasses.arts_of(cls)
+	_class_spacer.visible = not arts.is_empty()
+	var tint: Color = Color(0.62, 0.92, 1.0) if cls == "Stillblade" else Color(1.0, 0.62, 0.22)
+	for i in _class_slots.size():
+		var on := i < arts.size()
+		var cs: Dictionary = _class_slots[i]
+		(cs["card"] as Control).visible = on
+		if on:
+			(cs["name"] as Label).text = arts[i]["name"]
+			var sb: StyleBoxFlat = (cs["card"] as PanelContainer).get_theme_stylebox("panel").duplicate()
+			sb.border_color = Color(tint, 0.8)
+			(cs["card"] as PanelContainer).add_theme_stylebox_override("panel", sb)
 
 
 func _update_unique_slots(id: String) -> void:
@@ -627,6 +647,12 @@ func _build_skill_bar(root: Control) -> void:
 		_unique_slots.append(us)
 	_update_unique_slots(GameState.unique_skill)
 	GameState.unique_skill_changed.connect(_update_unique_slots)
+	_class_spacer = UITheme.spacer(6)
+	_skill_bar.add_child(_class_spacer)
+	for i in 2:
+		_class_slots.append(_slot_card("class_%d" % (i + 1), "Class Art"))
+	_update_class_slots()
+	GameState.class_unlocked.connect(_update_class_slots)
 
 
 ## Bottom-right key hints: the screens and their keys.
@@ -1152,6 +1178,14 @@ func _process(delta: float) -> void:
 			(us["sweep"] as RadialSweep).set_frac(clampf(ucd / maxf(float(arts[i]["cooldown"]), 0.01), 0.0, 1.0))
 			(us["cd"] as Label).text = "%.1f" % ucd if ucd > 0.0 else ""
 			(us["name"] as Label).modulate.a = 0.45 if ucd > 0.0 else 1.0
+	if GameState.hidden_class != "" and "class_cd" in player and not _class_slots.is_empty():
+		var carts := HiddenClasses.arts_of(GameState.hidden_class)
+		for i in mini(carts.size(), _class_slots.size()):
+			var ccd: float = player.class_cd[i]
+			var cs: Dictionary = _class_slots[i]
+			(cs["sweep"] as RadialSweep).set_frac(clampf(ccd / maxf(float(carts[i]["cooldown"]), 0.01), 0.0, 1.0))
+			(cs["cd"] as Label).text = "%.1f" % ccd if ccd > 0.0 else ""
+			(cs["name"] as Label).modulate.a = 0.45 if ccd > 0.0 else 1.0
 	if not _dash_slot.is_empty() and "_dash_cd" in player:
 		var dcd: float = player._dash_cd
 		(_dash_slot["sweep"] as RadialSweep).set_frac(clamp(dcd / Player.DASH_COOLDOWN, 0.0, 1.0))
@@ -1782,6 +1816,8 @@ func _on_chat_submitted(text: String) -> void:
 	var t := text.strip_edges()
 	if t != "" and preload("res://scripts/life/guilds.gd").chat_command(t, self, func(msg): add_chat("", msg, "system")):
 		pass  # "/g text" guild chat and "/guild ..." (P8)
+	elif t != "" and preload("res://scripts/duels.gd").chat_command(t, self, func(msg): add_chat("", msg, "system")):
+		pass  # "/duel Name [mode]", "/duel accept|decline|yield" (scripts/duels.gd)
 	elif t != "":
 		Social.handle(t, send_chat if send_chat.is_valid() else func(_x): pass, func(msg): add_chat("", msg, "system"))
 	close_chat()

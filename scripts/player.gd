@@ -119,6 +119,8 @@ var input_enabled := true
 ## bot teleport, run at 10x speed and claim level 99, to exercise the server.
 var bot := false
 var cheat := false
+## Duel opponent a bot fights instead of mobs (scripts/duels.gd sets it).
+var bot_duel_target: Node3D = null
 var _bot_t := 0.0
 ## Bot defence against a telegraphed strike: press / release times (ms, 0 = none).
 var _bot_parry_at := 0
@@ -739,6 +741,16 @@ func _bot_defend_tick() -> void:
 func _bot_think(delta: float) -> Vector2:
 	_bot_t += delta
 	var now := Time.get_ticks_msec()
+	if bot_duel_target != null and is_instance_valid(bot_duel_target) and bot_duel_target.is_inside_tree():
+		# Duelling (--duel soak): close on the opponent and swing; parries come
+		# from bot_incoming on the server's telegraph.
+		var dto: Vector3 = (bot_duel_target.global_position - global_position) * Vector3(1, 0, 1)
+		if dto.length() > 1.8:
+			return Vector2(dto.x, dto.z).normalized()
+		model.look_at(Vector3(bot_duel_target.global_position.x, model.global_position.y, bot_duel_target.global_position.z))
+		if _attack_cd == 0.0 and _recovery == 0.0 and _stun == 0.0 and not blocking:
+			_attack()
+		return Vector2.ZERO
 	if _bot_target == null or not is_instance_valid(_bot_target) or not _bot_target.visible or fmod(_bot_t, 2.0) < delta:
 		var best := INF
 		var pick: Node3D = null
@@ -845,6 +857,19 @@ func _hit_cone(damage: float, range_: float, arc: float, kind := -1) -> int:
 			else:
 				e.net_hit.rpc_id(1, kind, to.normalized(), _swing_serial)
 			hits += 1
+	# Duel opponent (scripts/duels.gd): the same cone, judged by the server
+	# with the same kind / cooldown / range rules, then telegraphed so the
+	# other player can parry. Nobody else is ever hit by a player.
+	var duels := get_tree().get_first_node_in_group("duels")
+	if duels != null and duels.opponent_peer() != 0:
+		for p in get_tree().get_nodes_in_group("players"):
+			if p == self or not duels.is_opponent(int(p.get("peer_id"))):
+				continue
+			var to: Vector3 = p.global_position - global_position
+			to.y = 0
+			if to.length() <= range_ + 0.4 and (to.length() < 0.6 or facing.dot(to.normalized()) > cos(arc / 2.0)):
+				duels.client_hit(self, int(p.get("peer_id")), kind, to.normalized(), _swing_serial)
+				hits += 1
 	if hits > 0 and is_local:
 		# Juice on a landed blow: a tiny camera kick and a 60 ms hit-stop on
 		# our own animation (never Engine.time_scale: that would be global).
@@ -923,6 +948,23 @@ func defend(from_pos: Vector3) -> String:
 
 func is_stunned() -> bool:
 	return _stun > 0.0
+
+
+## A duel opponent parried this player's blow (judged on the server): a
+## short stagger and a shove backwards. Runs on the server's copy (so its
+## next hits are refused while stunned) and on the owner (Duels "parried").
+func pvp_staggered(secs: float, push: Vector3) -> void:
+	_stun = maxf(_stun, clampf(secs, 0.0, GUARD_BREAK_STUN))
+	_recovery = maxf(_recovery, 0.2)
+	if is_local:
+		velocity.x = push.x
+		velocity.z = push.z
+		shake(0.2)
+		InputSetup.rumble(0.4, 0.8, 0.2)
+		Audio.play("block", null, 0.05)
+		var fx := VFX.get_for(self)
+		if fx and fx.has_method("stagger"):
+			fx.call("stagger", self, secs)
 
 
 ## Local feedback for a defence outcome (on the defender's own machine).

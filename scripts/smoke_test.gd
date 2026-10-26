@@ -31,6 +31,11 @@ func _ready() -> void:
 		print("== Done: %d failure(s)" % _fails)
 		get_tree().quit(1 if _fails > 0 else 0)
 		return
+	if OS.get_environment("SMOKE_ONLY") == "duels":
+		await _test_duels()
+		print("== Done: %d failure(s)" % _fails)
+		get_tree().quit(1 if _fails > 0 else 0)
+		return
 	print("== GameState")
 	GameState.reset()
 	GameState.character["name"] = "Tester"
@@ -1093,6 +1098,7 @@ func _ready() -> void:
 	_test_farming_skill()
 	await _test_labyrinth()
 	await _test_hidden_classes()
+	await _test_duels()
 	await _test_boss()
 
 	print("== Done: %d failure(s)" % _fails)
@@ -2062,4 +2068,225 @@ func _test_boss() -> void:
 	GameState.hidden_stats = {}
 	GameState.heal_full()
 	w.queue_free()
+	await get_tree().process_frame
+
+
+## Player duels (scripts/duels.gd): the server logic driven directly with two
+## fake peers (records + Player nodes), as there is nobody to duel offline.
+## SMOKE_ONLY=duels runs just this block.
+func _test_duels() -> void:
+	print("== Duels (PvP)")
+	GameState.floor = 1
+	GameState.has_position = false
+	GameState.heal_full()
+	var keep_duels: Dictionary = GameState.duels.duplicate()
+	var world: Node3D = load("res://scenes/world.tscn").instantiate()
+	add_child(world)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var D = world._duels
+	_check(D != null and D.is_in_group("duels") and D.name == "Duels", "the world carries a Duels node (group 'duels')")
+	if D == null:
+		world.queue_free()
+		return
+	D.paused = true
+	var Dc = load("res://scripts/duels.gd")
+	for m in Dc.MODES:
+		_check(not str(Dc.MODES[m]).to_lower().contains("sword art") and not str(Dc.MODES[m]).to_lower().contains("overgeared"), "mode '%s' uses an original name" % m)
+	_check(Dc.in_safe_zone(Vector3(0, 0, 10)) and Dc.in_safe_zone(Vector3(-48, 0, 38)) and not Dc.in_safe_zone(Vector3(10, 0, -45)), "town, Hollowbrook and Talven are duel-free; the fields are not")
+	# Events the server delivers, per peer.
+	var events := []
+	D.server_event.connect(func(peer, data): events.append([peer, data]))
+	var last_ev := func(peer: int, ev: String) -> Dictionary:
+		for i in range(events.size() - 1, -1, -1):
+			if int(events[i][0]) == peer and str(events[i][1].get("ev", "")) == ev:
+				return events[i][1]
+		return {}
+	# Two fake peers: a record each (the server's HP) and a Player node each
+	# (the server's position / parry state), frozen so nothing moves.
+	const A := 7201
+	const B := 7202
+	const C := 7203
+	var field := Vector3(10, 1, -45)
+	var make := func(peer: int, pname: String, pos: Vector3) -> Player:
+		var rec: Dictionary = Net._new_record(Net.sanitize_character({"name": pname}), "0123456789abcdef0123456789abcdef", {})
+		Net.srv_records[peer] = rec
+		var p := Player.new()
+		p.peer_id = peer
+		p.appearance = Net.sanitize_character({"name": pname})
+		p.position = pos
+		p.input_enabled = false
+		world._players.add_child(p)
+		p.display_name = pname
+		p.set_physics_process(false)
+		p.srv_attack = 17.0
+		return p
+	var pa: Player = make.call(A, "Ashe", field)
+	var pb: Player = make.call(B, "Bram", field + Vector3(2, 0, 0))
+	var pc: Player = make.call(C, "Cass", field + Vector3(0, 0, 2))
+	var ra: Dictionary = Net.srv_records[A]
+	var rb: Dictionary = Net.srv_records[B]
+	var rc: Dictionary = Net.srv_records[C]
+	var max_b: float = Net.RecordState.new(rb).max_hp()
+	var hp_b := func() -> float: return float(rb["hp"])
+	# --- Invites -----------------------------------------------------------------
+	_check(D.srv_invite(A, "Ashe").has("error") and D.srv_invite(A, "Nobody").has("error") and D.srv_invite(A, "Bram", "sudden").has("error"), "no duel with yourself, a stranger, or an unknown mode")
+	pa.global_position = Vector3(0, 1, 10)
+	_check(str(D.srv_invite(A, "Bram").get("error", "")).begins_with("No duels inside town"), "no challenges from inside the town walls")
+	pa.global_position = field + Vector3(40, 0, 0)
+	_check(str(D.srv_invite(A, "Bram").get("error", "")).contains("too far"), "the other player must be within %d m" % int(Dc.INVITE_RANGE))
+	pa.global_position = field
+	var res: Dictionary = D.srv_invite(A, "bram")
+	_check(not res.has("error") and res.get("invited") == "Bram" and res.get("mode") == "first" and D.invites.has(B), "a challenge by name (any case) defaults to First Strike")
+	_check(last_ev.call(B, "invited").get("from") == "Ashe" and last_ev.call(B, "invited").get("mode") == "first", "the challenged player gets the invite event")
+	_check(str(D.srv_invite(C, "Bram").get("error", "")).contains("pending"), "a second challenger waits while one is pending")
+	res = D.srv_respond(B, false)
+	_check(res.get("op") == "decline" and not D.invites.has(B) and last_ev.call(A, "declined").get("by") == "Bram", "declining clears the invite and tells the challenger")
+	_check(D.srv_respond(B, true).has("error"), "nothing to accept after a decline")
+	D.srv_invite(A, "Bram")
+	D.tick(Dc.INVITE_TTL + 1.0)
+	_check(not D.invites.has(B) and not last_ev.call(B, "expired").is_empty() and D.srv_respond(B, true).has("error"), "an unanswered challenge expires after %d s" % int(Dc.INVITE_TTL))
+	# --- Accept and countdown --------------------------------------------------------
+	D.srv_invite(A, "Bram")
+	res = D.srv_respond(B, true)
+	var id := int(res.get("duel", 0))
+	_check(id > 0 and D.duel_of.get(A) == id and D.duel_of.get(B) == id and D.duels[id]["phase"] == "count", "accepting starts the duel in its countdown")
+	_check(last_ev.call(A, "begin").get("opponent") == "Bram" and last_ev.call(B, "begin").get("opponent") == "Ashe" and int(last_ev.call(B, "begin").get("count", 0)) == Dc.COUNTDOWN, "both duelists get the begin event with the opponent and the count")
+	_check(D.srv_hit(A, B, -1, Vector3.RIGHT, 1) == "not started", "no blows land during the countdown")
+	D.tick(1.05)
+	_check(int(last_ev.call(A, "count").get("n", 0)) == Dc.COUNTDOWN - 1 and D.duels[id]["phase"] == "count", "the count ticks down second by second")
+	D.tick(float(Dc.COUNTDOWN))
+	_check(D.duels[id]["phase"] == "fight" and not last_ev.call(A, "start").is_empty() and not last_ev.call(B, "start").is_empty(), "after %d s: DUEL! (start event to both)" % Dc.COUNTDOWN)
+	_check(not last_ev.call(C, "start").is_empty() and bool(last_ev.call(C, "start").get("spectator", false)), "a nearby player sees the duel start as a spectator")
+	_check(D.srv_invite(C, "Ashe").has("error") and str(D.srv_invite(A, "Cass").get("error", "")).contains("already"), "duelists can neither be challenged nor challenge")
+	# --- Nobody outside the duel gets hurt ---------------------------------------------
+	var hp_c0 := float(rc["hp"])
+	_check(D.srv_hit(A, C, -1, Vector3.FORWARD, 2) == "not your opponent" and D.srv_hit(C, A, -1, Vector3.FORWARD, 1) == "not duelling", "hits on anyone but the opponent are refused")
+	D.tick(Dc.WINDUP + 0.05)
+	_check(float(rc["hp"]) == hp_c0 and float(ra["hp"]) == Net.RecordState.new(ra).max_hp(), "a bystander and a non-duelist take no damage")
+	_check(D.srv_hit(A, B, 99, Vector3.RIGHT, 3) == "bad kind" and D.srv_hit(A, B, HiddenClasses.KIND_BASE, Vector3.RIGHT, 3) == "bad kind", "unknown kinds and class arts without the class are refused")
+	pa.global_position = field + Vector3(-6, 0, 0)
+	_check(D.srv_hit(A, B, -1, Vector3.RIGHT, 3) == "out of range", "a swing from too far away is refused")
+	pa.global_position = field
+	# --- First Strike: a weak hit is not enough, a 5% hit wins ------------------------------
+	pa.srv_attack = 3.0
+	var hp0: float = hp_b.call()
+	_check(D.srv_hit(A, B, -1, Vector3.RIGHT, 4) == "" and D.srv_hit(A, B, -1, Vector3.RIGHT, 4) == "duplicate swing" and hp_b.call() == hp0, "an accepted swing is telegraphed first (no damage yet), and lands once")
+	_check(not last_ev.call(B, "incoming").is_empty() and is_equal_approx(float(last_ev.call(B, "incoming")["windup"]), Dc.WINDUP), "the defender is warned of the incoming blow (%.2f s telegraph)" % Dc.WINDUP)
+	_check(D.srv_hit(A, B, -1, Vector3.RIGHT, 5) == "cooldown", "the basic attack honours its cooldown between swings (shared table with mob hits)")
+	D.tick(Dc.WINDUP + 0.01)
+	_check(is_equal_approx(hp_b.call(), hp0 - 3.0) and D.duels.has(id), "a 3-damage hit lands but is too weak for First Strike")
+	Enemy._swing_times.erase("%d:-1" % A)
+	pa.srv_attack = 20.0
+	_check(D.srv_hit(A, B, -1, Vector3.RIGHT, 6) == "", "the next swing is accepted once the cooldown has passed")
+	D.tick(Dc.WINDUP + 0.01)
+	_check(not D.duels.has(id) and not D.duel_of.has(A) and not D.duel_of.has(B), "a clean hit worth 5% of max HP ends a First Strike duel")
+	_check(last_ev.call(A, "end").get("won") == true and last_ev.call(B, "end").get("won") == false and last_ev.call(A, "end").get("reason") == "win", "the winner and loser are told")
+	_check(bool(last_ev.call(C, "end").get("spectator", false)) and str(last_ev.call(C, "end").get("text", "")).contains("won the duel"), "nearby players hear the result")
+	_check(int(ra["duels"]["won"]) == 1 and int(rb["duels"]["lost"]) == 1 and int(ra["duels"]["lost"]) == 0, "the records tally the win and the loss")
+	_check(last_ev.call(B, "end").get("patch") is Dictionary and int(last_ev.call(B, "end")["patch"]["duels"]["lost"]) == 1, "the end event carries the record patch (client tally)")
+	var begin := func(mode: String) -> int:
+		Enemy._swing_times.clear()
+		pa._stun = 0.0
+		pb._stun = 0.0
+		pb.blocking = false
+		pa.global_position = field
+		pb.global_position = field + Vector3(2, 0, 0)
+		D.srv_invite(A, "Bram", mode)
+		var r: Dictionary = D.srv_respond(B, true)
+		D.tick(float(Dc.COUNTDOWN) + 0.5)
+		return int(r.get("duel", 0))
+	var strike := func(attack: float, swing: int) -> String:
+		Enemy._swing_times.clear()
+		pa.srv_attack = attack
+		var why: String = D.srv_hit(A, B, -1, Vector3.RIGHT, swing)
+		D.tick(Dc.WINDUP + 0.01)
+		return why
+	# --- Half ---------------------------------------------------------------------
+	Net.RecordState.new(rb).heal_full()
+	id = begin.call("half")
+	_check(id > 0 and D.duels[id]["mode"] == "half" and D.duels[id]["phase"] == "fight", "a Half duel starts")
+	strike.call(max_b * 0.3, 10)
+	_check(D.duels.has(id) and hp_b.call() < max_b and hp_b.call() > max_b * 0.5, "30% of max HP in one blow does not end a Half duel")
+	strike.call(max_b * 0.3, 11)
+	_check(not D.duels.has(id) and hp_b.call() < max_b * 0.5 and int(ra["duels"]["won"]) == 2, "under half HP: the Half duel ends")
+	# --- Full ---------------------------------------------------------------------
+	Net.RecordState.new(rb).heal_full()
+	id = begin.call("full")
+	strike.call(max_b * 0.6, 20)
+	_check(D.duels.has(id) and hp_b.call() < max_b * 0.5, "a Full duel goes on below half HP")
+	strike.call(max_b * 0.6, 21)
+	_check(not D.duels.has(id) and is_equal_approx(hp_b.call(), 1.0) and int(rb["duels"]["lost"]) == 3, "a Full duel ends at 1 HP: the loser never dies")
+	# --- Parry and guard in PvP ---------------------------------------------------------
+	Net.RecordState.new(rb).heal_full()
+	id = begin.call("first")
+	hp0 = hp_b.call()
+	pb.press_parry()
+	Enemy._swing_times.clear()
+	pa.srv_attack = 20.0
+	_check(D.srv_hit(A, B, -1, Vector3.RIGHT, 30) == "", "a swing is accepted while the defender's parry window is open")
+	D.tick(Dc.WINDUP + 0.01)
+	_check(hp_b.call() == hp0 and D.duels.has(id) and pb.parries >= 1, "a parry inside the window deflects the blow (no damage, duel goes on)")
+	_check(pa.is_stunned() and is_equal_approx(float(last_ev.call(A, "parried").get("stun", 0.0)), Dc.PARRY_STUN) and last_ev.call(A, "parried").get("push") is Vector3, "the parried attacker is staggered and shoved back")
+	_check(D.srv_hit(A, B, -1, Vector3.RIGHT, 31) == "stunned", "a staggered attacker cannot swing")
+	pa._stun = 0.0
+	pb.release_parry()
+	pb.press_parry()
+	# The window closes on the wall clock (headless frames outrun it); holding on is a guard.
+	var wait_from := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - wait_from < int((Player.PARRY_WINDOW + 0.1) * 1000.0):
+		await get_tree().process_frame
+	var guard0: float = pb.guard
+	_check(strike.call(20.0, 32) == "" and is_equal_approx(hp_b.call(), hp0 - maxf(20.0 * (1.0 - Player.BLOCK_REDUCTION), 1.0)) and pb.guard < guard0, "holding guard after the window blocks: %d%% damage and guard wears down" % int((1.0 - Player.BLOCK_REDUCTION) * 100.0))
+	_check(D.duels.has(id), "a blocked hit is not a clean First Strike")
+	pb.release_parry()
+	pa.global_position = field + Vector3(2, 0, 2)  # square behind: the defender cannot see the attacker
+	pb.model.rotation.y = 0.0  # facing -Z; the attacker now stands at +Z
+	pb.press_parry()
+	var hp1: float = hp_b.call()
+	strike.call(3.0, 33)
+	_check(hp_b.call() < hp1 and D.duels.has(id), "no parrying blows from behind")
+	pb.release_parry()
+	D.srv_yield(B)
+	_check(not D.duels.has(id) and last_ev.call(A, "end").get("reason") == "yield" and int(ra["duels"]["won"]) == 4, "/duel yield hands the win over")
+	# --- Forfeit by range, disconnect, death ----------------------------------------------
+	Net.RecordState.new(rb).heal_full()
+	id = begin.call("first")
+	pb.global_position = field + Vector3(Dc.FORFEIT_RANGE + 2.0, 0, 0)
+	D.tick(0.1)
+	_check(not D.duels.has(id) and last_ev.call(B, "end").get("reason") == "range" and last_ev.call(B, "end").get("won") == false, "walking %d m away forfeits the duel" % int(Dc.FORFEIT_RANGE))
+	id = begin.call("first")
+	D.on_peer_left(B)
+	_check(not D.duels.has(id) and last_ev.call(A, "end").get("reason") == "left" and last_ev.call(A, "end").get("won") == true, "a disconnect forfeits the duel")
+	id = begin.call("first")
+	Net._death_grace[B] = Time.get_ticks_msec() + 5000
+	D.tick(0.1)
+	Net._death_grace.erase(B)
+	_check(not D.duels.has(id) and last_ev.call(A, "end").get("reason") == "death", "dying to a monster mid-duel ends it")
+	_check(int(ra["duels"]["won"]) == 7 and int(rb["duels"]["lost"]) == 7 and int(rb["duels"]["won"]) == 0, "the tally after every duel: Ashe 7-0, Bram 0-7")
+	_check(Net.snapshot_for_client(ra).get("duels", {}).get("won") == 7 and Net.record_defaults().has("duels"), "the tally is a record field that reaches the client")
+	# --- Save / patch on the client side -----------------------------------------------
+	GameState.duels = {"won": 2, "lost": 1}
+	var dd: Dictionary = GameState.to_dict()
+	GameState.apply_patch({"duels": {"won": 4, "lost": 1}})
+	_check(int(dd["duels"]["won"]) == 2 and int(GameState.duels["won"]) == 4, "the save carries the tally and a server patch updates it")
+	GameState.apply_patch({"duels": "junk"})
+	_check(int(GameState.duels["won"]) == 4 and GameState._parse_duels({"won": -3}) == {"won": 0, "lost": 0}, "bad tallies are ignored or clamped")
+	# --- Chat command offline ---------------------------------------------------------------
+	var lines := []
+	var sys := func(msg): lines.append(str(msg))
+	_check(not Dc.chat_command("/w Bram hi", world.hud, sys) and Dc.chat_command("/duel", world.hud, sys) and lines.size() == 1 and str(lines[0]).begins_with("Duel:"), "/duel alone prints the usage; other commands pass through")
+	_check(Dc.chat_command("/duel Bram half", world.hud, sys) and str(lines[-1]).contains("offline"), "offline there is nobody to duel")
+	_check(Dc.chat_command("/duel accept", world.hud, sys) and lines.size() == 3, "/duel accept is a duel command too")
+	# --- Clean up -----------------------------------------------------------------------
+	for peer in [A, B, C]:
+		DirAccess.remove_absolute(Net.record_path(str(Net.srv_records[peer]["name"])))  # _end saved them to the server DB
+		Net.srv_records.erase(peer)
+	Enemy._swing_times.clear()
+	pa.queue_free()
+	pb.queue_free()
+	pc.queue_free()
+	GameState.duels = keep_duels
+	GameState.heal_full()
+	world.queue_free()
 	await get_tree().process_frame

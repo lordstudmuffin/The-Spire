@@ -104,6 +104,8 @@ var title := ""
 var visited: Array = []
 ## Labyrinth chests this character opened: {chest_id: unix seconds}.
 var chests: Dictionary = {}
+## Duel record (scripts/duels.gd): {"won": n, "lost": n}.
+var duels: Dictionary = {"won": 0, "lost": 0}
 
 
 func _ready() -> void:
@@ -159,6 +161,7 @@ func reset() -> void:
 	title = ""
 	visited = []
 	chests = {}
+	duels = {"won": 0, "lost": 0}
 	has_position = false
 	hp = max_hp()
 
@@ -528,6 +531,14 @@ static func visited_count(list: Array, prefix: String) -> int:
 	return n
 
 
+static func _parse_duels(raw) -> Dictionary:
+	var out := {"won": 0, "lost": 0}
+	if raw is Dictionary:
+		out["won"] = maxi(int(raw.get("won", 0)), 0)
+		out["lost"] = maxi(int(raw.get("lost", 0)), 0)
+	return out
+
+
 static func _parse_chests(raw) -> Dictionary:
 	var out := {}
 	if raw is Dictionary:
@@ -599,6 +610,7 @@ func to_dict() -> Dictionary:
 		"title": title,
 		"visited": visited,
 		"chests": chests,
+		"duels": duels,
 	}
 
 
@@ -687,6 +699,8 @@ func apply_patch(d: Dictionary) -> void:
 		visited = _parse_visited(d["visited"])
 	if d.get("chests") is Dictionary:
 		chests = _parse_chests(d["chests"])
+	if d.get("duels") is Dictionary:
+		duels = _parse_duels(d["duels"])
 	hp = clampf(float(d.get("hp", hp)), 0.0, max_hp())
 	stats_changed.emit()
 	xp_changed.emit(xp, xp_to_next())
@@ -837,4 +851,5 @@ func from_dict(d: Dictionary) -> void:
 	if raw_visited is Array:
 		visited = _parse_visited(raw_visited)
 	chests = _parse_chests(d.get("chests", {}))
+	duels = _parse_duels(d.get("duels", {}))
 	hp = float(d.get("hp", max_hp()))

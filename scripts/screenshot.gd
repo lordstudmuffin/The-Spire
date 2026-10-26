@@ -322,6 +322,13 @@ func _ready() -> void:
 							"boss_plate":
 								demo_boar.hp = demo_boar.max_hp * 0.62
 								demo_boar._update_label()
+				"still_water", "breaking_wave", "hearth_flare", "hearth_glow":
+					var hfx := VFX.get_for(pl)
+					if hfx:
+						if demo == "hearth_glow":
+							hfx.hearth_glow(pl)
+						else:
+							hfx.class_art_cast(pl, "Hearthwright" if demo == "hearth_flare" else "Stillblade", demo)
 				"chest_open":
 					var cfx := VFX.get_for(pl)
 					if cfx:
@@ -354,6 +361,21 @@ func _ready() -> void:
 		if i == 4 and "--spawn-boss" in args and scene.has_method("_spawn_boss"):
 			scene._spawn_boss()
 		# --pad: draw gamepad prompts. --unique: hold Twin Fang (unique slots).
+		# --bark: stand the player beside the first villager out on a routine.
+		if i == 24 and "--bark" in args and "_routines" in scene and scene._routines:
+			for n in scene._routines._npcs:
+				if scene._routines.bark(n) != "":
+					var nn: Node3D = scene._routines._npcs[n]["node"]
+					scene.player.global_position = nn.global_position + Vector3(2.8, 0.2, 4.6)
+					if "cam_pivot" in scene.player:
+						scene.player.cam_pivot.rotation.y = atan2(2.8, 4.6)
+					break
+		if i == 30 and "--class" in args:
+			var ci := args.find("--class")
+			if ci + 1 < args.size():
+				GameState.unlock_hidden_class(args[ci + 1])
+				if "player" in scene and scene.player and "class_cd" in scene.player:
+					scene.player.class_cd[1] = 7.0
 		if i == 30 and "--unique" in args:
 			GameState.unique_skill = UniqueSkills.TWIN_FANG
 			GameState.unique_skill_changed.emit(GameState.unique_skill)

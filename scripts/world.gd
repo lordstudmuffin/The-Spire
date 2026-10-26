@@ -47,6 +47,8 @@ var _lab: Node3D = null
 ## Floor 1 villagers' day/night walks (scripts/npc_routines.gd).
 var _routines: Node = null
 var _guilds: Node3D = null
+## Player duels (scripts/duels.gd): server state + client events.
+var _duels: Node = null
 var _campfires: Array = []  # {"pos", "range", "label", "where"}
 ## Floor 1 waystones around the Talven fields (Scout Fen's visit quest):
 ## {"pos", "beacon": i, "lit": bool, "fx": Node3D}. Lit state mirrors
@@ -113,6 +115,9 @@ func _ready() -> void:
 	_bot_mode = "--bot" in args
 	_cheat_mode = "--cheat" in args
 	_summit_mode = "--summit" in args
+	_duel_mode = "--duel" in args
+	_duels = preload("res://scripts/duels.gd").build(self)
+	_duels.hud = hud
 	GameState.inventory_changed.connect(_track_ore_quest)
 	if Net.remote_client():
 		Net.action_applied.connect(_on_net_action)
@@ -164,6 +169,8 @@ var _bot_mode := false
 ## fight the Guardian; re-enter after each death.
 var _summit_mode := false
 var _summit_next := 6.0
+## Soak hook (--bot --duel): meet outside the north gate and duel once.
+var _duel_mode := false
 var _cheat_mode := false
 
 
@@ -212,6 +219,8 @@ func _spawn_player_for(peer: int, character: Dictionary) -> void:
 func _on_peer_left(peer: int) -> void:
 	_last_chat_ms.erase(peer)
 	Enemy.forget_peer(peer)
+	if _duels != null:
+		_duels.on_peer_left(peer)
 	if _players.has_node(str(peer)):
 		_players.get_node(str(peer)).queue_free()
 		print("Player left: peer %d" % peer)
@@ -865,6 +874,10 @@ func _build_life_floor2(village: Dictionary) -> void:
 ## Returns {"error": why} or the result the client shows.
 func srv_action(peer: int, rs, kind: String, payload: Dictionary, pos: Vector3) -> Dictionary:
 	match kind:
+		"duel":
+			if _duels == null:
+				return {"error": "There are no duels on this floor."}
+			return _duels.srv(peer, rs, payload, pos)
 		"mine":
 			var i := int(payload.get("vein", -1))
 			if i < 0 or i >= _vein_positions.size():
@@ -1083,6 +1096,11 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 			_guilds.hud = hud
 			_guilds.on_net(kind, res)
 		return
+	if kind == "duel":
+		if _duels:
+			_duels.hud = hud
+			_duels.on_net(kind, res)
+		return
 	if kind in ["cast", "land"]:
 		if _fishing:
 			_fishing.on_net(kind, res)
@@ -1184,6 +1202,8 @@ func _physics_process(delta: float) -> void:
 	if not _bot_mode or player == null or not Net.remote_client():
 		return
 	_chore_t += delta
+	if _duel_mode and _duels != null and _duels.bot_tick(self, player, delta):
+		return
 	if _summit_mode:
 		if _chore_t >= _summit_next:
 			_summit_next = _chore_t + 10.0
@@ -1717,6 +1737,7 @@ func _build_floor1() -> void:
 	_build_market_floor1()
 	_build_beacons()
 	_routines = preload("res://scripts/npc_routines.gd").build(self)
+	NpcBark.attach(self, _routines)
 	await LoadingScreen.step("Planting the meadow", 0.7)
 	_dress_world()
 	await LoadingScreen.step("Waking the wilds", 0.92)
@@ -2045,7 +2066,7 @@ func _add_pad(pos: Vector3, label: String, dest, color: Color, toast := "") -> v
 	inlay.bottom_radius = 1.15
 	inlay.height = 0.02
 	inlay.radial_segments = 24
-	WorldArt.mesh_node(self, inlay, pos + Vector3(0, 0.165, 0), WorldArt.mat(color.darkened(0.35), 0.0, color, 0.7))
+	WorldArt.mesh_node(self, inlay, pos + Vector3(0, 0.165, 0), WorldArt.mat(color.darkened(0.35), 0.0, color, 0.35))
 	WorldArt.rune_ring(self, pos + Vector3(0, 0.18, 0), 1.25, color, 0.18)
 	# Floating octahedral crystal (both points), a classic waypoint marker.
 	var crystal := SphereMesh.new()

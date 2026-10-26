@@ -524,8 +524,11 @@ class ActionCap extends PanelContainer:
 		var t: String = InputSetup.hint(action)
 		# Unique arts have no pad button of their own: they are the target
 		# trigger held plus the matching Sword Art button ("LT+RB").
-		var chord := InputSetup.using_gamepad() and action in ["skill_4", "skill_5", "skill_6"]
-		if chord:
+		# Hidden-class arts likewise: target + Attack / Dash ("LT+X", "LT+B").
+		var chord := InputSetup.using_gamepad() and action in ["skill_4", "skill_5", "skill_6", "class_1", "class_2"]
+		if chord and action.begins_with("class_"):
+			t = "%s+%s" % [InputSetup.hint("target"), InputSetup.hint("attack" if action == "class_1" else "dash")]
+		elif chord:
 			t = "%s+%s" % [InputSetup.hint("target"), InputSetup.hint("skill_%d" % (int(action.substr(6)) - 3))]
 		_label.text = t
 		if chord:
