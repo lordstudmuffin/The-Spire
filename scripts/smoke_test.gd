@@ -21,6 +21,11 @@ func _ready() -> void:
 		print("== Done: %d failure(s)" % _fails)
 		get_tree().quit(1 if _fails > 0 else 0)
 		return
+	if OS.get_environment("SMOKE_ONLY") == "labyrinth":
+		await _test_labyrinth()
+		print("== Done: %d failure(s)" % _fails)
+		get_tree().quit(1 if _fails > 0 else 0)
+		return
 	print("== GameState")
 	GameState.reset()
 	GameState.character["name"] = "Tester"
@@ -1057,6 +1062,7 @@ func _ready() -> void:
 	await _test_market()
 	await _test_farms_guilds()
 	_test_farming_skill()
+	await _test_labyrinth()
 	await _test_boss()
 
 	print("== Done: %d failure(s)" % _fails)
@@ -1574,6 +1580,69 @@ func _test_farming_skill() -> void:
 	_check(rs.add_life_xp("farming", 30) and int(rs.rec["farming_level"]) == 2, "server records level farming too")
 	GameState.farming_level = lv0
 	GameState.farming_xp = xp0
+
+
+func _test_labyrinth() -> void:
+	print("== Labyrinth chests and traps")
+	GameState.floor = 1
+	GameState.has_position = false
+	GameState.heal_full()
+	var world: Node3D = load("res://scenes/world.tscn").instantiate()
+	add_child(world)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var lab: Node3D = world._lab
+	_check(lab != null and lab.chests.size() == 4 and lab.spikes.size() == 6, "terraces hold 4 chests and 6 spike tiles")
+	if lab == null:
+		world.queue_free()
+		return
+	var L = load("res://scripts/labyrinth_features.gd")
+	var now := Time.get_unix_time_from_system()
+	var keep_chests: Dictionary = GameState.chests.duplicate()
+	var keys0 := int(GameState.materials.get(L.KEY, 0))
+	GameState.chests = {}
+	GameState.materials.erase(L.KEY)
+	var col0 := GameState.money
+	var r: Dictionary = L.open_chest(GameState, 0, now)
+	_check(not r.has("error") and GameState.money > col0 and GameState.chests.has("t1_cache"), "a chest pays out and remembers the opening")
+	_check(L.open_chest(GameState, 0, now + 5.0).has("error") and L.refill_left(GameState, 0, now + 5.0) > 0.0, "an opened chest is empty until it restocks")
+	_check(L.refill_left(GameState, 0, now + float(L.CHESTS[0]["respawn"]) + 1.0) == 0.0, "the chest restocks after its timer")
+	r = L.open_chest(GameState, 1, now)
+	_check(r.has("error") and not GameState.chests.has("t1_vault"), "a vault stays shut without a Terrace Key")
+	GameState.add_material(L.KEY, 1)
+	r = L.open_chest(GameState, 1, now)
+	_check(not r.has("error") and int(GameState.materials.get(L.KEY, 0)) == 0 and GameState.chests.has("t1_vault"), "a Terrace Key opens the vault and is used up")
+	_check(GameState.to_dict().get("chests", {}).has("t1_vault"), "chest timers are saved")
+	var rs = Net.RecordState.new(Net.record_defaults())
+	r = L.open_chest(rs, 2, now)
+	_check(not r.has("error") and (rs.rec["chests"] as Dictionary).has("t2_cache") and int(rs.rec["money"]) > 0, "the server rolls chest loot into the record")
+	_check(lab.srv(1, rs, {"chest": 3}, Vector3(0, 0, 0)).has("error"), "the server refuses a chest opened from afar")
+	_check(L.loot_text({"col": 5, "mats": {"iron_ore": 2}, "gear": {}}) == "5 Col, 2 Iron Ore", "loot line reads well")
+	# Spike cycle: rest -> warn -> up.
+	var tile: Dictionary = lab.spikes[0]
+	var base_t: float = 1000.0 * float(L.PERIOD) - float(tile["phase"])
+	_check(L.spike_state(tile, base_t + 0.1)[0] == "rest" and L.spike_state(tile, base_t + L.PERIOD - L.UP - 0.2)[0] == "warn" and L.spike_state(tile, base_t + L.PERIOD - 0.1)[0] == "up", "spike tiles cycle rest, warn, up")
+	# Stand on a raised tile: hurt once per cycle.
+	var pl: Player = world.player
+	GameState.heal_full()
+	pl.global_position = (tile["pos"] as Vector3) + Vector3(0, 0.5, 0)
+	pl.velocity = Vector3.ZERO
+	var phase0 := float(tile["phase"])
+	tile["phase"] = L.PERIOD - L.UP * 0.5 - fmod(Time.get_unix_time_from_system(), L.PERIOD) + 0.05
+	var hp0 := GameState.hp
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var hp1 := GameState.hp
+	await get_tree().physics_frame
+	_check(hp1 < hp0 and GameState.hp >= hp1 - 0.01, "raised spikes hurt the player on the tile once per cycle")
+	tile["phase"] = phase0
+	pl.global_position = GameState.spawn_point()
+	GameState.heal_full()
+	GameState.chests = keep_chests
+	if keys0 > 0:
+		GameState.materials[L.KEY] = keys0
+	world.queue_free()
+	await get_tree().process_frame
 
 
 func _test_boss() -> void:

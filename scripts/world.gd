@@ -42,6 +42,8 @@ var _stalls: Node3D = null
 ## Hollowbrook farm field and the guild notice board (P8, scripts/life/farms.gd,
 ## scripts/life/guilds.gd); null off Floor 1.
 var _farms: Node3D = null
+## Floor 1 Labyrinth chests, vaults and spike traps (scripts/labyrinth_features.gd).
+var _lab: Node3D = null
 var _guilds: Node3D = null
 var _campfires: Array = []  # {"pos", "range", "label", "where"}
 ## Floor 1 waystones around the Talven fields (Scout Fen's visit quest):
@@ -363,6 +365,8 @@ func _on_interact() -> void:
 			_farms.open(int(near[0]["plot"]), hud)
 		elif near[0].has("guild_board"):
 			_guilds.open(hud)
+		elif near[0].has("chest"):
+			_lab.interact(int(near[0]["chest"]), hud)
 		elif near[0].has("beacon"):
 			_light_beacon(int(near[0]["beacon"]))
 		elif near[0].has("kind"):
@@ -515,6 +519,10 @@ func _track_ore_quest() -> void:
 ## The life-layer prompt, checked after NPCs and before ore veins.
 func _life_interactable() -> Array:
 	var p := player.global_position
+	if _lab:
+		var ch: Dictionary = _lab.nearest(p)
+		if not ch.is_empty():
+			return [ch, ch["label"]]
 	if _stalls:
 		var st: Dictionary = _stalls.nearest(p)
 		if not st.is_empty():
@@ -972,6 +980,10 @@ func srv_action(peer: int, rs, kind: String, payload: Dictionary, pos: Vector3) 
 			if _farms == null:
 				return {"error": "There are no farm plots on this floor."}
 			return _farms.srv(peer, rs, kind, payload, pos)
+		"chest":
+			if _lab == null:
+				return {"error": "There are no chests on this floor."}
+			return _lab.srv(peer, rs, payload, pos)
 		"guild":
 			if _guilds == null:
 				return {"error": "There is no guild office on this floor."}
@@ -1053,6 +1065,10 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 	if kind in ["farm", "farm_signs"]:
 		if _farms:
 			_farms.on_net(kind, res)
+		return
+	if kind == "chest":
+		if _lab:
+			_lab.show_result(res, hud)
 		return
 	if kind in ["guild", "guild_invite"]:
 		if _guilds:
@@ -1651,6 +1667,7 @@ func _build_floor1() -> void:
 	_build_tower()
 	_build_arena()
 	_build_labyrinth()
+	_lab = preload("res://scripts/labyrinth_features.gd").build(self, LAB_LEVELS)
 	await LoadingScreen.step("Settling Hollowbrook and Talven", 0.55)
 	_build_hollowbrook()
 	_build_talven()
@@ -2569,7 +2586,7 @@ func _spawn_mobs() -> void:
 		for i in 3:
 			var a := TAU * i / 3.0 + lvl
 			_add_mob("Kobold Scout", 5 + lvl, 110 + 30 * lvl, 12 + 3 * lvl, 80 + 20 * lvl, 20, "6b7a3a",
-				base + Vector3(cos(a) * 5, 1, sin(a) * 5), "", {"iron_ore": 0.6, "spirit_shard": 0.2}, [0.9, 1.5, 0.9])
+				base + Vector3(cos(a) * 5, 1, sin(a) * 5), "", {"iron_ore": 0.6, "spirit_shard": 0.2, "terrace_key": 0.12}, [0.9, 1.5, 0.9])
 		# Tunnel Rats scurry round the terrace rim (quick, weak).
 		for i in 2:
 			var a := TAU * i / 2.0 + lvl + 1.0
@@ -2577,7 +2594,7 @@ func _spawn_mobs() -> void:
 				"color": "6e6258", "size": [0.6, 0.5, 1.0], "speed": 4.2, "aggro": 7, "drops": {"beast_hide": 0.3},
 				"model": {"pack": "creatures", "name": "Rat", "fit": 1.3}, "pos": [base.x + cos(a) * 8, base.y + 1, base.z + sin(a) * 8]})
 	_spawn_mob({"name": "Kobold Sergeant", "level": 7, "hp": 260, "dmg": 16, "xp": 220, "money": 80, "color": "8a5a2b",
-		"size": [1.3, 1.4, 1.5], "speed": 3.4, "aggro": 12, "drops": {"iron_ore": 1.0, "spirit_shard": 0.6},
+		"size": [1.3, 1.4, 1.5], "speed": 3.4, "aggro": 12, "drops": {"iron_ore": 1.0, "spirit_shard": 0.6, "terrace_key": 1.0},
 		"pos": [LAB_LEVELS[1].x, LAB_LEVELS[1].y + 1, LAB_LEVELS[1].z - 4]})
 
 

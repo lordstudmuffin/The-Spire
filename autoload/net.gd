@@ -365,7 +365,7 @@ static func record_defaults() -> Dictionary:
 		"quests": {}, "smithing_level": 1, "smithing_xp": 0, "items_crafted": 0, "hidden_class": "", "floors_cleared": 0,
 		"weapon_atk": 0.0, "recipes_unlocked": [], "fishing_level": 1, "fishing_xp": 0, "cooking_level": 1, "cooking_xp": 0, "farming_level": 1, "farming_xp": 0,
 		"fish_caught": 0, "home_owned": false, "home_storage": [], "home_furniture": ["", "", "", "", "", ""],
-		"decor_owned": {}, "buffs": {}, "hp": 100.0, "title": "", "visited": [],
+		"decor_owned": {}, "buffs": {}, "hp": 100.0, "title": "", "visited": [], "chests": {},
 		"unique_skill": "", "hidden": {},
 	}
 

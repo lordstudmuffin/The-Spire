@@ -55,6 +55,19 @@ func _init() -> void:
 		_hex[i] = Vector2(cos(i * TAU / 6.0), sin(i * TAU / 6.0))
 
 
+func _ready() -> void:
+	# Full map: holographic backdrop (shaders/map_holo.gdshader) under the canvas.
+	if full:
+		var holo := ColorRect.new()
+		holo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		holo.set_anchors_preset(Control.PRESET_FULL_RECT)
+		var m := ShaderMaterial.new()
+		m.shader = load("res://shaders/map_holo.gdshader")
+		holo.material = m
+		add_child(holo)
+		move_child(holo, 0)
+
+
 func zoom(factor: float) -> void:
 	view_radius = clampf(view_radius * factor, 22.0, 120.0)
 
@@ -96,7 +109,7 @@ func _radius() -> float:
 func _draw() -> void:
 	var c := size * 0.5
 	var r := _radius()
-	draw_circle(c, r, Color(UITheme.NAVY.r, UITheme.NAVY.g, UITheme.NAVY.b, 0.82 if not full else 0.96))
+	draw_circle(c, r, Color(UITheme.NAVY.r, UITheme.NAVY.g, UITheme.NAVY.b, 0.82 if not full else 1.0))
 
 
 func _update_xf() -> void:
@@ -117,7 +130,7 @@ func _draw_canvas() -> void:
 	var px := 1.0 / _scale  # one screen pixel in world units
 	# Island and the void around it.
 	var ir := MapData.island_radius()
-	ci.draw_circle(Vector2.ZERO, ir, ISLAND_FILL)
+	ci.draw_circle(Vector2.ZERO, ir, Color(0.2, 0.62, 0.5, 0.22) if full else ISLAND_FILL)
 	ci.draw_arc(Vector2.ZERO, ir, 0.0, TAU, 96, Color(ISLAND_EDGE.r, ISLAND_EDGE.g, ISLAND_EDGE.b, 0.55), 2.0 * px, true)
 	# Faint range rings so distance reads at a glance (compact) / grid (full).
 	if full:

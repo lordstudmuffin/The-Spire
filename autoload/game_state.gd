@@ -41,7 +41,9 @@ const MATERIAL_NAMES := {"iron_ore": "Iron Ore", "beast_hide": "Beast Hide", "sp
 	# Farm plots (P8): seeds, crops and the dishes they cook into.
 	"turnip_seeds": "Turnip Seeds", "sunwheat_seeds": "Sunwheat Seeds", "honeymelon_seeds": "Honeymelon Seeds",
 	"turnip": "Turnip", "sunwheat": "Sunwheat", "honeymelon": "Honeymelon",
-	"turnip_soup": "Turnip Soup", "harvest_bread": "Harvest Bread", "melon_tart": "Honeymelon Tart"}
+	"turnip_soup": "Turnip Soup", "harvest_bread": "Harvest Bread", "melon_tart": "Honeymelon Tart",
+	# Labyrinth: opens the terraces' locked vaults (LabyrinthFeatures).
+	"terrace_key": "Terrace Key"}
 ## Floor layout data the world and the player need before the scene exists:
 ## where a character arrives on each floor (also the respawn point).
 const FLOOR_SPAWNS := {1: Vector3(0, 1, 6), 2: Vector3(0, 1, 37)}
@@ -97,6 +99,8 @@ const HOME_SLOTS := 6
 var title := ""
 ## Location ids visited for visit-objective quests ("waystone_0" ...).
 var visited: Array = []
+## Labyrinth chests this character opened: {chest_id: unix seconds}.
+var chests: Dictionary = {}
 
 
 func _ready() -> void:
@@ -151,6 +155,7 @@ func reset() -> void:
 	buffs = {}
 	title = ""
 	visited = []
+	chests = {}
 	has_position = false
 	hp = max_hp()
 
@@ -519,6 +524,15 @@ static func visited_count(list: Array, prefix: String) -> int:
 	return n
 
 
+static func _parse_chests(raw) -> Dictionary:
+	var out := {}
+	if raw is Dictionary:
+		for k in raw:
+			if k is String and k.length() <= 24 and out.size() < 32:
+				out[k] = float(raw[k])
+	return out
+
+
 ## Records a visited location. Returns true when it was new.
 func visit(id: String) -> bool:
 	if visited.has(id):
@@ -580,6 +594,7 @@ func to_dict() -> Dictionary:
 		"buffs": buffs,
 		"title": title,
 		"visited": visited,
+		"chests": chests,
 	}
 
 
@@ -666,6 +681,8 @@ func apply_patch(d: Dictionary) -> void:
 		title = str(d["title"]).left(32)
 	if d.get("visited") is Array:
 		visited = _parse_visited(d["visited"])
+	if d.get("chests") is Dictionary:
+		chests = _parse_chests(d["chests"])
 	hp = clampf(float(d.get("hp", hp)), 0.0, max_hp())
 	stats_changed.emit()
 	xp_changed.emit(xp, xp_to_next())
@@ -815,4 +832,5 @@ func from_dict(d: Dictionary) -> void:
 	var raw_visited = d.get("visited", [])
 	if raw_visited is Array:
 		visited = _parse_visited(raw_visited)
+	chests = _parse_chests(d.get("chests", {}))
 	hp = float(d.get("hp", max_hp()))
