@@ -211,6 +211,38 @@ static func cyl(parent: Node, top: float, bottom: float, h: float, pos: Vector3,
 	return mesh_node(parent, cm, pos, mat(c), rot)
 
 
+static var _rocks := {}
+
+
+## Rough faceted boulder of radius ~0.5 (unit sphere jittered per vertex,
+## flat normals), cached per seed. Callers scale and pick the material.
+static func boulder_mesh(seed := 7) -> Mesh:
+	if _rocks.has(seed):
+		return _rocks[seed]
+	var sm := SphereMesh.new()
+	sm.radial_segments = 7
+	sm.rings = 4
+	var arr := sm.get_mesh_arrays()
+	var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed
+	var bumps := {}
+	for i in verts.size():
+		var key := verts[i].snapped(Vector3.ONE * 0.01)
+		if not bumps.has(key):
+			bumps[key] = rng.randf_range(0.75, 1.15)
+		verts[i] *= bumps[key]
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)
+	for i in (arr[Mesh.ARRAY_INDEX] as PackedInt32Array):
+		st.add_vertex(verts[i])
+	st.generate_normals()
+	var m: Mesh = st.commit()
+	_rocks[seed] = m
+	return m
+
+
 static func sphere(parent: Node, r: float, pos: Vector3, c: Color, scl := Vector3.ONE) -> MeshInstance3D:
 	var sm := SphereMesh.new()
 	sm.radius = r
@@ -1651,9 +1683,14 @@ static func platform_dress(parent: Node3D, base: Vector3, radius: float, rune: C
 		var p := Vector3(cos(a) * r, 0.0, sin(a) * r)
 		if absf(p.x) < 3.0 and absf(absf(p.z) - 9.0) < 3.0:
 			continue  # Keep the teleport pads clear.
-		var s := rng.randf_range(0.45, 1.2)
-		moss_xs.append(xf(p, a, Vector3(s, 0.07, s * rng.randf_range(0.5, 1.0))))
-		moss_cs.append(Color("3e7a35").lerp(Color("79b85a"), rng.randf()))
+		# A clump of a few low lumps sunk into the joints, not one flat disc.
+		var s := rng.randf_range(0.3, 0.7)
+		var base_c := Color("2f5a2a").lerp(Color("587f3e"), rng.randf())
+		for j in 3:
+			var o := Vector3(rng.randf_range(-0.6, 0.6), -0.02, rng.randf_range(-0.6, 0.6)) * s * 1.6
+			var sj := s * rng.randf_range(0.55, 1.0)
+			moss_xs.append(xf(p + o, rng.randf() * TAU, Vector3(sj, rng.randf_range(0.06, 0.12), sj * rng.randf_range(0.6, 1.0))))
+			moss_cs.append(base_c.lerp(Color("6f8f45"), rng.randf() * 0.35))
 	var im := multimesh(n, ivy, ivy_xs + moss_xs, ivy_cs + moss_cs, "IvyMoss")
 	im.material_override = foliage_mat(Color.WHITE, 0.25)
 	im.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF

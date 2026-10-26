@@ -637,7 +637,12 @@ func boss_rockfall_warning(enemy: Node3D, pos: Vector3, radius: float, secs: flo
 	var g := Vector3(pos.x, _ground_y(pos), pos.z)
 	_telegraph(enemy, 0, g, Vector2.ONE * radius * 2.0, Vector3.FORWARD, secs)
 	var rock := MeshInstance3D.new()
-	rock.mesh = _rock_mesh()
+	rock.mesh = WorldArt.boulder_mesh()
+	if _rock_mat == null:
+		_rock_mat = StandardMaterial3D.new()
+		_rock_mat.albedo_color = Color(0.46, 0.43, 0.4)
+		_rock_mat.roughness = 0.95
+	rock.material_override = _rock_mat
 	rock.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(rock)
 	var sz := radius * 0.55
@@ -669,39 +674,49 @@ func boss_rockfall_impact(enemy: Node3D, pos: Vector3, radius: float) -> void:
 		me.call("shake", 0.2)
 
 
-var _rock: Mesh
+var _rock_mat: StandardMaterial3D
 
 
-## A rough low-poly boulder (unit size), built once.
-func _rock_mesh() -> Mesh:
-	if _rock != null:
-		return _rock
-	var sm := SphereMesh.new()
-	sm.radial_segments = 7
-	sm.rings = 4
-	var arr := sm.get_mesh_arrays()
-	var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 7
-	var bumps := {}
-	for i in verts.size():
-		var key := verts[i].snapped(Vector3.ONE * 0.01)
-		if not bumps.has(key):
-			bumps[key] = rng.randf_range(0.75, 1.15)
-		verts[i] *= bumps[key]
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	st.set_smooth_group(-1)
-	var idx: PackedInt32Array = arr[Mesh.ARRAY_INDEX]
-	for i in idx:
-		st.add_vertex(verts[i])
-	st.generate_normals()  # smooth group -1: flat facets
-	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0.46, 0.43, 0.4)
-	m.roughness = 0.95
-	st.set_material(m)
-	_rock = st.commit()
-	return _rock
+## Chest opened: the lid's light spills out as a pillar of motes and a star
+## in the item's rank colour (Crafting ranks; -1 = no gear, warm gold).
+func chest_open(pos: Vector3, rank := -1) -> void:
+	var col := Color(1.0, 0.82, 0.4) if rank < 0 else Crafting.rank_color(clampi(rank, 0, 5))
+	var top := pos + Vector3(0, 0.8, 0)
+	flash(top, col.lightened(0.3), 1.4)
+	_glint(top + Vector3(0, 0.3, 0), col, 1.6 + 0.35 * maxi(rank, 0), 0.9, true)
+	ring(pos + Vector3(0, 0.05, 0), col, 2.6, 0.5)
+	_fire(top, "star_06", false, col, 0.6, 1.4, 1.0, 3.0, Vector3.UP, 18.0, 1.5, 0.08, 0.18, 0.35, false)
+	flash_light(top, col, 3.0 + maxi(rank, 0))
+	if rank >= 2:
+		# Rare and above: a second, slower bloom so a good drop feels special.
+		get_tree().create_timer(0.25).timeout.connect(func():
+			if is_inside_tree():
+				_glint(top + Vector3(0, 0.6, 0), col.lightened(0.25), 2.4, 1.1, true)
+				_shock_ring(top, col, 3.0, 0.4))
+
+
+## Idle twinkle on an unopened chest: a small star glints somewhere on it
+## every second or so. Call with on = false to stop (e.g. while it refills).
+func chest_sparkle(node: Node3D, on := true, color := Color(1.0, 0.88, 0.5)) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var old := node.get_node_or_null("VFXSparkle")
+	if not on:
+		if old:
+			old.queue_free()
+		return
+	if old:
+		return
+	var t := Timer.new()
+	t.name = "VFXSparkle"
+	t.wait_time = 1.1 + randf() * 0.5
+	t.autostart = true
+	node.add_child(t)
+	t.timeout.connect(func():
+		if not is_inside_tree() or not node.is_visible_in_tree():
+			return
+		var off := Vector3(randf_range(-0.45, 0.45), randf_range(0.35, 0.85), randf_range(-0.3, 0.3))
+		_glint(node.global_position + node.global_transform.basis * off, color, 0.35, 0.5, true))
 
 
 ## An HP bar emptied: a ring of glass shards bursts off the boss with a cold
