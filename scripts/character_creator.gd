@@ -35,6 +35,15 @@ var _preview_class: Label
 ## the title screen instead of entering the world.
 var _edit := false
 var _edit_slot := -1
+## Life: "Standard" or "Permadeath" (Permadeath.slot_kinds decides what the
+## slot may be: two standard climbers and one permadeath per account).
+var _life_chips := {}
+var _life_note: Label
+var _life_terms: HBoxContainer
+var _life_panel: PanelContainer
+var _ring_mat: StandardMaterial3D
+var _begin_btn: Button
+var _pd_confirm := false
 
 
 func _ready() -> void:
@@ -118,6 +127,39 @@ func _ready() -> void:
 	ident.add_child(grid)
 	_select_class(GameState.character["origin"])
 
+	# Life card: one life or the usual climb (new characters only).
+	if not _edit:
+		var life := UITheme.make_panel(form, "Life")
+		var kinds := SaveSystem.kinds_for(SaveSystem.current_slot)
+		var lrow := HBoxContainer.new()
+		lrow.add_theme_constant_override("separation", 8)
+		for k in [["standard", "Standard", "Fall, wake in town. Some EXP and wear lost."],
+				["permadeath", "Permadeath  ·  one life", "Fall once and the climb is over."]]:
+			var key: String = k[0]
+			var lb := _class_chip_base("%s\n%s" % [k[1], k[2]])
+			lb.disabled = not bool(kinds["normal" if key == "standard" else "permadeath"])
+			if lb.disabled:
+				lb.tooltip_text = "This account's %s slot%s taken" % ["permadeath" if key == "permadeath" else "standard", " is" if key == "permadeath" else "s are"]
+			lb.pressed.connect(func(): _select_life(key))
+			lrow.add_child(lb)
+			_life_chips[key] = lb
+		life.add_child(lrow)
+		_life_panel = life.get_parent()
+		_life_note = UITheme.label("", 13, UITheme.PARCH)
+		_life_note.autowrap_mode = TextServer.AUTOWRAP_WORD
+		life.add_child(_life_note)
+		# Permadeath terms: boosts and penalties side by side.
+		_life_terms = HBoxContainer.new()
+		_life_terms.add_theme_constant_override("separation", 14)
+		for side in [["Boosts", UITheme.GOLD], ["Penalties", UITheme.ROSE]]:
+			var tcol := VBoxContainer.new()
+			tcol.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			tcol.add_theme_constant_override("separation", 3)
+			tcol.add_child(UITheme.kicker(side[0], side[1]))
+			_life_terms.add_child(tcol)
+		life.add_child(_life_terms)
+		_select_life("standard" if bool(kinds["normal"]) else "permadeath")
+
 	# Appearance card.
 	var look := UITheme.make_panel(form, "Appearance")
 	look.add_child(_field_label("Body"))
@@ -192,6 +234,7 @@ func _ready() -> void:
 
 	# Big call to action under the scroll area.
 	var begin := UITheme.make_button("Save look" if _edit else "Enter the Spire", "primary")
+	_begin_btn = begin
 	begin.custom_minimum_size = Vector2(0, 56)
 	begin.add_theme_font_size_override("font_size", 21)
 	begin.pressed.connect(_begin)
@@ -301,6 +344,7 @@ func _ready() -> void:
 	rmat.emission = UITheme.GOLD
 	rmat.emission_energy_multiplier = 0.9
 	ring.material_override = rmat
+	_ring_mat = rmat
 	ring.position.y = 0.0
 	stage.add_child(ring)
 	_stage = stage
@@ -329,6 +373,9 @@ func _ready() -> void:
 
 	_refresh_stats()
 	_refresh_preview_caption()
+	if not _life_chips.is_empty():
+		# Re-apply now the Enter button and pedestal ring exist (--demo-permadeath: shots).
+		_select_life("permadeath" if bool(GameState.character.get("permadeath", false)) or "--demo-permadeath" in OS.get_cmdline_user_args() else "standard")
 	UITheme.fade_in(col, 0.05)
 	UITheme.fade_in(frame, 0.2)
 	_name_edit.grab_focus()
@@ -358,15 +405,21 @@ func _field(label: String, control: Control) -> VBoxContainer:
 
 
 func _class_chip(origin: String) -> Button:
+	var b := _class_chip_base("%s\n%s" % [origin, CLASS_BLURB.get(origin, "")])
+	var st: Dictionary = GameState.ORIGINS[origin]
+	b.tooltip_text = "STR %d  AGI %d  END %d  SPI %d" % [st["strength"], st["agility"], st["endurance"], st["spirit"]]
+	b.pressed.connect(func(): _select_class(origin))
+	return b
+
+
+## Two-line option card (class and Life choices).
+func _class_chip_base(text: String) -> Button:
 	var b := Button.new()
 	b.theme_type_variation = "Chip"
 	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	b.custom_minimum_size = Vector2(0, 58)
 	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	var st: Dictionary = GameState.ORIGINS[origin]
-	b.text = "%s\n%s" % [origin, CLASS_BLURB.get(origin, "")]
-	b.tooltip_text = "STR %d  AGI %d  END %d  SPI %d" % [st["strength"], st["agility"], st["endurance"], st["spirit"]]
-	b.pressed.connect(func(): _select_class(origin))
+	b.text = text
 	UITheme.hover_fx(b, 1.02)
 	for st_name in ["normal", "hover", "pressed"]:
 		var s: StyleBoxFlat = b.get_theme_stylebox(st_name).duplicate()
@@ -560,6 +613,63 @@ func _unhandled_input(event: InputEvent) -> void:
 	get_viewport().set_input_as_handled()
 
 
+func _select_life(key: String) -> void:
+	var pd := key == "permadeath"
+	GameState.character["permadeath"] = pd
+	_pd_confirm = false
+	if _begin_btn:
+		_begin_btn.text = "Enter the Spire  ·  one life" if pd else "Enter the Spire"
+	var crimson := Color(0.86, 0.18, 0.24)
+	for k in _life_chips:
+		var b: Button = _life_chips[k]
+		var on: bool = k == key
+		var tint: Color = crimson if k == "permadeath" else UITheme.CYAN
+		b.add_theme_stylebox_override("normal", UITheme.box(Color(tint, 0.16) if on else Color(1, 1, 1, 0.05), tint if on else Color(1, 1, 1, 0.12), 10, 2 if on else 1))
+		b.add_theme_color_override("font_color", UITheme.PARCH if on else UITheme.MUTED)
+	if _begin_btn and not _edit:
+		_begin_btn.theme_type_variation = "DangerButton" if pd else "PrimaryButton"
+	if _ring_mat:
+		var rc: Color = crimson if pd else UITheme.GOLD
+		_ring_mat.albedo_color = rc
+		_ring_mat.emission = rc
+	if _life_panel:
+		var pb := UITheme.card_box(crimson if pd else UITheme.GOLD)
+		if pd:
+			pb.border_color = Color(crimson, 0.85)
+			pb.border_width_top = 3
+			pb.shadow_color = Color(crimson, 0.18)
+			pb.shadow_size = 14
+		_life_panel.add_theme_stylebox_override("panel", pb)
+	if _life_note == null:
+		return
+	var kinds := SaveSystem.kinds_for(SaveSystem.current_slot)
+	_life_terms.visible = pd
+	if pd:
+		_life_note.text = "One life, as in Aincrad. If this climber dies they are gone for good: the name is struck on the Monument of Climbers and the slot becomes a memorial. Leaving mid-fight does not save you: the body stays %d s." % int(Permadeath.LINGER_SECS)
+		_life_note.add_theme_color_override("font_color", Color(0.95, 0.82, 0.84))
+		_fill_terms(0, ["+%d%% EXP" % int(Permadeath.XP_BONUS * 100), "+%d%% drop chance" % int(Permadeath.DROP_BONUS * 100),
+			"+%d%% Last Attack rewards" % int(Permadeath.LA_BONUS * 100), "The Undying title", "Permadeath column on the Monument"])
+		_fill_terms(1, ["No revive", "Healing Crystals %dx price, %d s cooldown" % [Permadeath.CRYSTAL_PRICE_MULT, int(Permadeath.HEAL_CRYSTAL_CD)],
+			"No Teleport Crystal in combat", "Gear wears %.1fx faster" % Permadeath.WEAR_MULT,
+			"Stalls trade only with one-life climbers", "Duels are First Strike only"])
+	else:
+		_life_note.text = "Death costs some EXP and gear durability, and you return to town. Up to %d standard climbers per account%s." % [
+			Permadeath.MAX_NORMAL, "" if bool(kinds["permadeath"]) else "; your permadeath slot is taken"]
+		_life_note.add_theme_color_override("font_color", UITheme.PARCH)
+
+
+## Bulleted lines under the Boosts (0) or Penalties (1) heading.
+func _fill_terms(which: int, lines: Array) -> void:
+	var col: VBoxContainer = _life_terms.get_child(which)
+	for i in range(col.get_child_count() - 1, 0, -1):
+		col.get_child(i).queue_free()
+	var c: Color = UITheme.GOLD if which == 0 else UITheme.ROSE
+	for t in lines:
+		var l := UITheme.label("•  " + str(t), 13, c.lerp(UITheme.PARCH, 0.35))
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD
+		col.add_child(l)
+
+
 func _begin() -> void:
 	if _edit:
 		SaveSystem.save_game(_edit_slot)
@@ -569,6 +679,11 @@ func _begin() -> void:
 		_name_edit.placeholder_text = "Please enter a name first"
 		_name_hint.show()
 		_name_edit.grab_focus()
+		return
+	if Permadeath.is_on(GameState) and not _pd_confirm:
+		_pd_confirm = true
+		_begin_btn.text = "Begin with one life?"
+		Audio.play("ui_error")
 		return
 	for s in _bonus:
 		GameState.stats[s] += _bonus[s]
