@@ -12,7 +12,7 @@ const MAX_SLASHES := 8      # slash arc quads
 const MAX_FLASHES := 6      # billboard impact flashes
 const MAX_RINGS := 6        # flat ground rings
 const BASIC_COLOR := Color(0.55, 0.9, 1.0)
-## Sword Art colours, by skill index (Horizontal, Vertical Arc, Rage Spike).
+## Sword Art colours, by skill index (Sweeping Edge, Twin Crescent, Falcon Rush).
 const KIND_COLORS := [Color(1.0, 0.58, 0.12), Color(0.4, 0.55, 1.0), Color(1.0, 0.2, 0.28)]
 ## Slash arc mesh: an arc of `SLASH_SWEEP` radians, thick in the middle and
 ## pointed at both ends, vertex alpha fading toward the tips (the Kenney slash
@@ -746,6 +746,94 @@ func blade_glow(weapon: Node3D, color: Color, secs := 0.45) -> void:
 		for mi in meshes:
 			if is_instance_valid(mi) and (mi as MeshInstance3D).material_overlay == m:
 				(mi as MeshInstance3D).material_overlay = null)
+
+
+# --- Duels -----------------------------------------------------------------------
+
+const DUEL_COLOR := Color(1.0, 0.42, 0.3)
+var _duel_ring: MeshInstance3D
+
+
+func duel_countdown(n: int) -> void:
+	var l := get_tree().get_first_node_in_group("duel_countdown") as Label
+	UITheme.style_duel_label(l)
+
+
+## Fight begins: a crossed-blades glint between the two duellists and a
+## ring at each one's feet.
+func duel_start(a: Node3D, b: Node3D) -> void:
+	UITheme.style_duel_label(get_tree().get_first_node_in_group("duel_countdown") as Label)
+	for p in [a, b]:
+		if _valid(p):
+			var g: Vector3 = p.global_position
+			ring(Vector3(g.x, _ground_y(g) + 0.05, g.z), DUEL_COLOR, 2.4, 0.5)
+	if _valid(a) and _valid(b):
+		var mid := (a.global_position + b.global_position) * 0.5 + Vector3(0, 1.4, 0)
+		_glint(mid, DUEL_COLOR, 2.2, 0.7, true)
+		_glint(mid, Color(1, 1, 1), 1.0, 0.5, true)
+		flash_light(mid, DUEL_COLOR, 4.0)
+
+
+## PvP telegraph: the attacker's blade catches the light just before the blow
+## lands (the window to parry).
+func duel_incoming(attacker: Node3D, windup: float) -> void:
+	if not _valid(attacker):
+		return
+	var f := _player_forward(attacker)
+	_glint(attacker.global_position + f * 0.7 + Vector3(0, 1.3, 0), WINDUP_COLOR, 0.9, maxf(windup, 0.15) + 0.1, true)
+
+
+func duel_end(winner: Node3D, _loser: Node3D) -> void:
+	UITheme.style_duel_label(get_tree().get_first_node_in_group("duel_countdown") as Label)
+	if _valid(winner):
+		var g := winner.global_position
+		ring(Vector3(g.x, _ground_y(g) + 0.05, g.z), Color(1.0, 0.85, 0.35), 3.0, 0.7)
+		_fire(g + Vector3(0, 1.0, 0), "star_05", true, Color(1.0, 0.85, 0.35), 0.8, 1.0, 1.5, 3.5, Vector3.UP, 60.0, -3.0, 0.1, 0.25, 0.0, false)
+
+
+## The forfeit circle: a low translucent wall on its edge while a duel runs.
+func duel_ring(center: Vector3, radius: float, on: bool) -> void:
+	if _duel_ring != null and is_instance_valid(_duel_ring):
+		_duel_ring.queue_free()
+	_duel_ring = null
+	if not on:
+		return
+	var cm := CylinderMesh.new()
+	cm.top_radius = radius
+	cm.bottom_radius = radius
+	cm.height = 1.6
+	cm.radial_segments = 96
+	cm.cap_top = false
+	cm.cap_bottom = false
+	var m := ShaderMaterial.new()
+	m.shader = _duel_wall_shader()
+	m.set_shader_parameter("color", DUEL_COLOR)
+	_duel_ring = MeshInstance3D.new()
+	_duel_ring.mesh = cm
+	_duel_ring.material_override = m
+	_duel_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_duel_ring)
+	_duel_ring.global_position = Vector3(center.x, _ground_y(center) + 0.8, center.z)
+
+
+var _duel_wall: Shader
+
+
+func _duel_wall_shader() -> Shader:
+	if _duel_wall == null:
+		_duel_wall = Shader.new()
+		_duel_wall.code = """
+shader_type spatial;
+render_mode unshaded, blend_mix, cull_disabled, depth_draw_never, shadows_disabled;
+uniform vec4 color : source_color = vec4(1.0, 0.42, 0.3, 1.0);
+void fragment() {
+	// Fades upward; thin hex-ish ticks around the circumference; slow scroll.
+	float ticks = smoothstep(0.92, 1.0, abs(sin((UV.x * 360.0 + TIME * 4.0) * 3.14159 / 2.0)));
+	ALBEDO = color.rgb;
+	ALPHA = clamp(UV.y * UV.y * 0.32 + ticks * UV.y * 0.25, 0.0, 0.6);
+}
+"""
+	return _duel_wall
 
 
 # --- Hidden class arts ---------------------------------------------------------

@@ -724,6 +724,23 @@ static func ring(parent: Control, fill: Color, stroke: Color, width := 3.0) -> v
 
 ## Look of HUD.show_death's overlay: grey-out shader on the ColorRect (its
 ## colour alpha stays the fade strength) and a spaced system-font title.
+## Duel countdown / "DUEL!" / VICTORY-DEFEAT: big bold system type
+## with a dark outline and a soft drop shadow (keeps the label's colour).
+static func style_duel_label(l: Label) -> void:
+	if l == null or l.has_meta("duel_styled"):
+		return
+	l.set_meta("duel_styled", true)
+	var f := ui_bold()
+	if f:
+		l.add_theme_font_override("font", f)
+	l.add_theme_font_size_override("font_size", 104)
+	l.add_theme_color_override("font_outline_color", Color(0.04, 0.05, 0.1, 0.95))
+	l.add_theme_constant_override("outline_size", 10)
+	l.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.4))
+	l.add_theme_constant_override("shadow_offset_y", 4)
+	l.add_theme_constant_override("shadow_offset_x", 0)
+
+
 static func death_screen(overlay: ColorRect, title: Label, sub: Label) -> void:
 	var m := ShaderMaterial.new()
 	m.shader = load("res://shaders/death_screen.gdshader")

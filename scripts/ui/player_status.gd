@@ -43,6 +43,8 @@ var guard_visible := false
 var guard := 0.0
 var guard_max := 1.0
 var stunned := false
+## Compact: no EXP line and no class / Col text (the duel opponent gauge).
+var compact := false
 
 var _chip := 1.0          # chip value in HP units
 var _chip_hold := 0.0
@@ -205,6 +207,11 @@ func _draw() -> void:
 		if tx > gx + GAUGE_W * STEP_AT + SLANT:
 			draw_line(Vector2(tx, gy + GAUGE_H2 - 3), Vector2(tx, gy + GAUGE_H2), Color(1, 1, 1, 0.35), 1.0)
 
+	if compact:
+		var tip := gx + GAUGE_W
+		_text(Vector2(gx + GAUGE_W * STEP_AT, gy + GAUGE_H2 + 17.0), "%d/%d" % [int(ceil(hp)), int(hp_max)], 14, TEXT, true, HORIZONTAL_ALIGNMENT_RIGHT, tip - (gx + GAUGE_W * STEP_AT) - 64)
+		_text(Vector2(2, y_plate + PLATE_H + 18.0), class_text, 12, Color(1.0, 0.62, 0.5), true)
+		return
 	# EXP line under the gauge.
 	var ly := gy + GAUGE_H + 5.0
 	var lx0 := gx
@@ -227,3 +234,18 @@ func _draw() -> void:
 	var info := class_text
 	_text(Vector2(2, sy), info, 12, Color(0.85, 0.92, 1.0), true)
 	_text(Vector2(2, sy + 17), "%d Col   ·   Floor %d" % [money, floor_no], 12, Color(1, 0.93, 0.8))
+
+
+## The duel opponent's gauge: the same SAO-style plate and gauge, compact,
+## top centre under the toast row, with a red "DUEL" tag under the name.
+static func make_duel_gauge(parent: Control, opponent: String) -> PlayerStatus:
+	var g := PlayerStatus.new()
+	g.name = "DuelOpponent"
+	g.compact = true
+	g.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	# Under the toast row, centred, so a duel toast never covers it.
+	g.offset_left = -(PLATE_W + GAUGE_W + 24.0) * 0.5
+	g.offset_top = 236.0
+	g.set_identity(opponent, "DUEL  ·  OPPONENT", 0)
+	parent.add_child(g)
+	return g
