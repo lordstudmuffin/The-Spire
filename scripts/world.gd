@@ -3086,6 +3086,7 @@ func _spawn_mobs() -> void:
 		_spawn_mob({"name": "Dire Wolf", "level": 4, "hp": 90, "dmg": 14, "xp": 70, "money": 15, "color": "59596b",
 			"pos": [p.x, p.y, p.z], "quest": "wolf_hunt", "drops": {"beast_hide": 0.8, "wolf_pelt": 0.7, "spirit_shard": 0.35}, "pack": "wolf"})
 	_spawn_grove()
+	_spawn_country_camps()
 	# Cliff Bats flit along the tower's foot, between the wolves and the gate.
 	for i in 4:
 		var p := TOWER_POS + Vector3(-30 + 20 * i, 1, _rng.randf_range(10, 14))
@@ -3121,6 +3122,46 @@ func _spawn_mobs() -> void:
 const GROVE := Vector3(114, 0, -174)  # WorldArt.GROVE
 const GROVE_SPOTS := [Vector3(0, 0, 0), Vector3(6, 0, 3), Vector3(-5, 0, 4), Vector3(4, 0, -6), Vector3(-6, 0, -4),
 	Vector3(9, 0, -2), Vector3(-2, 0, 8), Vector3(1, 0, -10)]
+
+
+## Mobs out in the open country round the wayside landmarks, so the long
+## roads between places have fights along them (levels step up from the
+## town outward: slimes and boars near home, kobolds and wolves farther out).
+func _spawn_country_camps() -> void:
+	var at := func(c: Vector2, off: Vector3) -> Array:
+		return [c.x + off.x, 1.0, c.y + off.z]
+	# Ruined Watch: kobold scouts squatting in the old tower's base.
+	for i in 4:
+		var a := TAU * i / 4.0 + 0.4
+		_spawn_mob({"name": "Kobold Scout", "level": 3 + i % 2, "hp": 85, "dmg": 10, "xp": 60, "money": 14, "color": "6b7a3a",
+			"size": [0.9, 1.5, 0.9], "pack": "kobold", "drops": {"iron_ore": 0.5, "spirit_shard": 0.15},
+			"pos": at.call(WorldArt.RUINED_WATCH, Vector3(cos(a) * 9.0, 0, sin(a) * 9.0))})
+	# Old Siege Camp: scavengers picking over the wrecks.
+	for i in 3:
+		var a := TAU * i / 3.0 + 1.1
+		_spawn_mob({"name": "Kobold Scout", "level": 4, "hp": 95, "dmg": 11, "xp": 70, "money": 16, "color": "6b7a3a",
+			"size": [0.9, 1.5, 0.9], "pack": "kobold", "drops": {"iron_ore": 0.6, "spirit_shard": 0.2},
+			"pos": at.call(WorldArt.SIEGE_CAMP, Vector3(cos(a) * 10.0, 0, sin(a) * 10.0))})
+	# West woods round the Hunters' Camp: a wolf pack the hunters keep at bay.
+	for i in 5:
+		var a := TAU * i / 5.0 + 0.2
+		_spawn_mob({"name": "Dire Wolf", "level": 3, "hp": 80, "dmg": 12, "xp": 60, "money": 12, "color": "59596b",
+			"quest": "wolf_hunt", "pack": "wolf", "drops": {"beast_hide": 0.8, "wolf_pelt": 0.6, "spirit_shard": 0.3},
+			"pos": at.call(WorldArt.HUNTERS_CAMP, Vector3(cos(a) * 24.0, 0, sin(a) * 24.0))})
+	# West meadow between the town and Hollowbrook: more boars for the boar quest.
+	for i in 6:
+		var p := Vector3(_rng.randf_range(-115, -55), 1, _rng.randf_range(0, 40))
+		_spawn_mob({"name": "Field Boar", "level": 1, "hp": 40, "dmg": 6, "xp": 25, "money": 5, "color": "8c5940",
+			"pos": [p.x, p.y, p.z], "quest": "boar_trouble", "drops": {"beast_hide": 0.7}, "rush": true})
+	# Wayside Shrine: slimes in the grass, a bat round the pillars.
+	for i in 4:
+		var a := TAU * i / 4.0
+		_spawn_mob({"name": "Meadow Slime", "level": 2, "hp": 30, "dmg": 4, "xp": 16, "money": 3, "color": "7fd36a",
+			"size": [0.9, 0.7, 0.9], "speed": 2.2, "aggro": 6, "drops": {"spirit_shard": 0.12},
+			"model": {"pack": "creatures", "name": "Slime"}, "pos": at.call(WorldArt.SHRINE, Vector3(cos(a) * 16.0, 0, sin(a) * 16.0))})
+	_spawn_mob({"name": "Cliff Bat", "level": 3, "hp": 55, "dmg": 9, "xp": 50, "money": 10, "color": "4a3a52",
+		"size": [0.8, 0.6, 0.8], "speed": 4.6, "aggro": 10, "drops": {"beast_hide": 0.3, "spirit_shard": 0.15},
+		"model": {"pack": "creatures", "name": "Bat", "lift": 1.3, "fit": 1.4}, "pos": at.call(WorldArt.SHRINE, Vector3(0, 0, -8))})
 
 
 func _spawn_grove() -> void:
