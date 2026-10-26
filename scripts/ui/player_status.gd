@@ -45,6 +45,8 @@ var guard_visible := false
 var guard := 0.0
 var guard_max := 1.0
 var stunned := false
+## Permadeath: the Undying title, drawn in crimson after the class ("" = off).
+var life_title := ""
 ## Compact: no EXP line and no class / Col text (the duel opponent gauge).
 var compact := false
 
@@ -69,6 +71,7 @@ func set_identity(n: String, cls: String, lv: int) -> void:
 	player_name = n
 	class_text = cls
 	level = lv
+	life_title = Permadeath.title_for(lv, GameState.floors_cleared) if not compact and Permadeath.is_on(GameState) else ""
 	queue_redraw()
 
 
@@ -179,7 +182,11 @@ func _draw() -> void:
 	sh.shadow_size = 6
 	sh.shadow_offset = Vector2(0, 2)
 	draw_style_box(sh, plate)
-	draw_rect(Rect2(plate.position + Vector2(0, 5), Vector2(3, PLATE_H - 10)), Color(1.0, 0.62, 0.14))
+	var crimson := Color(0.9, 0.2, 0.26)
+	draw_rect(Rect2(plate.position + Vector2(0, 5), Vector2(3, PLATE_H - 10)), crimson if life_title != "" else Color(1.0, 0.62, 0.14))
+	if life_title != "":
+		# One life: a crimson rim along the plate's bottom edge.
+		draw_rect(Rect2(plate.position + Vector2(3, PLATE_H - 2), Vector2(PLATE_W - 3, 2)), crimson)
 	var nf := _bold if _bold else get_theme_default_font()
 	var name_px := 17
 	while name_px > 11 and nf.get_string_size(player_name, HORIZONTAL_ALIGNMENT_LEFT, -1, name_px).x > PLATE_W - 24:
@@ -243,6 +250,14 @@ func _draw() -> void:
 	var sy := y_plate + PLATE_H + 18.0
 	var info := class_text
 	_text(Vector2(2, sy), info, 12, Color(0.85, 0.92, 1.0), true)
+	if life_title != "":
+		var bf := _bold if _bold else get_theme_default_font()
+		var lx := 2.0 + bf.get_string_size(info, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x + 12.0
+		# A small crimson crystal, then the title.
+		var c := Vector2(lx + 4, sy - 4)
+		draw_colored_polygon(PackedVector2Array([c + Vector2(0, -6), c + Vector2(4, 0), c + Vector2(0, 6), c + Vector2(-4, 0)]), Color(0.9, 0.2, 0.26))
+		draw_colored_polygon(PackedVector2Array([c + Vector2(0, -6), c + Vector2(4, 0), c + Vector2(0, 0)]), Color(1, 0.6, 0.62, 0.8))
+		_text(Vector2(lx + 13, sy), life_title.to_upper(), 12, Color(1.0, 0.5, 0.52), true)
 	var line := "%d Col   ·   Floor %d" % [money, floor_no]
 	_text(Vector2(2, sy + 17), line, 12, Color(1, 0.93, 0.8))
 	# Crystals in the pack: a rose gem (Healing) and a sky gem (Teleport).

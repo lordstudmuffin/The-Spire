@@ -72,6 +72,13 @@ func _ready() -> void:
 				"floor_name": "Mirewood", "playtime": 14100.0, "last_played": now - 86400 * 2,
 				"character": {"name": "Orrin", "origin": "Guardian", "hair_color": "3b2418", "skin_color": "a06a44", "eye_color": "3cb371", "outfit_color": "2d6cdf", "hair_style": 1, "body": "classic", "height": 1.12}},
 		}
+		# --demo-permadeath: Orrin climbs on one life and slot 3 is a fallen memorial.
+		if "--demo-permadeath" in args:
+			_demo_infos[1]["permadeath"] = true
+			_demo_infos[2] = {"slot": 2, "exists": true, "corrupt": false, "name": "Diavel", "origin": "Swordsman", "class": "Swordsman", "level": 9, "floor": 1,
+				"floor_name": "Town of First Light", "playtime": 9100.0, "last_played": now - 86400, "permadeath": true,
+				"fallen": {"t": now - 86400, "cause": "Vargash the Kobold Warlord", "where": "the Labyrinth", "level": 9, "floor": 1},
+				"character": {"name": "Diavel", "origin": "Swordsman", "hair_color": "2a6fd6", "skin_color": "f0cfb4", "eye_color": "4a90e2", "outfit_color": "3a6fbf", "hair_style": 0, "body": "classic", "height": 1.05, "permadeath": true}}
 	_build_backdrop()
 	_build_title()
 	_build_menu()
@@ -481,6 +488,8 @@ func _open_slots(mode: String) -> void:
 	_slots_dim.add_child(center)
 	var card := PanelContainer.new()
 	card.custom_minimum_size = Vector2(1180, 0)
+	# Near-opaque so the title art behind does not read through the slots.
+	card.add_theme_stylebox_override("panel", UITheme.card_box(UITheme.GOLD, 0.97))
 	center.add_child(card)
 	var margin := MarginContainer.new()
 	for side in ["left", "top", "right", "bottom"]:
@@ -579,7 +588,11 @@ func _slot_card(slot: int, mode: String) -> PanelContainer:
 		return card
 
 	var fallen: Dictionary = info.get("fallen", {})
-	v.add_child(UITheme.heading(str(info["name"]), 26, UITheme.MUTED if not fallen.is_empty() else UITheme.PARCH))
+	var name_l := UITheme.heading(str(info["name"]), 26, UITheme.MUTED if not fallen.is_empty() else UITheme.PARCH)
+	v.add_child(name_l)
+	if bool(info.get("permadeath", false)):
+		UITheme.style_life_card(card, top, name_l, not fallen.is_empty())
+		portrait.ring = Color(0.86, 0.18, 0.24) if fallen.is_empty() else Color(0.45, 0.4, 0.42)
 	v.add_child(UITheme.label("%s  ·  Lv %d" % [info["class"], int(info["level"])], 15, UITheme.CYAN, true))
 	if bool(info.get("permadeath", false)):
 		var pdl := UITheme.label("FALLEN  ·  " + Permadeath.fall_text(fallen) if not fallen.is_empty() else "PERMADEATH  ·  one life", 12, UITheme.ROSE, true)

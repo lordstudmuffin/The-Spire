@@ -34,6 +34,8 @@ func _ready() -> void:
 	GameState.character["name"] = "Preview"
 	if body != "":
 		GameState.character["body"] = body
+	if "--permadeath" in args:
+		GameState.character["permadeath"] = true  # one-life HUD marks
 	for i in args.size():
 		if args[i] == "--floor" and i + 1 < args.size():
 			GameState.floor = clampi(int(args[i + 1]), 1, 2)
@@ -329,7 +331,7 @@ func _ready() -> void:
 							hfx.hearth_glow(pl)
 						else:
 							hfx.class_art_cast(pl, "Hearthwright" if demo == "hearth_flare" else "Stillblade", demo)
-				"boss_swap", "boss_leap", "plated", "boss_whirl", "boss_descend":
+				"boss_swap", "boss_leap", "plated", "boss_whirl", "boss_descend", "boss_flare":
 					var bs: Node3D = null
 					for e in scene.get_tree().get_nodes_in_group("enemies"):
 						if (e.get("is_boss") and e.get("brain") != null) or (demo == "plated" and "halberdier" in str(e.get("display_name")).to_lower()):
@@ -353,6 +355,9 @@ func _ready() -> void:
 							"boss_descend":
 								sfx.boss_leap(bs, bs.global_position, bs.global_position + Vector3(0, 0, 6), 1.1)
 								sfx.boss_descend(bs, bs.global_position, bs.global_position + Vector3(0, 0, 6), 1.1)
+							"boss_flare":
+								Engine.time_scale = 4.0
+								sfx.boss_engage(bs)
 							"boss_whirl":
 								sfx.boss_sweep_warning(bs, 4.2, 360.0, 0.9)
 								scene.get_tree().create_timer(0.9, false).timeout.connect(func(): sfx.boss_sweep_impact(bs, 4.2, 360.0))
@@ -409,7 +414,8 @@ func _ready() -> void:
 					var fx := VFX.get_for(pl)
 					if fx:
 						fx.dash(pl.global_position, -pl.model.global_transform.basis.z)
-			Engine.time_scale = 0.3 if demo in ["death", "slam", "shatter_player", "stagger"] or (demo.begins_with("boss_") and demo != "boss_bar") else (0.12 if demo in ["shatter", "boss_bar"] else 0.08)
+			if demo != "boss_flare":
+				Engine.time_scale = 0.3 if demo in ["death", "slam", "shatter_player", "stagger"] or (demo.begins_with("boss_") and demo != "boss_bar") else (0.12 if demo in ["shatter", "boss_bar"] else 0.08)
 		# HUD states that decay in real time are set three frames before the shot.
 		if open_ui == "fishing" and i == 36 and "player" in scene and scene.player:
 			scene._fishing.start(0)

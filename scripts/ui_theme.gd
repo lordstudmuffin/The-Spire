@@ -937,3 +937,44 @@ class ProfLine extends Control:
 				continue
 			var got: bool = value >= int(m)
 			draw_line(Vector2(mx, y - 2), Vector2(mx, y + 8), UITheme.GOLD if got else Color(1, 1, 1, 0.45), 2.0)
+
+
+## Permadeath look for a save-slot card (main_menu _slot_card). A living
+## one-life climber gets a crimson frame, a crimson portrait ring and a
+## "ONE LIFE" badge in the header; a fallen one becomes a memorial: ash
+## frame, the card dimmed, the name struck through in red.
+static func style_life_card(card: PanelContainer, header: HBoxContainer, name_l: Label, fallen: bool) -> void:
+	var crimson := Color(0.86, 0.18, 0.24)
+	var sb := card_box(crimson if not fallen else Color(0.45, 0.4, 0.42), 0.9)
+	sb.border_width_top = 3
+	if not fallen:
+		sb.shadow_color = Color(crimson, 0.22)
+		sb.shadow_size = 16
+	card.add_theme_stylebox_override("panel", sb)
+	var badge := PanelContainer.new()
+	var bb := box(Color(crimson, 0.18 if not fallen else 0.08), Color(crimson, 0.7 if not fallen else 0.35), 8, 1)
+	bb.content_margin_left = 8
+	bb.content_margin_right = 8
+	bb.content_margin_top = 1
+	bb.content_margin_bottom = 1
+	badge.add_theme_stylebox_override("panel", bb)
+	var bl := label("FALLEN" if fallen else "ONE LIFE", 11, crimson.lightened(0.25) if not fallen else Color(0.7, 0.55, 0.58), true)
+	bl.add_theme_font_override("font", spaced(ui_bold(), 3))
+	badge.add_child(bl)
+	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	header.add_child(badge)
+	header.move_child(badge, 1)
+	var gap := Control.new()
+	gap.custom_minimum_size = Vector2(10, 0)
+	header.add_child(gap)
+	header.move_child(gap, 1)
+	if fallen:
+		card.modulate = Color(0.78, 0.74, 0.76)
+		var strike := ColorRect.new()
+		strike.color = Color(crimson, 0.9)
+		strike.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		name_l.add_child(strike)
+		name_l.resized.connect(func():
+			var w := name_l.get_theme_font("font").get_string_size(name_l.text, HORIZONTAL_ALIGNMENT_LEFT, -1, name_l.get_theme_font_size("font_size")).x
+			strike.position = Vector2(-4, name_l.size.y * 0.5)
+			strike.size = Vector2(w + 8, 3))
