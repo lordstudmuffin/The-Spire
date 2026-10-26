@@ -3024,7 +3024,7 @@ func _spawn_npcs() -> void:
 		"hair_color": "f4a261", "outfit_color": "2a9d8f", "hair_style": 3, "eye_color": "264653"},
 		"boar_trouble", 5, 150, 100, {
 			"offer": "Welcome to the Spire, newcomer! Boars have been tearing up the fields outside town. Take down 5 of them?",
-			"in_progress": "The boars roam the southern fields, just past the houses.",
+			"in_progress": "The boars roam the fields out past the south gate, and the west meadow toward Hollowbrook.",
 			"turn_in": "You're a natural! Here's your reward.",
 			"done": "Smith Haldor by the plaza can turn those hides into armor. Captain Rhys up north has work too.",
 		})

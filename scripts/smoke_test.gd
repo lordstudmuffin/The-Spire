@@ -480,8 +480,9 @@ func _ready() -> void:
 	var t_done = wp.target_for("boar_trouble", {"progress": 5, "goal": 5})
 	var t_vein = wp.target_for("ore_delivery", {"progress": 0, "goal": 3})
 	_check(t_open is Vector3 and t_open.z > 60.0 and t_done is Vector3 and t_done.distance_to(Vector3(5, 0, 10)) < 3.0
-		and t_vein is Vector3 and wp.target_for("forge_trial", {"progress": 0, "goal": 2}) == null,
-		"quest waypoint: objective while open (south field, nearest vein), the giver when done, none for anvil work")
+		and t_vein is Vector3 and wp.target_for("field_herbs", {"progress": 0, "goal": 4}) is Vector3
+		and wp.target_for("forge_trial", {"progress": 0, "goal": 2}) == null,
+		"quest waypoint: objective while open (south field, nearest vein, nearest herb), the giver when done, none for anvil work")
 	wp._process(1.0)
 	wp.queue_free()
 	_check(world.HOLLOWBROOK.distance_to(Vector3(0, 0, 15)) > 120.0 and world.TOWER_POS.distance_to(Vector3(0, 0, 15)) > 220.0 and far_d > 180.0,

@@ -64,6 +64,8 @@ func target_for(id: String, q: Dictionary) -> Variant:
 			return world.TALVEN
 		"ore_delivery":
 			return _nearest_in_group("ore_veins")
+		"field_herbs":
+			return _nearest_herb()
 		"talven_waystones":
 			var best: Variant = null
 			var best_d := INF
@@ -89,6 +91,24 @@ func _npc_pos(n: String) -> Variant:
 		if str(npc.get("npc_name")) == n:
 			return (npc as Node3D).global_position
 	return null
+
+
+## Nearest wild-herb clump that is up (picked ones regrow, so skip those).
+func _nearest_herb() -> Variant:
+	var me := _me()
+	var best: Variant = null
+	var best_d := INF
+	for hf in get_tree().get_nodes_in_group("herb_fields"):
+		var pos: Array = hf.get("positions")
+		var up: Array = hf.get("_up")
+		for i in pos.size():
+			if i < up.size() and not up[i]:
+				continue
+			var d := me.distance_to(pos[i])
+			if d < best_d:
+				best_d = d
+				best = pos[i]
+	return best
 
 
 func _nearest_in_group(g: String) -> Variant:
