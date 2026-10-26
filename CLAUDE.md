@@ -30,7 +30,8 @@ godot --headless --path . res://scenes/smoke_test.tscn
 
 # play: open project.godot in the Godot 4.3 editor and press F5 (main menu)
 
-# local multiplayer: one server and clients (from the editor: Host / Join on the main menu)
+# multiplayer is dedicated-server only (players can't host): run a headless server,
+# then Play Online -> "Local Test Realm" (config/servers.json). See docs/DEDICATED_SERVER.md.
 godot --headless --path . -- --server --port 4381 --report
 godot --path . -- --join 127.0.0.1 --port 4381 --name Someone
 ```

@@ -43,8 +43,8 @@ First open imports the VRM models and animation clips (a minute or so).
 - Code: `scripts/life/` (life_data, fishing, herb_field, home), `scripts/ui/` (fishing_widget, cooking_screen, shop_screen, storage_screen, life_hud).
 
 ## Multiplayer (early)
-- From the main menu: **Host a floor server** (needs a saved character) or type an IP and **Join**. Default port 4433 (UDP).
-- Dedicated server (no window): `godot --headless --path . -- --server --port 4433 [--floor 2]`
+- Players never host: multiplayer runs on dedicated servers only. **Play Online** on the main menu opens the realm browser (status, climbers n/30, ping) fed by `config/servers.json` (override in `user://servers.json`). Default port 4433 (UDP).
+- Dedicated server (no window): `tools\server\run_server.bat` (auto-restart, logs), or `godot --headless --path . -- --server --port 4433 [--floor 2]`. Full guide, cloud VM setup and hosting options: `docs/DEDICATED_SERVER.md`.
 - Join handshake: the client connects, loads the world, then sends `{character, token, stats}`; the server sanitizes the character (name length, colors, height, origin) and checks the token, answers `{ok}` (the client completes auth only on that) and admits the peer, spawning them for everyone. A refused join answers `{reject: reason}` instead; the client stores it in `Net.last_error` and prints "Join refused: ...". The handshake allows 60 s (`Net.AUTH_TIMEOUT`) because a client builds its world before it sends its character and a cold load can take 10-20 s.
 - Enter opens chat. Pause menu online only releases the mouse; the world keeps running.
 
