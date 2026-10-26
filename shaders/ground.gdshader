@@ -133,12 +133,14 @@ void fragment() {
 		cob = smoothstep(0.04, 0.16, joint);
 		// Domed stones: lighter toward each stone's middle.
 		cob *= 0.88 + 0.12 * smoothstep(0.6, 0.0, f1);
-		cshade = 0.82 + 0.2 * hash12(id);
+		// Per-stone tone: value and a slight warm/cool shift, so the plaza
+		// reads as laid stones rather than one pale sheet.
+		cshade = 0.74 + 0.26 * hash12(id);
 	}
 	float ring = smoothstep(0.1, 0.0, abs(fract(dplaza * 0.2) - 0.5) - 0.42);
-	vec3 stone_base = stone.rgb * 0.9;
-	float cob_amt = mix(1.0, 0.25, detail_strength);
-	vec3 cob_col = mix(stone_base * 0.78, stone_base * cshade, mix(1.0, cob, cob_amt));
+	vec3 stone_base = stone.rgb * 0.82;
+	float cob_amt = 1.0;
+	vec3 cob_col = mix(stone_base * 0.6, stone_base * cshade, mix(1.0, cob, cob_amt));
 	cob_col = mix(cob_col, vec3(0.78, 0.68, 0.55), ring * 0.45);
 	cob_col = mix(cob_col, cob_col * 0.93, step(0.6, n2) * 0.5);
 
@@ -166,14 +168,17 @@ void fragment() {
 		vec3 d_rel = detail / max(dmean, 0.05);          // ~1.0 on average
 		float rel = clamp(lum(d_rel), 0.6, 1.3);         // luminance variation (kept narrow: painted, not photographic)
 		vec3 d_hue = d_rel / max(lum(d_rel), 0.05);      // hue only
-		col *= mix(vec3(1.0), vec3(rel), detail_strength) * mix(vec3(1.0), d_hue, detail_tint * detail_strength);
+		// On the plaza the painted stone pattern leads: the photo cobbles are a
+		// different size and turn the joints to mush at full strength.
+		float ds = detail_strength * (1.0 - 0.75 * w_cob);
+		col *= mix(vec3(1.0), vec3(rel), ds) * mix(vec3(1.0), d_hue, detail_tint * ds);
 
 		// The disc is flat, so the tangent frame is world XZ: perturb the normal
 		// here instead of relying on mesh tangents (u = +x, v = +z, GL convention).
 		vec3 nm = texture(grass_nor, p * grass_tiling).rgb * w_grass
 			+ texture(path_nor, p * path_tiling).rgb * w_path
 			+ texture(cobble_nor, p * cobble_tiling).rgb * w_cob;
-		float depth = normal_strength * detail_strength * mix(0.6, 1.3, w_cob);
+		float depth = normal_strength * detail_strength * mix(0.6, 0.3, w_cob);
 		vec3 n_w = normalize(vec3((nm.r * 2.0 - 1.0) * depth, 1.0, (nm.g * 2.0 - 1.0) * depth));
 		NORMAL = normalize((VIEW_MATRIX * vec4(n_w, 0.0)).xyz);
 	}
