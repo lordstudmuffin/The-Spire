@@ -170,7 +170,10 @@ Kyle: "map is too small, visuals look bad, combat needs a lot of work (parrying)
 - Landmarks: scripts/floor1_landmarks.gd (Ruined Watch, Hunters' Camp + cooking fire, Wayside Shrine, Old Siege Camp, stream bridge). Town crowd: scripts/town_crowd.gd (cosmetic, client-only).
 - Multiplayer: dedicated servers only (docs/DEDICATED_SERVER.md, config/servers.json, tools/server/). Net.GAME_VERSION handshake, status query, realm browser in main_menu.gd.
 - Combat: parry tiers (PERFECT in the first 0.09 s), server late-press grace (RTT + 40 ms, 60-260), dash i-frames (net_dash), 3-hit combo with a server-validated finisher, gold (parryable) vs red (unparryable) telegraphs, HUD callouts. Camera boom 3.4 m with wheel zoom 2-7.5.
-- Not visually verified yet (Kyle games on this PC; never open a Godot window without asking): landmarks, realm browser, combat callouts/telegraphs, camera distance.
+- Mob camps round the landmarks (world._spawn_country_camps): 86 Floor 1 mobs. Quest waypoint (scripts/quest_waypoint.gd, QuestWaypoint.target_for): objective while open, giver when done.
+- Foliage chunks are positioned at their cell centre (visibility range is measured to the node; the old origin-parked chunks vanished past ~95 m).
+- tools/prop_sizes.gd measures kit props headless. Smoke runs: use Start-Process with a timeout (a parse error makes the smoke scene hang instead of exiting).
+- Verified in Kyle's screenshot batch: closer camera, gold parry glint, realm browser, shrine/siege camp. Not yet seen: grass far from town after the fix, grey Ruined Watch, bridge turn, waypoint, combat callouts.
 
 ## Who owns what between threads
 - Main build thread: all gameplay, UI, world, shaders, tests.
