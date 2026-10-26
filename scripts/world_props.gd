@@ -1279,3 +1279,151 @@ static func boss_throne(parent: Node3D, pos: Vector3, rune: Color) -> void:
 	# Collision: dais and the throne body.
 	WorldArt.box_collider(parent, Vector3(5.0, 0.7, 4.0), pos + Vector3(0, 0.35, 0))
 	WorldArt.box_collider(parent, Vector3(2.6, 4.8, 2.2), pos + Vector3(0, 2.4, -0.9))
+
+
+## Dressing for Rook's tavern, The Hollow Hearth (TavernArt builds the hall;
+## this adds the lived-in layer): moonlit windows either side of the door
+## for a cool counterpoint to the firelight, a wagon-wheel chandelier, herb
+## and garlic bundles on the beams, a hearth rug, mantel clutter and the bard
+## on the dais. Visual only, no colliders; room-local like TavernArt.
+static func tavern_dress(t: Node3D, c: Vector3, room: Vector3) -> void:
+	if WorldArt.headless():
+		return
+	var hx := room.x * 0.5
+	var hz := room.z * 0.5
+	var trim := Color("4f3522")
+	# Windows on the front wall: deep frame, four moonlit panes, a sill.
+	var pane := WorldArt.mat(Color(0.22, 0.32, 0.55), 0.0, Color(0.36, 0.5, 0.86), 1.1)
+	for wx in [-3.3, 3.3]:
+		var wp := c + Vector3(wx, 1.95, hz - 0.03)
+		WorldArt.box(t, Vector3(1.3, 1.4, 0.06), wp + Vector3(0, 0, 0.0), Color("2a1d14"), Vector3.ZERO, 0.0)
+		for q in [Vector2(-0.28, 0.3), Vector2(0.28, 0.3), Vector2(-0.28, -0.3), Vector2(0.28, -0.3)]:
+			WorldArt.mesh_node(t, _tv_bm(Vector3(0.5, 0.54, 0.02)), wp + Vector3(q.x, q.y, -0.04), pane)
+		WorldArt.box(t, Vector3(1.4, 0.1, 0.14), wp + Vector3(0, 0.74, -0.05), trim, Vector3.ZERO, 0.0)
+		WorldArt.box(t, Vector3(1.5, 0.08, 0.26), wp + Vector3(0, -0.74, -0.1), trim, Vector3.ZERO, 0.0)
+		WorldArt.box(t, Vector3(0.06, 1.3, 0.05), wp + Vector3(0, 0, -0.06), trim, Vector3.ZERO, 0.0)
+		WorldArt.box(t, Vector3(1.2, 0.06, 0.05), wp + Vector3(0, 0, -0.06), trim, Vector3.ZERO, 0.0)
+		# A small pot of herbs on each sill.
+		WorldArt.cyl(t, 0.09, 0.07, 0.14, wp + Vector3(-0.4, -0.63, -0.14), Color("9a5a3a"), 8)
+		WorldArt.sphere(t, 0.11, wp + Vector3(-0.4, -0.5, -0.14), Color("5a7a3a"), Vector3(1, 0.8, 1))
+		var ml := OmniLight3D.new()
+		ml.light_color = Color(0.55, 0.68, 1.0)
+		ml.light_energy = 0.55
+		ml.omni_range = 3.6
+		ml.shadow_enabled = false
+		ml.position = wp + Vector3(0, -0.2, -0.9)
+		t.add_child(ml)
+	# Wagon-wheel chandelier over the door-side table.
+	var cp := c + Vector3(0.2, room.y - 1.35, 3.1)
+	var rim := TorusMesh.new()
+	rim.inner_radius = 0.62
+	rim.outer_radius = 0.7
+	rim.rings = 20
+	rim.ring_segments = 6
+	WorldArt.mesh_node(t, rim, cp, WorldArt.mat(Color("4a3020"), 0.02))
+	for k in 4:
+		WorldArt.box(t, Vector3(1.3, 0.05, 0.06), cp, Color("4a3020"), Vector3(0, k * PI / 4, 0), 0.0)
+	WorldArt.cyl(t, 0.08, 0.08, 0.12, cp, Color("3a2618"), 8)
+	for k in 4:
+		WorldArt.cyl(t, 0.012, 0.012, 1.3, cp + Vector3(cos(k * PI / 2) * 0.62, 0.65, sin(k * PI / 2) * 0.62), Color("2a2830"), 4)
+	for k in 6:
+		var a := k * TAU / 6.0
+		WorldArt.candle(t, cp + Vector3(cos(a) * 0.66, 0.05, sin(a) * 0.66), 0.16, 0.03)
+	var cl := OmniLight3D.new()
+	cl.light_color = Color("ffcf94")
+	cl.light_energy = 0.9
+	cl.omni_range = 5.5
+	cl.shadow_enabled = false
+	cl.position = cp + Vector3(0, -0.3, 0)
+	t.add_child(cl)
+	# Herb and garlic bundles hung from the beams on the hearth side.
+	var beams := [-hz + 0.9 + 1.85 * 2, -hz + 0.9 + 1.85 * 3]
+	var herb := [Color("6b7d3e"), Color("8a8a4a"), Color("7a5a8a"), Color("5f7a4a")]
+	for bi in beams.size():
+		for k in 5:
+			var hp := c + Vector3(-5.6 + k * 0.62, room.y - 0.32, float(beams[bi]))
+			WorldArt.cyl(t, 0.006, 0.006, 0.22, hp + Vector3(0, -0.06, 0), Color("6a5a40"), 3)
+			if (k + bi) % 3 == 2:
+				for g in 3:
+					WorldArt.sphere(t, 0.06, hp + Vector3((g - 1) * 0.06, -0.24 - (g % 2) * 0.05, 0), Color("ece4d2"), Vector3(1, 1.15, 1))
+			else:
+				WorldArt.cyl(t, 0.02, 0.1, 0.32, hp + Vector3(0, -0.32, 0), herb[(k + bi * 2) % herb.size()], 6)
+	# Hearth rug, mantel jars and candles.
+	var hp2 := c + Tavern.HEARTH
+	WorldArt.box(t, Vector3(1.7, 0.02, 2.6), hp2 + Vector3(1.9, 0.011, 0), Color("6a2a26"), Vector3.ZERO, 0.0)
+	WorldArt.box(t, Vector3(1.4, 0.022, 2.3), hp2 + Vector3(1.9, 0.013, 0), Color("8f3a30"), Vector3.ZERO, 0.0)
+	WorldArt.box(t, Vector3(0.7, 0.024, 1.5), hp2 + Vector3(1.9, 0.015, 0), Color("c49a4a"), Vector3.ZERO, 0.0)
+	var mantel := hp2 + Vector3(0.25, 1.87, 0)
+	for k in 5:
+		var z := -1.5 + k * 0.75
+		if k == 2:
+			continue
+		if k % 2 == 0:
+			WorldArt.candle(t, mantel + Vector3(0, 0, z), 0.2, 0.035)
+		else:
+			WorldArt.cyl(t, 0.07, 0.08, 0.2, mantel + Vector3(0, 0.1, z), [Color("6f8aa0"), Color("a0784a")][k % 2 if k < 2 else 0], 8)
+	# The bard: a climber-looking regular on the dais, lute at her side.
+	if not Net.dedicated and VRMCharacter.BODIES.has("alicia"):
+		var v := VRMCharacter.new()
+		v.name = "Bard"
+		v.position = c + Vector3(-4.95, 0.2, 3.0)
+		v.rotation.y = -PI * 0.38  # faces the room (VRM forward is -Z)
+		t.add_child(v)
+		v.apply({"body": "alicia", "outfit_color": "2f5a8a", "hair_color": "e0b060", "skin_color": "f0d2b8"})
+		if v.instance:
+			for mi in v.instance.find_children("robo_arm", "MeshInstance3D", true, false):
+				mi.visible = false
+
+
+static func _tv_bm(size: Vector3) -> BoxMesh:
+	var bm := BoxMesh.new()
+	bm.size = size
+	return bm
+
+
+## A carved wooden sign hung from an iron bracket over a door. `out` is the
+## wall's outward direction; the board faces it and swings a little.
+static func hanging_sign(parent: Node3D, at: Vector3, out: Vector3, text: String) -> Node3D:
+	var root := Node3D.new()
+	root.name = "HangingSign"
+	root.position = at
+	root.rotation.y = atan2(out.x, out.z)
+	parent.add_child(root)
+	var iron := Color("2a2830")
+	# Bracket: arm out from the wall with a diagonal brace and a scroll end.
+	WorldArt.box(root, Vector3(0.07, 0.07, 1.25), Vector3(0, 0.9, 0.55), iron, Vector3.ZERO, 0.015)
+	WorldArt.box(root, Vector3(0.05, 0.05, 0.9), Vector3(0, 0.62, 0.32), iron, Vector3(0.62, 0, 0), 0.015)
+	WorldArt.box(root, Vector3(0.24, 0.24, 0.05), Vector3(0, 0.9, -0.04), iron, Vector3.ZERO, 0.015)
+	var ring := TorusMesh.new()
+	ring.inner_radius = 0.05
+	ring.outer_radius = 0.075
+	WorldArt.mesh_node(root, ring, Vector3(0, 0.95, 1.18), WorldArt.mat(iron, 0.0), Vector3(0, 0, PI / 2))
+	# The board swings from the arm on two short chains.
+	var pivot := Node3D.new()
+	pivot.position = Vector3(0, 0.86, 0.6)
+	root.add_child(pivot)
+	for sx in [-0.62, 0.62]:
+		WorldArt.box(pivot, Vector3(0.02, 0.26, 0.02), Vector3(sx * 0.55, -0.13, 0), iron, Vector3.ZERO, 0.0)
+	var wood := WorldArt.wood_mat(Color("6e4b2c"), Color("5c3e24"), "weathered_planks", 0.2, 0, {"brick_length": 2.0})
+	WorldArt.mesh_node(pivot, _tv_bm(Vector3(1.9, 0.62, 0.07)), Vector3(0, -0.58, 0), wood)
+	WorldArt.box(pivot, Vector3(2.0, 0.07, 0.09), Vector3(0, -0.26, 0), Color("4f3522"), Vector3.ZERO, 0.0)
+	WorldArt.box(pivot, Vector3(2.0, 0.07, 0.09), Vector3(0, -0.9, 0), Color("4f3522"), Vector3.ZERO, 0.0)
+	for side in [1, -1]:
+		var l := Label3D.new()
+		l.text = text
+		l.font = UITheme.display_font()
+		l.font_size = 72
+		l.pixel_size = 0.0042
+		l.outline_size = 10
+		l.modulate = Color("f0c060")
+		l.outline_modulate = Color(0.16, 0.09, 0.04, 1.0)
+		l.position = Vector3(0, -0.56, side * 0.045)
+		l.rotation.y = 0.0 if side > 0 else PI
+		l.double_sided = false
+		pivot.add_child(l)
+		# A little painted flame under the name: the hearth.
+		WorldArt.sphere(pivot, 0.05, Vector3(0, -0.78, side * 0.04), Color("ff9a3a"), Vector3(0.8, 1.3, 0.2))
+	var tw := pivot.create_tween().set_loops()
+	tw.tween_property(pivot, "rotation:x", 0.05, 1.8).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(pivot, "rotation:x", -0.04, 1.8).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	return root

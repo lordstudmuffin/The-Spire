@@ -207,7 +207,7 @@ var exit_pos := Vector3.ZERO
 var spawn_inside := Vector3.ZERO
 var _inside := false
 var _outdoor_ambient: Array = []
-const INSIDE_AMBIENT := Color(0.6, 0.5, 0.44)
+const INSIDE_AMBIENT := Color(0.54, 0.49, 0.5)  # warm but not orange; the windows add cool
 
 
 ## `pos` / `face` / `footprint` are the tavern house's (world._build_hollowbrook).
@@ -229,18 +229,9 @@ static func build(w: Node3D, pos: Vector3, face: float, footprint: Vector2) -> T
 	return t
 
 
-func _build_sign(face: float, fwd: Vector3) -> void:
-	var s := Label3D.new()
-	s.text = "The Hollow Hearth"
-	s.font_size = 64
-	s.pixel_size = 0.006
-	s.outline_size = 14
-	s.modulate = Color("f0c060")
-	s.outline_modulate = Color(0.12, 0.07, 0.04, 0.95)
-	s.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
-	s.position = door_pos + Vector3(0, 3.2, 0) - fwd * 0.6
-	s.rotation.y = face
-	add_child(s)
+func _build_sign(_face: float, fwd: Vector3) -> void:
+	# A carved board on an iron bracket over the door (WorldProps.hanging_sign).
+	WorldProps.hanging_sign(self, door_pos - fwd * 1.2 + Vector3(0, 2.4, 0), fwd, "The Hollow Hearth")
 
 
 func counter_pos() -> Vector3:

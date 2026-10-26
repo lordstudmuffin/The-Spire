@@ -53,13 +53,14 @@ static func build(t: Node3D, c: Vector3, room: Vector3) -> void:
 	_stairs(t, c + Tavern.STAIRS, hx)
 	_board(t, c + Tavern.BOARD)
 	_bard_corner(t, c + Vector3(-4.8, 0, 3.4))
+	WorldProps.tavern_dress(t, c, room)
 	# Hanging iron lamps over the tables and wall torches.
 	if not WorldArt.headless():
 		for lp in [Vector3(-2.2, room.y - 1.0, 1.0), Vector3(2.2, room.y - 1.0, 1.0), Vector3(0, room.y - 1.0, -1.8)]:
 			WorldArt.cyl(t, 0.01, 0.01, 1.0, c + lp + Vector3(0, 0.5, 0), Color("2a2830"), 4)
 			WorldArt.cyl(t, 0.16, 0.22, 0.24, c + lp, Color("2a2830"), 8)
 			var l := OmniLight3D.new()
-			l.light_color = Color("ffb366")
+			l.light_color = Color("ffc58a")
 			l.light_energy = 1.1
 			l.omni_range = 6.0
 			l.shadow_enabled = false
@@ -71,6 +72,20 @@ static func build(t: Node3D, c: Vector3, room: Vector3) -> void:
 	for tp in [[Vector3(-hx + 0.2, 2.3, 2.6), PI / 2], [Vector3(hx - 0.2, 2.3, -1.0), -PI / 2]]:
 		if WorldProps.has("dungeon", "torch_mounted"):
 			AssetLib.prop(t, "dungeon", "torch_mounted", c + tp[0], tp[1], WorldProps.DUNGEON, "none")
+
+
+## Tinted bottle glass: see-through with a bright specular glint.
+static func _glass(col: Color) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(col.lightened(0.15), 0.72)
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.roughness = 0.08
+	m.metallic_specular = 0.9
+	m.rim_enabled = true
+	m.rim = 0.6
+	m.emission_enabled = true
+	m.emission = col * 0.35
+	return m
 
 
 static func _bm(size: Vector3) -> BoxMesh:
@@ -159,7 +174,12 @@ static func _bar(t: Node3D, c: Vector3, hz: float) -> void:
 			var bx := -3.0 + k * 0.6 + (0.12 if y > 2.0 else 0.0)
 			var bc: Color = [Color("4a6a3a"), Color("6a3a2a"), Color("3a4a6a"), Color("8a6a2a"), Color("a07a4a")][(k + int(y * 10)) % 5]
 			var bh := 0.26 if k % 3 != 2 else 0.18
-			WorldArt.cyl(t, 0.045 if bh > 0.2 else 0.07, 0.065, bh, c + Vector3(bx, y + 0.03 + bh * 0.5, wz + 0.05), bc, 8)
+			var bp := c + Vector3(bx, y + 0.03 + bh * 0.5, wz + 0.05)
+			var bottle := WorldArt.cyl(t, 0.045 if bh > 0.2 else 0.07, 0.065, bh, bp, bc, 8)
+			bottle.material_override = _glass(bc)
+			if bh > 0.2:  # neck and cork
+				WorldArt.cyl(t, 0.018, 0.03, 0.1, bp + Vector3(0, bh * 0.5 + 0.05, 0), bc, 6).material_override = _glass(bc)
+				WorldArt.cyl(t, 0.02, 0.02, 0.03, bp + Vector3(0, bh * 0.5 + 0.11, 0), Color("b08a5a"), 6)
 	for k in 3:
 		var kp := c + Vector3(-0.8 + k * 0.8, 0, wz + 0.1)
 		if WorldProps.has("dungeon", "keg_decorated"):
