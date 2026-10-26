@@ -36,6 +36,11 @@ func _ready() -> void:
 		print("== Done: %d failure(s)" % _fails)
 		get_tree().quit(1 if _fails > 0 else 0)
 		return
+	if OS.get_environment("SMOKE_ONLY") == "net":
+		await _test_dedicated_servers()
+		print("== Done: %d failure(s)" % _fails)
+		get_tree().quit(1 if _fails > 0 else 0)
+		return
 	if OS.get_environment("SMOKE_ONLY") == "duels":
 		await _test_duels()
 		print("== Done: %d failure(s)" % _fails)
@@ -1241,6 +1246,7 @@ func _ready() -> void:
 	await _test_duels()
 	await _test_boss()
 	await _test_permadeath()
+	await _test_dedicated_servers()
 
 	print("== Done: %d failure(s)" % _fails)
 	get_tree().quit(1 if _fails > 0 else 0)
@@ -2950,3 +2956,73 @@ func _test_smithy(world: Node, vrs, vrec: Dictionary, far: Vector3) -> void:
 	_check(Smithy.reward(c0, minr + 2) > Smithy.reward(c0, minr), "a higher rank than asked pays more")
 	rdb.close()
 
+
+
+## Dedicated servers only (Kyle, playtest): a game client can never host,
+## realms come from config/servers.json, servers answer a status query
+## without a join, and mismatched game versions are refused both ways.
+## SMOKE_ONLY=net runs just this block.
+func _test_dedicated_servers() -> void:
+	print("== Dedicated servers, realm list, status query, versions")
+	var no_flag := PackedStringArray(["--port", "4433"])
+	var srv_flag := PackedStringArray(["--server", "--port", "4433"])
+	_check(Net.host_refusal(no_flag, "headless", false) != "", "a client without --server may not host, even headless")
+	_check(Net.host_refusal(srv_flag, "Windows", false) != "", "--server on a windowed game client is refused")
+	_check(Net.host_refusal(srv_flag, "headless", false) == "" and Net.host_refusal(srv_flag, "Windows", true) == "", "--server on a headless process (or a dedicated_server export) may host")
+	var was_online := Net.online
+	_check(not Net.host(4999) and not Net.online and Net.host_refused != "", "Net.host() from this client process is refused (%s)" % Net.host_refused.left(40))
+	_check(not was_online and multiplayer.multiplayer_peer is OfflineMultiplayerPeer, "solo play is offline: no socket is open, so nobody can join a solo game")
+
+	_check(Net.version_refusal(Net.GAME_VERSION, Net.GAME_VERSION, true) == "" and Net.version_refusal(Net.GAME_VERSION, Net.GAME_VERSION, false) == "", "matching versions are accepted")
+	var old_client := Net.version_refusal("0.0.9", "0.1.0", true)
+	var new_client := Net.version_refusal("0.2.0", "0.1.0", true)
+	var no_ver := Net.version_refusal("", "0.1.0", true)
+	_check("Version mismatch" in old_client and "Update" in old_client and "v0.1.0" in old_client, "server refuses an older client and tells it to update")
+	_check("Version mismatch" in new_client and "server" in new_client and not "Update The Spire" in new_client, "server refuses a newer client and says the server must update")
+	_check("older build" in no_ver, "a client that sends no version (older build) is refused")
+	_check("Version mismatch" in Net.version_refusal("0.2.0", "0.1.0", false) and "Update" in Net.version_refusal("0.2.0", "0.1.0", false), "client refuses a newer server's hello and tells the player to update")
+	_check(Net.version_cmp("0.1.10", "0.1.9") == 1 and Net.version_cmp("1.0", "1.0.0") == 0 and Net.version_cmp("0.1.0", "0.2.0") == -1, "dotted version compare")
+
+	var shipped := Net.parse_server_list(JSON.parse_string(FileAccess.get_file_as_string(Net.SERVER_LIST_PATH)))
+	_check(not shipped.is_empty() and str(shipped[0]["address"]) != "" and int(shipped[0]["port"]) > 0, "config/servers.json ships at least one valid realm (%d)" % shipped.size())
+	var parsed := Net.parse_server_list({"servers": [{"id": "a", "name": "A", "address": "10.0.0.1", "port": 4433, "floor": 1},
+		{"address": "", "port": 4433}, {"address": "x.example", "port": 70000}, "junk", {"address": "b.example"}]})
+	_check(parsed.size() == 2 and parsed[1]["port"] == Net.DEFAULT_PORT and parsed[1]["id"] == "b.example:%d" % Net.DEFAULT_PORT, "bad realm entries are skipped, missing fields defaulted")
+	var merged := Net.merge_server_lists(parsed, [{"id": "a", "name": "A2", "address": "10.0.0.2", "port": 1, "floor": 1, "region": ""}], false)
+	_check(merged.size() == 2 and merged[0]["name"] == "A2", "user://servers.json replaces a realm with the same id")
+	_check(Net.merge_server_lists(parsed, [merged[0]], true).size() == 1, "\"replace\": true swaps the whole list")
+	_check(Net.load_server_list().size() >= shipped.size(), "load_server_list merges the shipped list and the user file")
+
+	# Live status query over loopback: a stand-in server answers through the
+	# real Net._answer_status, and the real Net.query_status client asks it.
+	var port := 47913
+	var ep := ENetMultiplayerPeer.new()
+	var err := ep.create_server(port, 4)
+	_check(err == OK, "loopback status server opens udp %d" % port)
+	if err != OK:
+		return
+	var srv := SceneMultiplayer.new()
+	srv.root_path = ^"/root"
+	srv.auth_callback = func(p: int, d: PackedByteArray):
+		var v = bytes_to_var(d)
+		if v is Dictionary and v.has("query"):
+			Net._answer_status(srv, p)
+	srv.multiplayer_peer = ep
+	var got := {}
+	var down := {}
+	Net.query_status("127.0.0.1", port, func(r): got.merge(r))
+	Net.query_status("127.0.0.1", port + 1, func(r): down.merge(r))  # nothing listens there
+	var t0 := Time.get_ticks_msec()
+	while (got.is_empty() or down.is_empty()) and Time.get_ticks_msec() - t0 < int(Net.QUERY_TIMEOUT * 1000.0) + 2500:
+		srv.poll()
+		await get_tree().process_frame
+	_check(bool(got.get("online", false)) and got.get("version") == Net.GAME_VERSION and bool(got.get("compatible", false)),
+		"status query answers online with the server's version (%s)" % str(got))
+	_check(int(got.get("capacity", 0)) == Net.MAX_PLAYERS and Net.MAX_PLAYERS == 30 and int(got.get("players", -1)) == 0 and int(got.get("floor", 0)) == GameState.floor,
+		"status carries players 0 / capacity 30 and the floor")
+	_check(int(got.get("ping_ms", -1)) >= 0 and int(got.get("ping_ms", 9999)) < 1000, "status query measures a ping (%s ms)" % str(got.get("ping_ms")))
+	_check(not down.is_empty() and not bool(down.get("online", true)), "a realm nobody answers for shows offline after the timeout")
+	_check(Net.queries_pending() == 0 and not Net.online, "queries clean up and never touch Net's own connection")
+	srv.auth_callback = Callable()
+	ep.close()
+	srv.multiplayer_peer = null

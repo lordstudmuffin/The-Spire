@@ -3,7 +3,7 @@ extends Control
 ## left and the menu card on the right. Also hosts the dedicated-server and
 ## --join test entry points (no UI is built for those).
 
-const VERSION := "v0.1  ·  vertical slice"
+var VERSION := "v%s  ·  vertical slice" % Net.GAME_VERSION
 
 var _status: Label
 var _buttons: Array = []
@@ -31,7 +31,8 @@ func _enter_world_when_floor_known() -> void:
 
 
 func _go_world() -> void:
-	if _entered_world or not Net.online:
+	# last_error: the server's hello showed another game version (Net refuses).
+	if _entered_world or not Net.online or Net.last_error != "":
 		return
 	_entered_world = true
 	get_tree().change_scene_to_file("res://scenes/world.tscn")
@@ -41,14 +42,24 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	if Net.dedicated:
 		# Headless floor server: no character, straight into the world.
+		# Net.host() refuses unless this really is a headless --server process.
 		if Net.host(Net.port):
 			print("Dedicated server listening on port %d" % Net.port)
 			get_tree().change_scene_to_file.call_deferred("res://scenes/world.tscn")
 		else:
+			printerr("Server not started: %s" % (Net.host_refused if Net.host_refused != "" else "could not open port %d" % Net.port))
 			get_tree().quit(1)
 		return
-	# Test hook: godot -- --join 127.0.0.1 --name Bot  (auto-creates a character and joins)
 	var args := OS.get_cmdline_user_args()
+	# Ops / health check: godot --headless -- --query 127.0.0.1 [--port N]
+	# prints the server's status as JSON and exits 0 (online) or 2 (offline).
+	var query_at := args.find("--query")
+	if query_at != -1 and query_at + 1 < args.size():
+		Net.query_status(args[query_at + 1], Net.port, func(r: Dictionary):
+			print("STATUS " + JSON.stringify(r))
+			get_tree().quit(0 if r.get("online", false) else 2))
+		return
+	# Test hook: godot -- --join 127.0.0.1 --name Bot  (auto-creates a character and joins)
 	var join_at := args.find("--join")
 	if join_at != -1 and join_at + 1 < args.size():
 		GameState.reset()
@@ -85,6 +96,11 @@ func _ready() -> void:
 	_build_footer()
 	if "--slots" in args:
 		_open_slots("play")
+	# Screenshot hooks: --open-servers opens the realm browser; with
+	# --demo-servers it shows made-up statuses instead of querying.
+	if "--open-servers" in args:
+		_demo_servers = "--demo-servers" in args
+		_open_servers()
 
 
 # --- Backdrop -----------------------------------------------------------------
@@ -328,7 +344,7 @@ func _build_menu() -> void:
 	online.add_child(ov)
 	var oh := HBoxContainer.new()
 	oh.add_child(UITheme.kicker("Online"))
-	var osub := UITheme.subtle("same character, shared floor", 12)
+	var osub := UITheme.subtle("official realms  ·  shared floors", 12)
 	osub.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	osub.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	oh.add_child(osub)
@@ -352,36 +368,19 @@ func _build_menu() -> void:
 	_status.add_theme_font_size_override("font_size", 13)
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD
 	_status.add_theme_color_override("font_color", UITheme.ROSE)
-	_status.autowrap_mode = TextServer.AUTOWRAP_WORD
-	var host_btn := UITheme.make_button("Host a floor server  ·  port %d" % Net.DEFAULT_PORT, "normal")
-	host_btn.disabled = not has_save
-	host_btn.pressed.connect(func():
-		if SaveSystem.load_game(_online_slot) and Net.host():
-			LoadingScreen.open(GameState.floor, "Hosting")
-			get_tree().change_scene_to_file("res://scenes/world.tscn"))
-	ov.add_child(host_btn)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	var ip := LineEdit.new()
-	ip.placeholder_text = "Server IP"
-	ip.text = "127.0.0.1"
-	ip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(ip)
-	var join_btn := UITheme.make_button("Join", "normal")
-	join_btn.disabled = not has_save
-	join_btn.pressed.connect(func():
-		if SaveSystem.load_game(_online_slot) and Net.join(ip.text.strip_edges()):
-			_status.add_theme_color_override("font_color", UITheme.CYAN)
-			_status.text = "Connecting..."
-			LoadingScreen.connecting()
-			_enter_world_when_floor_known())
-	row.add_child(join_btn)
-	ov.add_child(row)
+	# Floors run only on official dedicated servers: there is no Host here,
+	# and Net.host() refuses in a game client anyway.
+	var online_btn := UITheme.make_button("Play Online", "normal")
+	online_btn.custom_minimum_size = Vector2(0, 44)
+	online_btn.pressed.connect(_open_servers)
+	ov.add_child(online_btn)
+	_online_btn = online_btn
 	var on_fail := func(reason):
 		LoadingScreen.close()
 		_status.show()
 		_status.add_theme_color_override("font_color", UITheme.ROSE)
 		_status.text = reason
+		_browser_note(reason, UITheme.ROSE)
 	Net.connection_failed.connect(on_fail)
 	tree_exiting.connect(func(): Net.connection_failed.disconnect(on_fail))
 	ov.add_child(_status)
@@ -390,7 +389,6 @@ func _build_menu() -> void:
 		_status.text = "Create a character first to play online."
 	else:
 		_status.hide()
-		join_btn.pressed.connect(func(): _status.show())
 
 	v.add_child(UITheme.spacer(4))
 	var settings_btn := UITheme.make_button("Settings", "normal")
@@ -536,7 +534,10 @@ func _close_slots() -> void:
 	if _slots_dim:
 		_slots_dim.queue_free()
 		_slots_dim = null
-		if _new_btn:
+		if _servers_dim:
+			_refresh_browser_climber()
+			UITheme.focus_first_in(_server_rows)
+		elif _new_btn:
 			_new_btn.grab_focus()
 
 
@@ -731,6 +732,472 @@ class SlotPortrait extends Control:
 		draw_arc(head_c + Vector2(0, head_r * 0.45), head_r * 0.16, 0.3, PI - 0.3, 8, skin.darkened(0.45), 1.5, true)
 
 
+# --- Play Online: the realm browser -----------------------------------------------
+# Every floor runs on an official dedicated server (Net.load_server_list:
+# config/servers.json + user://servers.json). Each row asks its server for its
+# status (Net.query_status) and shows online / players / ping / version.
+
+const SERVER_REFRESH := 12.0
+const COL_PLAYERS := 150
+const COL_PING := 84
+const COL_JOIN := 168
+
+var _online_btn: Button
+var _servers_dim: PanelContainer
+var _server_rows: VBoxContainer
+var _server_note: Label
+var _server_empty: PanelContainer
+var _browser_climber: Label
+var _refresh_btn: Button
+var _server_list: Array = []
+## id -> {"state": "checking"|"online"|"offline", "result": {...}}
+var _server_state := {}
+var _server_timer: Timer
+var _joining := false
+## --demo-servers: made-up statuses for screenshots (no queries are sent).
+var _demo_servers := false
+
+
+func _open_servers() -> void:
+	if _servers_dim:
+		_servers_dim.queue_free()
+	_joining = false
+	_server_list = Net.load_server_list()
+	_servers_dim = PanelContainer.new()
+	_servers_dim.theme_type_variation = "Dim"
+	_servers_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(_servers_dim)
+	var center := CenterContainer.new()
+	_servers_dim.add_child(center)
+	var card := PanelContainer.new()
+	card.custom_minimum_size = Vector2(980, 0)
+	card.add_theme_stylebox_override("panel", UITheme.card_box(UITheme.GOLD, 0.97))
+	center.add_child(card)
+	var margin := MarginContainer.new()
+	for side in ["left", "top", "right", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 26)
+	card.add_child(margin)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 14)
+	margin.add_child(v)
+
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 8)
+	var hv := VBoxContainer.new()
+	hv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hv.add_theme_constant_override("separation", 2)
+	hv.add_child(UITheme.kicker("Play Online", UITheme.GOLD))
+	hv.add_child(UITheme.heading("Choose a realm", 30))
+	var blurb := UITheme.subtle("Every floor runs on an official server for up to %d climbers. Your progress online is kept by the realm you join." % Net.MAX_PLAYERS, 14)
+	blurb.autowrap_mode = TextServer.AUTOWRAP_WORD
+	hv.add_child(blurb)
+	head.add_child(hv)
+	_refresh_btn = UITheme.make_button("Refresh", "normal")
+	_refresh_btn.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_refresh_btn.pressed.connect(_refresh_servers)
+	head.add_child(_refresh_btn)
+	var close := UITheme.make_button("Close", "ghost")
+	close.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	close.pressed.connect(_close_servers)
+	head.add_child(close)
+	v.add_child(head)
+	v.add_child(UITheme.rule())
+
+	# Column captions over the rows.
+	var cap := HBoxContainer.new()
+	cap.add_theme_constant_override("separation", 16)
+	var c0 := Control.new()
+	c0.custom_minimum_size = Vector2(18, 0)
+	cap.add_child(c0)
+	var c1 := UITheme.kicker("Realm", UITheme.MUTED)
+	c1.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cap.add_child(c1)
+	for pair in [["Climbers", COL_PLAYERS], ["Ping", COL_PING], ["", COL_JOIN]]:
+		var c := UITheme.kicker(pair[0], UITheme.MUTED)
+		c.custom_minimum_size = Vector2(pair[1], 0)
+		cap.add_child(c)
+	var capm := MarginContainer.new()
+	capm.add_theme_constant_override("margin_left", 16)
+	capm.add_theme_constant_override("margin_right", 16)
+	capm.add_child(cap)
+	v.add_child(capm)
+
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	# No visible bar (it would shift the columns off their captions); the
+	# wheel scrolls and pad / keyboard focus follows into view.
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+	scroll.follow_focus = true
+	scroll.custom_minimum_size = Vector2(0, clampf(_server_list.size() * 100.0 - 8.0, 92.0, 4.5 * 100.0))
+	v.add_child(scroll)
+	_server_rows = VBoxContainer.new()
+	_server_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_server_rows.add_theme_constant_override("separation", 8)
+	scroll.add_child(_server_rows)
+
+	_server_empty = _empty_state()
+	_server_empty.hide()
+	v.add_child(_server_empty)
+
+	_server_note = UITheme.label("", 13, UITheme.CYAN)
+	_server_note.autowrap_mode = TextServer.AUTOWRAP_WORD
+	_server_note.hide()
+	v.add_child(_server_note)
+
+	v.add_child(UITheme.rule(UITheme.GOLD_DIM))
+	var foot := HBoxContainer.new()
+	foot.add_theme_constant_override("separation", 10)
+	_browser_climber = UITheme.label("", 14, UITheme.PARCH)
+	_browser_climber.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_browser_climber.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	foot.add_child(_browser_climber)
+	var change := UITheme.make_button("Change climber", "ghost")
+	change.disabled = _save_count() < 2
+	change.pressed.connect(func(): _open_slots("pick"))
+	foot.add_child(change)
+	foot.add_child(UITheme.action_cap("back"))
+	foot.add_child(UITheme.subtle("close", 12))
+	v.add_child(foot)
+	_refresh_browser_climber()
+
+	_server_timer = Timer.new()
+	_server_timer.wait_time = SERVER_REFRESH
+	_server_timer.autostart = true
+	_server_timer.timeout.connect(func():
+		if not _joining:
+			_refresh_servers(true))
+	_servers_dim.add_child(_server_timer)
+	UITheme.fade_in(_servers_dim, 0.0, 0.2)
+	_refresh_servers()
+
+
+func _close_servers() -> void:
+	if _servers_dim:
+		_servers_dim.queue_free()
+		_servers_dim = null
+		_server_rows = null
+		_server_note = null
+		if _online_btn:
+			_online_btn.grab_focus()
+
+
+func _refresh_browser_climber() -> void:
+	if _browser_climber == null:
+		return
+	var i := _info(_online_slot)
+	if not i["exists"] or i["corrupt"]:
+		_browser_climber.text = "No climber yet: create one with New Game to join a realm."
+		_browser_climber.add_theme_color_override("font_color", UITheme.MUTED)
+	else:
+		_browser_climber.text = "Climbing as %s  ·  Lv %d %s" % [i["name"], int(i["level"]), i["class"]]
+		_browser_climber.add_theme_color_override("font_color", UITheme.PARCH)
+
+
+## Re-queries every realm. quiet: keep the current rows' numbers while the
+## new answers come in (the periodic refresh), instead of "Checking".
+func _refresh_servers(quiet := false) -> void:
+	if _server_rows == null:
+		return
+	if not quiet:
+		_server_state.clear()
+		_server_note.hide()
+	for e in _server_list:
+		if not quiet or not _server_state.has(e["id"]):
+			_server_state[e["id"]] = {"state": "checking", "result": {}}
+	_rebuild_rows()
+	if _demo_servers:
+		_fill_demo_statuses()
+		return
+	for e in _server_list:
+		Net.query_status(e["address"], int(e["port"]), _on_server_status.bind(e["id"]))
+
+
+func _on_server_status(result: Dictionary, id: String) -> void:
+	if _server_rows == null or not is_inside_tree():
+		return
+	_server_state[id] = {"state": "online" if result.get("online", false) else "offline", "result": result}
+	_rebuild_rows()
+
+
+func _fill_demo_statuses() -> void:
+	var demo := [
+		{"online": true, "version": Net.GAME_VERSION, "compatible": true, "floor": 1, "players": 17, "capacity": 30, "ping_ms": 38},
+		{"online": true, "version": Net.GAME_VERSION, "compatible": true, "floor": 1, "players": 30, "capacity": 30, "ping_ms": 112},
+		{"online": true, "version": "0.2.0", "compatible": false, "floor": 1, "players": 6, "capacity": 30, "ping_ms": 64},
+		{"online": false, "error": "No answer"},
+	]
+	var all_down := "--demo-servers-offline" in OS.get_cmdline_user_args()  # the empty state
+	for i in _server_list.size():
+		var r: Dictionary = demo[3] if all_down else demo[i % demo.size()]
+		_server_state[_server_list[i]["id"]] = {"state": "online" if r["online"] else "offline", "result": r}
+	_rebuild_rows()
+
+
+func _rebuild_rows() -> void:
+	if _server_rows == null:
+		return
+	var had_focus := get_viewport().gui_get_focus_owner()
+	var refocus := had_focus != null and _server_rows.is_ancestor_of(had_focus)
+	var focus_id := str(had_focus.get_meta("realm_id", "")) if refocus else ""
+	for c in _server_rows.get_children():
+		_server_rows.remove_child(c)
+		c.queue_free()
+	var checking := 0
+	var reachable := 0
+	for e in _server_list:
+		var st: Dictionary = _server_state.get(e["id"], {"state": "checking", "result": {}})
+		if st["state"] == "checking":
+			checking += 1
+		elif st["state"] == "online":
+			reachable += 1
+		_server_rows.add_child(_server_row(e, st))
+	var none := _server_list.is_empty() or (checking == 0 and reachable == 0)
+	_server_empty.visible = none
+	_server_rows.get_parent().visible = not _server_list.is_empty()
+	if none:
+		_set_empty_text()
+	if _refresh_btn:
+		_refresh_btn.disabled = checking > 0 or _joining
+	if refocus or get_viewport().gui_get_focus_owner() == null:
+		_refocus_row.call_deferred(focus_id)
+
+
+## Keeps keyboard / pad focus on the same realm across a row rebuild.
+func _refocus_row(id: String) -> void:
+	if _server_rows == null:
+		return
+	for row in _server_rows.get_children():
+		var b: Button = row.get_meta("join", null)
+		if b and str(b.get_meta("realm_id", "")) == id and not b.disabled:
+			b.grab_focus()
+			return
+	if UITheme.focus_first_in(_server_rows) == null and _refresh_btn and not _refresh_btn.disabled:
+		_refresh_btn.grab_focus()
+
+
+func _set_empty_text() -> void:
+	var t: Label = _server_empty.get_meta("title")
+	var b: Label = _server_empty.get_meta("body")
+	if _server_list.is_empty():
+		t.text = "NO REALMS CONFIGURED"
+		b.text = "This build lists no official servers. Add one to user://servers.json (see docs/DEDICATED_SERVER.md)."
+	else:
+		t.text = "NO REALM SERVER IS REACHABLE"
+		b.text = "%s answered. Check your internet connection, or try again in a minute. Your climbers are safe, and solo play works offline." % (
+			"The realm server never" if _server_list.size() == 1 else "None of the %d realms" % _server_list.size())
+
+
+func _empty_state() -> PanelContainer:
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", UITheme.box(Color(UITheme.ROSE, 0.08), Color(UITheme.ROSE, 0.45), 12, 1))
+	var m := MarginContainer.new()
+	for side in ["left", "top", "right", "bottom"]:
+		m.add_theme_constant_override("margin_" + side, 18)
+	p.add_child(m)
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 16)
+	m.add_child(h)
+	var dot := StatusDot.new()
+	dot.color = UITheme.ROSE
+	dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	h.add_child(dot)
+	var tv := VBoxContainer.new()
+	tv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tv.add_theme_constant_override("separation", 4)
+	var t := UITheme.heading("", 20, UITheme.ROSE)
+	tv.add_child(t)
+	var b := UITheme.subtle("", 14)
+	b.autowrap_mode = TextServer.AUTOWRAP_WORD
+	tv.add_child(b)
+	h.add_child(tv)
+	var retry := UITheme.make_button("Try again", "normal")
+	retry.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	retry.pressed.connect(_refresh_servers)
+	h.add_child(retry)
+	p.set_meta("title", t)
+	p.set_meta("body", b)
+	return p
+
+
+func _server_row(e: Dictionary, st: Dictionary) -> PanelContainer:
+	var r: Dictionary = st["result"]
+	var state: String = st["state"]
+	var full := state == "online" and int(r.get("players", 0)) >= int(r.get("capacity", Net.MAX_PLAYERS))
+	var mismatch := state == "online" and not bool(r.get("compatible", false))
+	var last: bool = str(Settings.data.get("last_realm", "")) == str(e["id"])
+	var card := PanelContainer.new()
+	var border := Color(1, 1, 1, 0.1)
+	if state == "online":
+		border = Color(UITheme.CYAN if not full and not mismatch else UITheme.GOLD, 0.55)
+	card.add_theme_stylebox_override("panel", UITheme.box(Color(UITheme.NAVY2, 0.92), border, 10, 1))
+	var m := MarginContainer.new()
+	m.add_theme_constant_override("margin_left", 16)
+	m.add_theme_constant_override("margin_right", 16)
+	m.add_theme_constant_override("margin_top", 12)
+	m.add_theme_constant_override("margin_bottom", 12)
+	card.add_child(m)
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 16)
+	m.add_child(h)
+
+	var dot := StatusDot.new()
+	dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	dot.color = {"checking": UITheme.CYAN, "online": UITheme.GOLD if (full or mismatch) else UITheme.GREEN, "offline": UITheme.ROSE}[state]
+	dot.pulse = state == "checking"
+	dot.dim = state == "offline"
+	h.add_child(dot)
+
+	var nv := VBoxContainer.new()
+	nv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	nv.add_theme_constant_override("separation", 2)
+	var nh := HBoxContainer.new()
+	nh.add_theme_constant_override("separation", 8)
+	var name_l := UITheme.label(str(e["name"]), 18, UITheme.PARCH if state != "offline" else UITheme.MUTED, true)
+	nh.add_child(name_l)
+	if last:
+		nh.add_child(_tag("Last played", UITheme.CYAN))
+	if e["region"] != "":
+		nh.add_child(_tag(str(e["region"]), UITheme.MUTED))
+	nv.add_child(nh)
+	var floor_n := int(r.get("floor", e["floor"])) if state == "online" and int(r.get("floor", 0)) > 0 else int(e["floor"])
+	var sub := "Floor %d  ·  %s" % [floor_n, GameState.FLOOR_NAMES.get(floor_n, "Floor %d" % floor_n)]
+	var sub_col := UITheme.MUTED
+	match state:
+		"checking":
+			sub += "  ·  checking..."
+		"offline":
+			sub += "  ·  offline"
+		_:
+			if mismatch:
+				sub = ("Server runs v%s, you have v%s  ·  update needed" % [r.get("version", "?"), Net.GAME_VERSION]) if str(r.get("version", "")) != "" else "Older server build  ·  version unknown"
+				sub_col = UITheme.GOLD
+	var sub_l := UITheme.label(sub, 13, sub_col)
+	sub_l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	nv.add_child(sub_l)
+	h.add_child(nv)
+
+	var pv := VBoxContainer.new()
+	pv.custom_minimum_size = Vector2(COL_PLAYERS, 0)
+	pv.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	pv.add_theme_constant_override("separation", 5)
+	var cap := int(r.get("capacity", Net.MAX_PLAYERS))
+	var players := int(r.get("players", 0))
+	var pl := UITheme.label(("%d / %d" % [players, cap]) if state == "online" and players >= 0 else "—", 15,
+		UITheme.GOLD if full else UITheme.PARCH, true)
+	pv.add_child(pl)
+	var bar := CapacityBar.new()
+	bar.frac = float(players) / float(maxi(cap, 1)) if state == "online" and players >= 0 else 0.0
+	bar.color = UITheme.GOLD if full else UITheme.CYAN
+	pv.add_child(bar)
+	h.add_child(pv)
+
+	var ping := int(r.get("ping_ms", -1))
+	var ping_l := UITheme.label(("%d ms" % ping) if state == "online" else "—", 15,
+		(UITheme.GREEN if ping < 90 else (UITheme.GOLD if ping < 180 else UITheme.ROSE)) if state == "online" else UITheme.MUTED, true)
+	ping_l.custom_minimum_size = Vector2(COL_PING, 0)
+	ping_l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	h.add_child(ping_l)
+
+	var can_join: bool = state == "online" and not full and not mismatch and _info(_online_slot)["exists"] and not _joining
+	var label: String = {"checking": "Checking", "offline": "Offline"}.get(state, "Full" if full else ("Update needed" if mismatch else "Join"))
+	var join := UITheme.make_button(label, "primary" if can_join else "normal")
+	join.custom_minimum_size = Vector2(COL_JOIN, 42)
+	join.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	join.disabled = not can_join
+	if state == "online" and not full and not mismatch and not _info(_online_slot)["exists"]:
+		join.tooltip_text = "Create a climber first."
+	join.pressed.connect(_join_server.bind(e))
+	join.set_meta("realm_id", str(e["id"]))
+	card.set_meta("join", join)
+	h.add_child(join)
+	return card
+
+
+func _tag(text: String, c: Color) -> PanelContainer:
+	var p := PanelContainer.new()
+	var sb := UITheme.box(Color(c, 0.12), Color(c, 0.5), 999, 1)
+	sb.content_margin_left = 8
+	sb.content_margin_right = 8
+	sb.content_margin_top = 1
+	sb.content_margin_bottom = 1
+	p.add_theme_stylebox_override("panel", sb)
+	p.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var l := UITheme.label(text.to_upper(), 10, c, true)
+	p.add_child(l)
+	return p
+
+
+func _join_server(e: Dictionary) -> void:
+	if _joining:
+		return
+	if not SaveSystem.load_game(_online_slot):
+		_browser_note("That climber's save could not be loaded.", UITheme.ROSE)
+		return
+	if not Net.join(str(e["address"]), int(e["port"])):
+		return  # Net emitted connection_failed with the reason
+	_joining = true
+	Settings.set_value("last_realm", str(e["id"]))
+	_browser_note("Connecting to %s..." % e["name"], UITheme.CYAN)
+	_rebuild_rows()
+	LoadingScreen.connecting("Connecting to %s..." % e["name"])
+	_enter_world_when_floor_known()
+
+
+## A line under the realm rows (connecting, refusals); no-op when closed.
+func _browser_note(text: String, c: Color) -> void:
+	if c == UITheme.ROSE:
+		_joining = false
+		if _server_rows:
+			_rebuild_rows()
+	if _server_note == null:
+		return
+	_server_note.text = text
+	_server_note.add_theme_color_override("font_color", c)
+	_server_note.show()
+
+
+## Small round status light: steady (online / offline) or pulsing (checking).
+class StatusDot extends Control:
+	var color := Color.WHITE
+	var pulse := false
+	var dim := false
+	var _t := 0.0
+
+	func _init() -> void:
+		custom_minimum_size = Vector2(18, 18)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _process(delta: float) -> void:
+		if pulse:
+			_t += delta
+			queue_redraw()
+
+	func _draw() -> void:
+		var c := size / 2.0
+		var a := 0.55 + 0.45 * sin(_t * 5.0) if pulse else 1.0
+		if not dim:
+			draw_circle(c, 9.0, Color(color, 0.18 * a))
+		draw_circle(c, 5.0, Color(color, (0.45 if dim else 1.0) * a))
+		draw_circle(c + Vector2(-1.5, -1.5), 1.6, Color(1, 1, 1, 0.5 * a))
+
+
+## Thin fill bar for a realm's climber count.
+class CapacityBar extends Control:
+	var frac := 0.0
+	var color := Color.WHITE
+
+	func _init() -> void:
+		custom_minimum_size = Vector2(0, 5)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _draw() -> void:
+		var r := Rect2(Vector2.ZERO, Vector2(size.x, 5))
+		draw_rect(r, Color(1, 1, 1, 0.1))
+		if frac > 0.0:
+			draw_rect(Rect2(r.position, Vector2(r.size.x * clampf(frac, 0.0, 1.0), r.size.y)), color)
+			draw_rect(Rect2(r.position, Vector2(r.size.x * clampf(frac, 0.0, 1.0), 1.5)), Color(1, 1, 1, 0.35))
+
+
 # --- Footer --------------------------------------------------------------------
 
 func _build_footer() -> void:
@@ -796,6 +1263,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if _slots_dim:
 		_close_slots()
+		get_viewport().set_input_as_handled()
+	elif _servers_dim:
+		_close_servers()
 		get_viewport().set_input_as_handled()
 	elif _settings_dim and _settings_dim.visible:
 		_settings_form.closed.emit()

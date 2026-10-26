@@ -1,7 +1,12 @@
 extends Node
 ## Networking entry point. Offline by default so single player keeps working.
-## One server = one floor instance. Host from the menu, join by IP, or run a
-## dedicated server with:  godot --headless -- --server [--port 4433]
+## One server = one floor instance (up to MAX_PLAYERS climbers), and floors run
+## ONLY on dedicated servers: a game client can never host (see host_refusal).
+## Run one with:  godot --headless --path . -- --server [--port 4433] [--floor 1]
+## (docs/DEDICATED_SERVER.md, tools/server/). Players pick a realm from the
+## server list (config/servers.json, user://servers.json) on the main menu;
+## query_status() asks a server for its player count / floor / version
+## without joining, and both handshakes refuse a GAME_VERSION mismatch.
 ##
 ## Online, the SERVER owns each character's record (user://server_db):
 ## level, XP, Col, stats, HP, materials, gear, quests, skills, buffs and the
@@ -32,6 +37,18 @@ const RealmDBScript := preload("res://scripts/realm_db.gd")
 
 const DEFAULT_PORT := 4433
 const MAX_PLAYERS := 30
+## Game build version. Client and server must match exactly: the join
+## handshake and the status query both carry it. Bump it on every release
+## that changes the protocol, records or anything the server validates.
+const GAME_VERSION := "0.1.0"
+## ENet slots kept free above the player capacity, so status queries still
+## get an answer (and a joiner hears "full") when every player slot is taken.
+const QUERY_SLOTS := 8
+## A status query that has not answered within this many seconds is offline.
+const QUERY_TIMEOUT := 3.0
+## The official realm list shipped with the game, and the player's override.
+const SERVER_LIST_PATH := "res://config/servers.json"
+const USER_SERVER_LIST_PATH := "user://servers.json"
 ## The client builds its world before it sends its character; a cold load
 ## with VRM scenes can take 10-20 s, so give the handshake room.
 const AUTH_TIMEOUT := 60.0
@@ -101,6 +118,19 @@ var realm = null
 ## Realm id of this server (`--realm <id>`; several floor servers that share a
 ## user:// folder and this id share one world DB). Offline uses "local".
 var realm_id := "server"
+## Dedicated server: display name (`--server-name`) and player capacity
+## (`--capacity N`, 1..MAX_PLAYERS) reported by the status query.
+var server_name := "Floor Server"
+var capacity := MAX_PLAYERS
+## The version this process speaks (GAME_VERSION; `--net-version X` is a test
+## hook that fakes another build to exercise the mismatch refusal).
+var net_version := GAME_VERSION
+## Why the last host() was refused ("" when it was not).
+var host_refused := ""
+## Client: status queries in flight (query_status), polled in _process.
+var _queries: Array = []
+## Server: pending peers that only asked for status (no join log noise).
+var _query_peers := {}
 
 
 func _ready() -> void:
@@ -113,7 +143,9 @@ func _ready() -> void:
 	multiplayer.peer_authentication_failed.connect(func(peer):
 		pending_characters.erase(peer)
 		_pending_records.erase(peer)
-		if multiplayer.is_server():
+		if multiplayer.is_server() and _query_peers.has(peer):
+			_query_peers.erase(peer)  # a status query hung up: expected
+		elif multiplayer.is_server():
 			print("[net] peer %d failed the join handshake (timeout or dropped)" % peer)
 		if not multiplayer.is_server() and peer == 1:
 			# Deferred: the engine is still inside its poll of the peer we
@@ -125,13 +157,23 @@ func _ready() -> void:
 	# pending peers; they never send anything, so admit them right away.
 	multiplayer.peer_authenticating.connect(func(peer):
 		if online and not multiplayer.is_server() and peer != 1:
-			multiplayer.complete_auth(peer))
+			multiplayer.complete_auth(peer)
+		elif online and multiplayer.is_server():
+			# First word to every connecting peer: our build, so a client on
+			# another version refuses before it spends time loading a floor.
+			multiplayer.send_auth(peer, var_to_bytes({"hello": {"version": net_version, "floor": GameState.floor, "name": server_name}})))
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	var args := OS.get_cmdline_user_args()
 	for i in args.size():
 		if args[i] == "--port" and i + 1 < args.size():
-			port = int(args[i + 1])
+			port = clampi(int(args[i + 1]), 1, 65535)
+		elif args[i] == "--server-name" and i + 1 < args.size():
+			server_name = args[i + 1].strip_edges().left(48)
+		elif args[i] == "--capacity" and i + 1 < args.size():
+			capacity = clampi(int(args[i + 1]), 1, MAX_PLAYERS)
+		elif args[i] == "--net-version" and i + 1 < args.size():
+			net_version = args[i + 1].left(24)
 		elif args[i] == "--token" and i + 1 < args.size():
 			client_token = args[i + 1].left(64)
 		elif args[i] == "--realm" and i + 1 < args.size():
@@ -154,6 +196,7 @@ func _ready() -> void:
 	_life_timer.timeout.connect(_on_life_tick)
 	add_child(_life_timer)
 	_party_setup()
+	set_process(false)  # only while status queries are in flight
 
 
 func _on_join_refused() -> void:
@@ -174,9 +217,28 @@ func is_authority() -> bool:
 	return not online or multiplayer.is_server()
 
 
+## Why this process may not open a floor server ("" when it may). Floors run
+## only on dedicated servers: the explicit `--server` flag on a headless
+## process (or an export built with the dedicated_server feature). A player's
+## game client never hosts, so nobody can join someone's private game.
+static func host_refusal(args: PackedStringArray, display_name: String, dedicated_build: bool) -> String:
+	if not "--server" in args:
+		return "Hosting is disabled in the game client. Floors run on dedicated servers (see docs/DEDICATED_SERVER.md)."
+	if display_name != "headless" and not dedicated_build:
+		return "A floor server must run headless: godot --headless --path . -- --server"
+	return ""
+
+
+## Opens this process as a dedicated floor server. Refused unless
+## host_refusal() allows it (a client build never hosts).
 func host(p := DEFAULT_PORT) -> bool:
+	host_refused = host_refusal(OS.get_cmdline_user_args(), DisplayServer.get_name(), OS.has_feature("dedicated_server"))
+	if host_refused != "":
+		push_warning("[net] host refused: " + host_refused)
+		connection_failed.emit(host_refused)
+		return false
 	var peer := ENetMultiplayerPeer.new()
-	var err := peer.create_server(p, MAX_PLAYERS)
+	var err := peer.create_server(p, capacity + QUERY_SLOTS)
 	if err != OK:
 		connection_failed.emit("Could not open port %d (%s)." % [p, error_string(err)])
 		return false
@@ -189,6 +251,8 @@ func host(p := DEFAULT_PORT) -> bool:
 	port = p
 	DirAccess.make_dir_recursive_absolute(DB_DIR)
 	_open_realm(realm_id)
+	print("[server] '%s' v%s  floor %d  udp port %d  capacity %d  data %s" % [server_name, net_version, GameState.floor, p, capacity,
+		ProjectSettings.globalize_path("user://")])
 	return true
 
 
@@ -197,6 +261,16 @@ func _on_auth(peer: int, data: PackedByteArray) -> void:
 	var v = bytes_to_var(data)
 	if typeof(v) != TYPE_DICTIONARY:
 		_reject(peer, "Bad handshake (%s, %d bytes)." % [type_string(typeof(v)), data.size()])
+		return
+	if v.has("query"):
+		_answer_status(multiplayer, peer)
+		return
+	var vwhy := version_refusal(str(v.get("version", "")), net_version, true)
+	if vwhy != "":
+		_reject(peer, vwhy)
+		return
+	if srv_records.size() + _pending_records.size() >= capacity:
+		_reject(peer, "This floor is full (%d/%d climbers). Pick another realm or try again shortly." % [srv_records.size(), capacity])
 		return
 	var raw_char = v.get("character", v)
 	var character := sanitize_character(raw_char if raw_char is Dictionary else {})
@@ -299,7 +373,15 @@ func join(ip: String, p := DEFAULT_PORT) -> bool:
 	multiplayer.auth_callback = func(_peer: int, data: PackedByteArray):
 		var v = bytes_to_var(data)
 		if v is Dictionary and v.has("reject"):
-			_reject_reason = str(v["reject"]).left(120)
+			_reject_reason = str(v["reject"]).left(160)
+		elif v is Dictionary and v.get("hello") is Dictionary:
+			var why := version_refusal(str(v["hello"].get("version", "")), net_version, false)
+			if why != "" and last_error == "":
+				# Refuse a server on another build before loading any floor.
+				# last_error also stops the menu entering the world.
+				_reject_reason = why
+				last_error = why
+				_on_join_refused.call_deferred()
 	multiplayer.auth_timeout = AUTH_TIMEOUT
 	multiplayer.multiplayer_peer = peer
 	online = true
@@ -324,7 +406,7 @@ func ensure_token() -> void:
 func send_character(character: Dictionary) -> void:
 	ensure_token()
 	multiplayer.send_auth(1, var_to_bytes({
-		"character": character, "token": client_token, "stats": GameState.stats}))
+		"character": character, "token": client_token, "stats": GameState.stats, "version": net_version}))
 	multiplayer.complete_auth(1)
 
 
@@ -353,6 +435,196 @@ func _go_offline() -> void:
 	_last_req_ms.clear()
 	online = false
 	_party_reset()
+
+
+# --- Versions, status queries and the realm list ---------------------------------
+
+## Compares two dotted versions ("0.1.10" > "0.1.9"): -1, 0 or 1.
+static func version_cmp(a: String, b: String) -> int:
+	var pa := a.split(".")
+	var pb := b.split(".")
+	for i in maxi(pa.size(), pb.size()):
+		var x := pa[i] if i < pa.size() else "0"
+		var y := pb[i] if i < pb.size() else "0"
+		if x.is_valid_int() and y.is_valid_int():
+			if int(x) != int(y):
+				return -1 if int(x) < int(y) else 1
+		elif x != y:
+			return -1 if x < y else 1
+	return 0
+
+
+## Why a peer on build `theirs` may not play with us on build `ours` ("" when
+## they match). on_server: the server judging a joiner, else a client judging
+## the server's hello. Builds must match exactly; the text says who updates.
+static func version_refusal(theirs: String, ours: String, on_server: bool) -> String:
+	if theirs == ours:
+		return ""
+	var shown := ("v" + theirs) if theirs != "" else "an older build"
+	if on_server:
+		if theirs != "" and version_cmp(theirs, ours) > 0:
+			return "Version mismatch: your game is %s but this server still runs v%s. Try again once the server has updated." % [shown, ours]
+		return "Version mismatch: this server runs v%s but your game is %s. Update The Spire to join." % [ours, shown]
+	if theirs != "" and version_cmp(theirs, ours) < 0:
+		return "Version mismatch: this server still runs %s and your game is v%s. Try again once the server has updated." % [shown, ours]
+	return "Version mismatch: this server runs %s but your game is v%s. Update The Spire to join." % [shown, ours]
+
+
+## Server: what a status query is told (no join, no record touched).
+func status_payload() -> Dictionary:
+	return {"name": server_name, "version": net_version, "floor": GameState.floor, "players": srv_records.size(),
+		"capacity": capacity, "realm": realm_id}
+
+
+## Server: answers a status query on `mp` and hangs up on the peer shortly
+## after (the client closes first; this is the fallback).
+func _answer_status(mp: MultiplayerAPI, peer: int) -> void:
+	_query_peers[peer] = true
+	mp.send_auth(peer, var_to_bytes({"status": status_payload()}))
+	get_tree().create_timer(1.5).timeout.connect(func():
+		if _query_peers.has(peer) and mp.multiplayer_peer and mp.get_authenticating_peers().has(peer):
+			mp.multiplayer_peer.disconnect_peer(peer)
+		_query_peers.erase(peer))
+
+
+## Client: asks the server at address:port for its status without joining.
+## cb(result) gets {"online": true, "name", "version", "compatible", "floor",
+## "players", "capacity", "realm", "ping_ms"} or {"online": false, "error"}.
+## Runs on its own ENet peer + SceneMultiplayer, so it never disturbs Net's
+## own connection; several queries can run at once.
+func query_status(address: String, p: int, cb: Callable) -> void:
+	var q := {"cb": cb, "start": Time.get_ticks_msec(), "sent": -1, "done": false}
+	var peer := ENetMultiplayerPeer.new()
+	var err := peer.create_client(address.strip_edges(), p)
+	if address.strip_edges() == "" or err != OK:
+		cb.call({"online": false, "error": "Bad address"})
+		return
+	var mp := SceneMultiplayer.new()
+	mp.root_path = ^"/root/Net"
+	mp.auth_timeout = QUERY_TIMEOUT + 1.0
+	mp.auth_callback = func(_id: int, data: PackedByteArray): _on_query_reply(q, data)
+	mp.peer_authenticating.connect(func(id: int):
+		if id == 1 and q["sent"] < 0:
+			q["sent"] = Time.get_ticks_msec()
+			(q["mp"] as SceneMultiplayer).send_auth(1, var_to_bytes({"query": "status", "version": net_version})))
+	mp.multiplayer_peer = peer
+	q["mp"] = mp
+	q["peer"] = peer
+	_queries.append(q)
+	set_process(true)
+
+
+func _on_query_reply(q: Dictionary, data: PackedByteArray) -> void:
+	if q["done"]:
+		return
+	var v = bytes_to_var(data)
+	if not v is Dictionary:
+		return
+	var ping := Time.get_ticks_msec() - int(q["sent"] if q["sent"] >= 0 else q["start"])
+	if v.get("status") is Dictionary:
+		var st: Dictionary = v["status"]
+		var ver := str(st.get("version", "")).left(24)
+		q["result"] = {"online": true, "name": str(st.get("name", "")).left(48), "version": ver, "compatible": ver == net_version,
+			"floor": clampi(int(st.get("floor", 1)), 1, 99), "players": maxi(int(st.get("players", 0)), 0),
+			"capacity": clampi(int(st.get("capacity", MAX_PLAYERS)), 1, 999), "realm": str(st.get("realm", "")).left(32), "ping_ms": ping}
+	elif v.has("reject"):
+		# A server too old to know status queries treats this as a bad join.
+		q["result"] = {"online": true, "name": "", "version": "", "compatible": false, "floor": 0, "players": -1,
+			"capacity": MAX_PLAYERS, "realm": "", "ping_ms": ping}
+	# (a "hello" or "floor" greeting comes first; wait for the status itself)
+
+
+func _process(_delta: float) -> void:
+	if _queries.is_empty():
+		set_process(false)
+		return
+	for q in _queries.duplicate():
+		var mp: SceneMultiplayer = q["mp"]
+		if mp.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED:
+			mp.poll()
+		if q.has("result"):
+			_finish_query(q, q["result"])
+		elif Time.get_ticks_msec() - int(q["start"]) > int(QUERY_TIMEOUT * 1000.0):
+			_finish_query(q, {"online": false, "error": "No answer"})
+		elif q["sent"] >= 0 and mp.multiplayer_peer.get_connection_status() == MultiplayerPeer.CONNECTION_DISCONNECTED:
+			_finish_query(q, {"online": false, "error": "Connection closed"})
+
+
+func _finish_query(q: Dictionary, result: Dictionary) -> void:
+	if q["done"]:
+		return
+	q["done"] = true
+	_queries.erase(q)
+	var mp: SceneMultiplayer = q["mp"]
+	mp.auth_callback = Callable()
+	(q["peer"] as ENetMultiplayerPeer).close()
+	mp.multiplayer_peer = null
+	q.erase("mp")  # break the q <-> mp signal cycle so both are freed
+	q.erase("peer")
+	var cb: Callable = q["cb"]
+	if cb.is_valid():
+		cb.call(result)
+
+
+## Status queries still waiting for an answer.
+func queries_pending() -> int:
+	return _queries.size()
+
+
+## The realm list for the server browser: the official list shipped in
+## res://config/servers.json, then user://servers.json (or the file passed
+## with `--servers <path>`) adds entries, replaces ones with the same id, or
+## with "replace": true replaces the whole list. Each entry is
+## {"id", "name", "address", "port", "floor", "region"}.
+static func load_server_list() -> Array:
+	var list := parse_server_list(_read_json(SERVER_LIST_PATH))
+	var args := OS.get_cmdline_user_args()
+	var at := args.find("--servers")
+	var user_path := args[at + 1] if at != -1 and at + 1 < args.size() else USER_SERVER_LIST_PATH
+	var user = _read_json(user_path)
+	if user is Dictionary:
+		list = merge_server_lists(list, parse_server_list(user), bool(user.get("replace", false)))
+	return list
+
+
+static func _read_json(path: String) -> Variant:
+	if not FileAccess.file_exists(path):
+		return null
+	return JSON.parse_string(FileAccess.get_file_as_string(path))
+
+
+## Validated entries of a servers.json document (bad ones are skipped).
+static func parse_server_list(doc: Variant) -> Array:
+	var out := []
+	if not doc is Dictionary or not doc.get("servers") is Array:
+		return out
+	for e in doc["servers"]:
+		if not e is Dictionary:
+			continue
+		var address := str(e.get("address", "")).strip_edges()
+		var p := int(e.get("port", DEFAULT_PORT))
+		if address == "" or p < 1 or p > 65535:
+			continue
+		var floor_n := clampi(int(e.get("floor", 1)), 1, 99)
+		out.append({"id": str(e.get("id", "%s:%d" % [address, p])).left(48), "name": str(e.get("name", address)).left(48),
+			"address": address.left(253), "port": p, "floor": floor_n, "region": str(e.get("region", "")).left(32)})
+	return out
+
+
+static func merge_server_lists(base: Array, extra: Array, replace: bool) -> Array:
+	if replace:
+		return extra.duplicate(true)
+	var out := base.duplicate(true)
+	for e in extra:
+		var hit := -1
+		for i in out.size():
+			if out[i]["id"] == e["id"]:
+				hit = i
+		if hit >= 0:
+			out[hit] = e
+		else:
+			out.append(e)
+	return out
 
 
 # --- Server-side character records ------------------------------------------
@@ -569,7 +841,7 @@ func _srv_end_linger(peer: int) -> void:
 ## saved before anyone is told; the realm and the guild let go of it.
 func _srv_fall(peer: int, rec: Dictionary, cause: String) -> void:
 	var rs = RecordState.new(rec)
-	rec["fallen"] = Permadeath.make_fall(rs, cause, str(GameState.FLOOR_NAMES.get(GameState.floor, "Aincrad")))
+	rec["fallen"] = Permadeath.make_fall(rs, cause, str(GameState.FLOOR_NAMES.get(GameState.floor, "the Spire")))
 	rec["hp"] = 0.0
 	rec["unique_skill"] = ""
 	_death_grace[peer] = Time.get_ticks_msec() + 3600000
@@ -589,6 +861,19 @@ func _srv_fall(peer: int, rec: Dictionary, cause: String) -> void:
 func save_all_records() -> void:
 	for peer in srv_records:
 		save_record(srv_records[peer])
+
+
+## A dedicated server that is asked to close (window close request, or the
+## tree quitting) flushes every live record and the realm DB first. Records
+## are also saved every PERSIST_INTERVAL, so a hard kill loses at most that.
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_WM_CLOSE_REQUEST and what != NOTIFICATION_EXIT_TREE:
+		return
+	if online and multiplayer.multiplayer_peer and multiplayer.is_server() and not srv_records.is_empty():
+		save_all_records()
+		print("[server] shutting down: %d record(s) saved" % srv_records.size())
+		if realm != null:
+			realm.flush()
 
 
 func _on_persist_tick() -> void:

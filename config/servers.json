@@ -1,0 +1,14 @@
+{
+	"_comment": "Official realm list shown under Play Online. One entry per dedicated floor server (one floor instance, up to 30 climbers). Players can add or replace entries in user://servers.json; see docs/DEDICATED_SERVER.md. Replace the local test entry with the official server address before shipping.",
+	"version": 1,
+	"servers": [
+		{
+			"id": "local-floor1",
+			"name": "Local Test Realm",
+			"region": "This PC",
+			"address": "127.0.0.1",
+			"port": 4433,
+			"floor": 1
+		}
+	]
+}
