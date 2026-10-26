@@ -34,6 +34,8 @@ func _ready() -> void:
 	GameState.character["name"] = "Preview"
 	if body != "":
 		GameState.character["body"] = body
+	if "--permadeath" in args:
+		GameState.character["permadeath"] = true  # one-life HUD marks
 	for i in args.size():
 		if args[i] == "--floor" and i + 1 < args.size():
 			GameState.floor = clampi(int(args[i + 1]), 1, 2)
@@ -197,7 +199,7 @@ func _ready() -> void:
 				var pl: Node3D = scene.player
 				var fwd: Vector3 = -pl.model.global_transform.basis.z
 				var bpos: Vector3 = pl.global_position + fwd * 6.0
-				scene._spawn_mob({"name": "Floor Guardian: Gravelmaw", "level": 8, "hp": 900, "dmg": 6, "xp": 0, "money": 0,
+				scene._spawn_mob({"name": "Floor Guardian: Vargash the Kobold Warlord", "level": 8, "hp": 900, "dmg": 6, "xp": 0, "money": 0,
 					"boss": true, "size": [2.2, 2.6, 2.0], "respawns": false, "pos": [bpos.x, bpos.y + 0.3, bpos.z]})
 				await get_tree().process_frame
 				for e in get_tree().get_nodes_in_group("enemies"):
@@ -206,6 +208,17 @@ func _ready() -> void:
 						e.speed = 0.0
 						e.hp = 610.0
 						e.look_at(Vector3(pl.global_position.x, e.global_position.y, pl.global_position.z))
+	# --open ring or ring:status|items|skills|quests|messages|logout
+	if open_ui.begins_with("ring") and "hud" in scene and scene.hud:
+		scene.hud._toggle_pause()
+		var parts := open_ui.split(":")
+		if parts.size() > 1:
+			for i in RingMenu.ENTRIES.size():
+				if RingMenu.ENTRIES[i][0] == parts[1]:
+					scene.hud._ring._select(i, false)
+					scene.hud._ring.activate(i)
+					if parts[1] == "logout":
+						scene.hud._ring._confirm_logout()
 	if "--settings" in args or open_ui in ["settings", "controls"]:
 		var form: SettingsPanel = null
 		if scene.has_method("_open_settings"):
@@ -222,6 +235,7 @@ func _ready() -> void:
 	# combat moment a few frames before the shot. Time is slowed right before
 	# the trigger so the effect is caught mid-flight regardless of frame rate.
 	# MODE: basic | skill0 | skill1 | skill2 | hit | death | slam | dash | shatter | shatter_player
+	#       | parry | guard_break | stagger | windup | guard
 	var demo := ""
 	var demo_boar: Node3D = null
 	for i in args.size():
@@ -230,11 +244,11 @@ func _ready() -> void:
 	if demo != "" and which == "world" and "player" in scene and scene.player:
 		var pl: Node3D = scene.player
 		var fwd: Vector3 = -pl.model.global_transform.basis.z
-		var bpos: Vector3 = pl.global_position + fwd * 1.7
-		var boss := demo == "slam"
-		scene._spawn_mob({"name": "Floor Guardian: Gravelmaw" if boss else "Field Boar", "level": 1, "hp": 999999, "dmg": 6,
+		var boss := demo == "slam" or demo.begins_with("boss_")
+		var bpos: Vector3 = pl.global_position + fwd * (7.0 if demo.begins_with("boss_") else 1.7)
+		scene._spawn_mob({"name": "Floor Guardian: Vargash the Kobold Warlord" if boss else "Field Boar", "level": 1, "hp": 999999, "dmg": 6,
 			"boss": boss, "size": [2.2, 2.6, 2.0] if boss else [0.9, 0.8, 1.3], "respawns": false,
-			"pos": [bpos.x, bpos.y + 0.3, bpos.z]})
+			"pos": [bpos.x, bpos.y + 0.3, bpos.z], "brain": "warlord" if demo == "boss_plate" else ""})
 		await get_tree().process_frame
 		for e in get_tree().get_nodes_in_group("enemies"):
 			if e.global_position.distance_to(bpos) < 1.0:
@@ -249,8 +263,10 @@ func _ready() -> void:
 			var right: Vector3 = pl.model.global_transform.basis.x
 			var cam := Camera3D.new()
 			cam.position = pl.global_position + right * 2.6 - fwd * 1.8 + Vector3(0, 1.9, 0)
+			if demo.begins_with("boss_"):
+				cam.position = pl.global_position + right * 5.0 - fwd * 5.0 + Vector3(0, 7.5, 0)
 			scene.add_child(cam)
-			cam.look_at(pl.global_position + fwd * 0.8 + Vector3(0, 1.0, 0))
+			cam.look_at(pl.global_position + fwd * (5.0 if demo.begins_with("boss_") else 0.8) + Vector3(0, 1.0, 0))
 			cam.current = true
 		print("DBG combat-demo ", demo, " boar=", demo_boar != null)
 	for i in 40:
@@ -278,6 +294,117 @@ func _ready() -> void:
 					var pfx := VFX.get_for(pl)
 					if pfx:
 						pfx.shatter(null, pl.model, [], VFX.SHATTER_COLOR, false, 0.0)
+				"parry", "guard_break":
+					var qfx := VFX.get_for(pl)
+					if qfx:
+						var at: Vector3 = pl.global_position + Vector3(0, 1.2, 0) - pl.model.global_transform.basis.z * 0.7
+						qfx.parry_flash(at, demo == "guard_break")
+				"boss_sweep", "boss_slam", "boss_charge", "boss_enrage", "boss_bar", "boss_engage", "boss_plate", "boss_rockfall":
+					var bfx := VFX.get_for(pl)
+					if demo_boar and bfx:
+						var bp: Vector3 = demo_boar.global_position
+						match demo:
+							"boss_sweep":
+								bfx.boss_sweep_warning(demo_boar, 6.0, 150.0, 1.2)
+							"boss_slam":
+								bfx.boss_slam_warning(demo_boar, bp, 5.0, 1.2)
+							"boss_charge":
+								bfx.boss_charge_warning(demo_boar, bp, bp - demo_boar.global_transform.basis.z * 14.0, 1.2)
+							"boss_enrage":
+								bfx.boss_enrage(demo_boar, 1.8)
+							"boss_bar":
+								bfx.boss_bar_break(demo_boar, 2, 4)
+							"boss_engage":
+								bfx.boss_engage(demo_boar)
+							"boss_rockfall":
+								var pp: Vector3 = pl.global_position
+								var offs := [Vector3(1.5, 0, -2.5), Vector3(-3.5, 0, -4.0), Vector3(3.0, 0, -6.0)]
+								for k in offs.size():
+									bfx.boss_rockfall_warning(demo_boar, pp + pl.model.global_transform.basis * offs[k], 2.2, 0.25 + 0.35 * k)
+							"boss_plate":
+								demo_boar.hp = demo_boar.max_hp * 0.62
+								demo_boar._update_label()
+				"still_water", "breaking_wave", "hearth_flare", "hearth_glow":
+					var hfx := VFX.get_for(pl)
+					if hfx:
+						if demo == "hearth_glow":
+							hfx.hearth_glow(pl)
+						else:
+							hfx.class_art_cast(pl, "Hearthwright" if demo == "hearth_flare" else "Stillblade", demo)
+				"boss_swap", "boss_leap", "plated", "boss_whirl", "boss_descend", "boss_flare":
+					var bs: Node3D = null
+					for e in scene.get_tree().get_nodes_in_group("enemies"):
+						if (e.get("is_boss") and e.get("brain") != null) or (demo == "plated" and "halberdier" in str(e.get("display_name")).to_lower()):
+							bs = e
+							break
+					var sfx := VFX.get_for(pl)
+					if bs and sfx:
+						bs.set("speed", 0.0)
+						bs.set("aggro_range", 0.0)
+						# Stand it where the --cam shots look (the arena's far side).
+						if "ARENA_POS" in scene:
+							bs.global_position = scene.ARENA_POS + Vector3(0, 0.2, -6)
+							bs.rotation.y = 0.0
+						match demo:
+							"boss_swap":
+								sfx.boss_weapon_swap(bs, {})
+							"boss_leap":
+								sfx.boss_leap(bs, bs.global_position, bs.global_position + Vector3(0, 0, 8), 1.0)
+							"plated":
+								sfx.mob_plated_hit(bs, Vector3(0, 0, -1))
+							"boss_descend":
+								sfx.boss_leap(bs, bs.global_position, bs.global_position + Vector3(0, 0, 6), 1.1)
+								sfx.boss_descend(bs, bs.global_position, bs.global_position + Vector3(0, 0, 6), 1.1)
+							"boss_flare":
+								Engine.time_scale = 4.0
+								sfx.boss_engage(bs)
+							"boss_whirl":
+								sfx.boss_sweep_warning(bs, 4.2, 360.0, 0.9)
+								scene.get_tree().create_timer(0.9, false).timeout.connect(func(): sfx.boss_sweep_impact(bs, 4.2, 360.0))
+				"battle_result":
+					var bh = scene.get("hud")
+					if bh and bh.has_method("show_battle_result"):
+						bh.show_battle_result({"kills": 3, "foes": {"Field Boar": 2, "Dire Wolf": 1}, "xp": 86, "col": 24,
+							"items": {"beast_hide": 2, "iron_ore": 1, "heal_crystal": 1}, "level_ups": 1, "party": 3})
+				"last_attack", "last_attack_fallback":
+					var lh = scene.get("hud")
+					if lh and lh.has_method("show_last_attack"):
+						lh.show_last_attack({"foe": "Greytusk, the Old Boar", "item": "" if demo == "last_attack_fallback" else "Greytusk Hide Vest",
+							"xp": 120, "col": 60, "mats": {"beast_hide": 3}})
+				"switch", "inner_area", "outer_field":
+					var wfx := VFX.get_for(pl)
+					if wfx and demo == "switch" and demo_boar:
+						wfx.switch_flash(demo_boar, 1, 2)
+					elif wfx:
+						wfx.inner_area_notice(demo == "inner_area")
+				"heal_crystal", "teleport_crystal":
+					GameState.materials["heal_crystal"] = 3
+					GameState.materials["teleport_crystal"] = 1
+					GameState.inventory_changed.emit()
+					var xfx := VFX.get_for(pl)
+					if xfx:
+						xfx.crystal_burst(pl.global_position + Vector3(0, 1.0, 0), LifeData.item_color(demo), demo == "teleport_crystal")
+				"duel":
+					var du = scene.get("_duels")
+					if du:
+						du.on_net("duel", {"ev": "begin", "duel": 1, "opponent": "Mira", "opponent_peer": 99, "mode": "half", "mode_name": "Half-loss", "count": 3})
+						du.on_net("duel", {"ev": "start", "a": "Preview", "b": "Mira", "a_peer": 1, "b_peer": 99, "center": pl.global_position + Vector3(0, 0, -3)})
+						du.on_net("duel", {"ev": "hit", "attacker": 1, "defender": 99, "amount": 30.0, "outcome": "hit", "kind": 0, "hp": 74.0, "max": 120.0})
+					var dfx := VFX.get_for(pl)
+					if dfx:
+						dfx.duel_start(pl, demo_boar)
+						dfx.duel_ring(pl.global_position + Vector3(0, 0, -6), 9.0, true)
+				"chest_open":
+					var cfx := VFX.get_for(pl)
+					if cfx:
+						cfx.chest_open(pl.global_position - pl.model.global_transform.basis.z * 2.5, 4)
+				"stagger":
+					if demo_boar:
+						demo_boar.net_staggered(2.0)
+				"windup":
+					var wfx := VFX.get_for(pl)
+					if demo_boar and wfx:
+						wfx.windup_glint(demo_boar, 0.42)
 				"slam":
 					if demo_boar:
 						demo_boar._slam_fx()
@@ -287,7 +414,8 @@ func _ready() -> void:
 					var fx := VFX.get_for(pl)
 					if fx:
 						fx.dash(pl.global_position, -pl.model.global_transform.basis.z)
-			Engine.time_scale = 0.3 if demo in ["death", "slam", "shatter_player"] else (0.12 if demo == "shatter" else 0.08)
+			if demo != "boss_flare":
+				Engine.time_scale = 0.3 if demo in ["death", "slam", "shatter_player", "stagger"] or (demo.begins_with("boss_") and demo != "boss_bar") else (0.12 if demo in ["shatter", "boss_bar"] else 0.08)
 		# HUD states that decay in real time are set three frames before the shot.
 		if open_ui == "fishing" and i == 36 and "player" in scene and scene.player:
 			scene._fishing.start(0)
@@ -295,6 +423,81 @@ func _ready() -> void:
 			scene._fishing._drop_bobber()
 			scene._fishing._bite()
 			Engine.time_scale = 0.05
+		# --summit: stand on the Labyrinth summit (lights the arena braziers).
+		if i == 3 and "--summit" in args and scene.has_method("_enter_summit"):
+			scene._enter_summit()
+		# --monument-demo: sample names on the Monument (permadeath, fallen).
+		# --open forge: mid-forge at Haldor's anvil, two strikes landed, a
+		# Perfect just struck (sparks and flash caught in flight).
+		if open_ui == "forge" and i == 30:
+			GameState.add_material("iron_ore", 6)
+			GameState.money += 200
+			if not scene.hud._craft_panel.visible:
+				scene.hud.toggle_craft()
+			scene.hud._start_forge("Iron Sword")
+		if open_ui == "forge" and i == 37 and scene.hud._forge:
+			var fw: ForgeWidget = scene.hud._forge
+			fw.grades = ["good"]
+			fw._land(fw._elapsed())
+			fw.grades[1] = "perfect"
+			fw._pop = "perfect"
+			fw._spray(float(fw.specs[1]["center"]), "perfect")
+		if i == 36 and "--monument-demo" in args:
+			scene.get_tree().call_group("monument", "set_names", [
+				{"name": "Kirika", "level": 14, "floors": 1, "online": true, "permadeath": true},
+				{"name": "Asterion", "level": 12, "floors": 1, "online": true},
+				{"name": "Lowen", "level": 9, "floors": 0, "online": false},
+				{"name": "Diavel", "level": 9, "floors": 0, "online": false, "permadeath": true, "fallen": {"cause": "Vargash"}},
+				{"name": "Mira", "level": 7, "floors": 0, "online": true, "permadeath": true},
+				{"name": "Coper", "level": 5, "floors": 0, "online": false, "permadeath": true, "fallen": {"cause": "Dire Wolf"}},
+				{"name": "Sasha", "level": 4, "floors": 0, "online": true}])
+		# --stalls-open: every market stall rented and stocked (keepers, wares).
+		if i == 3 and "--stalls-open" in args and scene.get("_stalls") != null:
+			for st in scene._stalls.stalls:
+				(st["keeper"] as Node3D).visible = true
+				(st["wares"] as Node3D).visible = true
+		# --spawn-boss: raise the floor boss in its arena (for a model check).
+		if i == 4 and "--spawn-boss" in args and scene.has_method("_spawn_boss"):
+			scene._spawn_boss()
+		# --pad: draw gamepad prompts. --unique: hold Twin Fang (unique slots).
+		# --bark: stand the player beside the first villager out on a routine.
+		if i == 24 and "--bark" in args and "_routines" in scene and scene._routines:
+			for n in scene._routines._npcs:
+				if scene._routines.bark(n) != "":
+					var nn: Node3D = scene._routines._npcs[n]["node"]
+					scene.player.global_position = nn.global_position + Vector3(2.8, 0.2, 4.6)
+					if "cam_pivot" in scene.player:
+						scene.player.cam_pivot.rotation.y = atan2(2.8, 4.6)
+					break
+		if i == 30 and "--class" in args:
+			var ci := args.find("--class")
+			if ci + 1 < args.size():
+				GameState.unlock_hidden_class(args[ci + 1])
+				if "player" in scene and scene.player and "class_cd" in scene.player:
+					scene.player.class_cd[1] = 7.0
+		if i == 30 and "--unique" in args:
+			GameState.unique_skill = UniqueSkills.TWIN_FANG
+			GameState.unique_skill_changed.emit(GameState.unique_skill)
+		if i == 31 and "--pad" in args:
+			InputSetup.device = "gamepad"
+			InputSetup.input_device_changed.emit("gamepad")
+		# --open death | realm: the death grey-out / a realm announcement banner.
+		if open_ui == "death" and i == 30 and "hud" in scene and scene.hud:
+			if scene.get("player"):
+				scene.player.last_xp_lost = 37
+			scene.hud.show_death(8.0, "the Town of First Light")
+		if open_ui == "fallen" and i == 4 and "hud" in scene and scene.hud:
+			Engine.time_scale = 9.0  # let the whole fall sequence play out by the shot
+			FallenScreen.show_in(scene.hud._root, "Kirika", {"t": 1792900000, "cause": "Vargash the Kobold Warlord",
+				"where": "the Labyrinth", "level": 14, "floor": 1}, 9.0)
+		if open_ui == "realm" and i == 28 and "hud" in scene and scene.hud:
+			scene.hud.realm_announce("A player has claimed the unique skill «Starfall Edge»")
+		if demo == "guard" and i == 30 and "player" in scene and scene.player:
+			scene.player.press_parry()
+			scene.player.guard = Player.GUARD_MAX * 0.55
+		if demo == "guard" and i == 36 and "player" in scene and scene.player:
+			# Input polling drops the press under the harness; hold the pose.
+			scene.player._vrm.play_guard(true)
 		if open_ui in ["hud", "boss"] and i == 36 and "player" in scene and scene.player:
 			scene.player.skill_cd[0] = 2.6
 			scene.player.skill_cd[1] = 7.1

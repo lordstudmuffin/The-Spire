@@ -131,6 +131,8 @@ func load_game(slot := -1) -> bool:
 	if data.is_empty():
 		push_error("Save file %d is corrupt" % slot)
 		return false
+	if data.get("fallen") is Dictionary and not (data["fallen"] as Dictionary).is_empty():
+		return false  # a fallen permadeath climber is a memorial, never played again
 	var token := str(data.get("net_token", ""))
 	Net.client_token = token  # per character; empty until its first join
 	GameState.from_dict(data)
@@ -149,6 +151,30 @@ func delete_slot(slot: int) -> bool:
 		push_error("Could not delete slot %d: %s" % [slot, error_string(err)])
 		return false
 	return true
+
+
+## Permadeath: the active slot's character fell. Offline the whole state is
+## saved (it already carries `fallen`); online the server owns the record,
+## so only the fall is written into the local file, which then refuses to
+## load (load_game) and shows as a memorial in the character select.
+func mark_fallen(info: Dictionary) -> void:
+	if not (Net.online and not Net.is_server()):
+		save_game()
+		return
+	var data := _read(current_slot)
+	if data.is_empty():
+		return
+	data["fallen"] = info.duplicate()
+	data["level"] = int(info.get("level", data.get("level", 1)))
+	_write(current_slot, data)
+
+
+## Which kinds a new character in `slot` may be (Permadeath.slot_kinds).
+func kinds_for(slot: int) -> Dictionary:
+	var infos: Array = []
+	for s in SLOT_COUNT:
+		infos.append(slot_info(s))
+	return Permadeath.slot_kinds(infos, slot)
 
 
 ## Writes only the multiplayer token into an existing save file, so a token
@@ -198,7 +224,7 @@ func migrate() -> int:
 
 ## Everything the character select shows for a slot. "exists" false = empty.
 func slot_info(slot: int) -> Dictionary:
-	var info := {"slot": slot, "exists": false, "corrupt": false, "name": "", "origin": "", "class": "",
+	var info := {"slot": slot, "exists": false, "corrupt": false, "permadeath": false, "fallen": {}, "name": "", "origin": "", "class": "",
 		"level": 1, "floor": 1, "floor_name": "", "playtime": 0.0, "last_played": 0, "character": {}}
 	if not has_save(slot):
 		return info
@@ -224,6 +250,8 @@ func slot_info(slot: int) -> Dictionary:
 	info["floor_name"] = GameState.FLOOR_NAMES.get(info["floor"], "Floor %d" % info["floor"])
 	info["playtime"] = float(meta.get("playtime", 0.0))
 	info["last_played"] = int(meta.get("last_played", 0))
+	info["permadeath"] = bool(ch.get("permadeath", false))
+	info["fallen"] = data["fallen"] if data.get("fallen") is Dictionary else {}
 	return info
 
 

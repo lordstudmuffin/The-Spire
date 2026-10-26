@@ -48,7 +48,7 @@ const QUESTS := {
 		"objective": "Defeat the Floor Guardian atop the Labyrinth",
 		"unit": "guardian",
 		"reward": "Floor 1 cleared  ·  3 Spirit Shards",
-		"story": "Climb the terraces, cross the summit and face Gravelmaw. Don't stand in the slam.",
+		"story": "Climb the terraces, cross the summit and face Vargash the Kobold Warlord. Parry his cleave, step off his leap.",
 	},
 	"stag_hunt": {
 		"title": "Horns of Thornwick",
@@ -95,6 +95,25 @@ const QUESTS := {
 		"reward": "Floor 2 cleared",
 		"story": "Mirelord raises the drowned to fight beside him. Cut the wisps down fast, then the knight.",
 	},
+	# --- Limited quests (only 1-3 characters in the realm, LimitedContent).
+	"lantern_below": {
+		"title": "The Lantern Below",
+		"giver": "Lamplighter Iselde",
+		"where": "Labyrinth, first terrace",
+		"objective": "Bring Spirit Shards to relight Iselde's lantern",
+		"unit": "shards",
+		"reward": "500 XP  ·  300 Col  ·  Veil of First Dawn (only one in the realm)",
+		"story": "A lamplighter nobody remembers waits at the far corner of the first terrace. Only one traveller will ever carry her veil.",
+	},
+	"old_watch_whispers": {
+		"title": "Whispers of the Old Watch",
+		"giver": "Old Watchman Bram",
+		"where": "Talven camp",
+		"objective": "Bring wolf pelts so Bram can kindle a Wisplight blade",
+		"unit": "pelts",
+		"reward": "380 XP  ·  220 Col  ·  Wisplight Rapier (one of three)",
+		"story": "The last watch-captains forged three blades at the waystones. Bram can kindle them again, but only three were ever made.",
+	},
 	# --- Hollowbrook chain (Floor 1): five quests, one leading to the next.
 	"wolf_pelts": {
 		"title": "Teeth on the North Slope",
@@ -104,6 +123,15 @@ const QUESTS := {
 		"unit": "pelts",
 		"reward": "260 XP  ·  160 Col  ·  2 Beast Hide",
 		"story": "The dire wolves have come down off the tower slope and nobody sets a snare north of the gate. Vesna wants four pelts: proof, and winter boots.",
+	},
+	"grove_bloom": {
+		"title": "A Bloom from the Grove",
+		"giver": "Herbalist Hesper",
+		"where": "Hollowbrook",
+		"objective": "Take the bloom from the flowering Snaptrap in the north-east grove",
+		"unit": "blooms",
+		"reward": "320 XP  ·  120 Col  ·  Verdant Edge (Epic sword)",
+		"story": "Hesper wants the sap of the one Snaptrap in flower; Haldor will temper a blade with it. Leave the fruit-bearers alone: one burst draws the whole grove.",
 	},
 	"field_herbs": {
 		"title": "Fog-Root and Feverleaf",
@@ -132,14 +160,37 @@ const QUESTS := {
 		"reward": "340 XP  ·  200 Col  ·  2 Spirit Shards",
 		"story": "The old watch set waystones around these fields long before the town. They went dark when the Guardian woke. Lay a hand on each and the line wakes.",
 	},
+	# --- Hidden-class quests (scripts/hidden_classes.gd). "hidden": never
+	# listed or hinted at until the NPC opens them (the log only shows
+	# started quests; this flag keeps any future "available" view honest).
+	"stillblade_rite": {
+		"title": "The Unmoving Edge",
+		"giver": "Quartermaster Dain",
+		"where": "The Talven camp",
+		"objective": "Parry strikes the way Dain showed you",
+		"unit": "parries",
+		"reward": "Hidden class: Stillblade",
+		"story": "Dain watched you turn eight blows without a scratch. The old camp drill has a name for that, and a last lesson: ten more, and the edge stops moving.",
+		"hidden": true,
+	},
+	"hearth_rite": {
+		"title": "The Wandering Pot",
+		"giver": "Innkeeper Rook",
+		"where": "The Hollowbrook tavern",
+		"objective": "Bring Rook a trail supper: Grilled Trout, Turnip Soup and Harvest Bread",
+		"unit": "dishes",
+		"reward": "Hidden class: Hearthwright",
+		"story": "Rook has heard about your fires from the fishers and the field hands. The cooks who walk the Spire with a pot on their back had a name once; prove you can feed a road and he will give it to you.",
+		"hidden": true,
+	},
 	"gravelmaw_bounty": {
 		"title": "The Town's Bounty",
 		"giver": "Captain Rhys",
 		"where": "Town of First Light",
-		"objective": "Defeat Gravelmaw atop the Labyrinth and report to Captain Rhys",
+		"objective": "Defeat Vargash the Kobold Warlord atop the Labyrinth and report to Captain Rhys",
 		"unit": "guardian",
 		"reward": "600 XP  ·  400 Col  ·  Rare Spirit Blade  ·  Title: Warden of Talven",
-		"story": "The town has posted a bounty on the Floor Guardian. Climb the Labyrinth, bring Gravelmaw down, and the town names you one of its own.",
+		"story": "The town has posted a bounty on the Floor Guardian. Climb the Labyrinth, bring the Kobold Warlord down, and the town names you one of its own.",
 	},
 }
 

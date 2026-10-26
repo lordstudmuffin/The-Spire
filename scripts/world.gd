@@ -37,6 +37,26 @@ var _mob_spawner: MultiplayerSpawner
 var _fishing: Fishing
 var _herbs: HerbField
 var _home: PlayerHome
+## The Hollow Hearth, Rook's tavern in Hollowbrook (scripts/life/tavern.gd); null off Floor 1.
+var _tavern: Tavern
+## Hollowbrook Forge, Smith Kesra's workshop and commissions (scripts/life/smithy.gd).
+var _smithy: Smithy
+## NPCs whose anvil opens the forge panel (and passes the server's anvil check).
+const SMITHS := ["Smith Haldor", "Smith Orla", "Smith Kesra"]
+## Hollowbrook market stalls (P7, scripts/life/stalls.gd); null off Floor 1.
+var _stalls: Node3D = null
+## Hollowbrook farm field and the guild notice board (P8, scripts/life/farms.gd,
+## scripts/life/guilds.gd); null off Floor 1.
+var _farms: Node3D = null
+## Floor 1 Labyrinth chests, vaults and spike traps (scripts/labyrinth_features.gd).
+var _lab: Node3D = null
+## Floor 1 villagers' day/night walks (scripts/npc_routines.gd).
+var _routines: Node = null
+var _monument: Node = null
+var _results: Node = null
+var _guilds: Node3D = null
+## Player duels (scripts/duels.gd): server state + client events.
+var _duels: Node = null
 var _campfires: Array = []  # {"pos", "range", "label", "where"}
 ## Floor 1 waystones around the Talven fields (Scout Fen's visit quest):
 ## {"pos", "beacon": i, "lit": bool, "fx": Node3D}. Lit state mirrors
@@ -102,7 +122,12 @@ func _ready() -> void:
 		add_child(t)
 	_bot_mode = "--bot" in args
 	_cheat_mode = "--cheat" in args
+	_summit_mode = "--summit" in args
+	_duel_mode = "--duel" in args
+	_duels = preload("res://scripts/duels.gd").build(self)
+	_duels.hud = hud
 	GameState.inventory_changed.connect(_track_ore_quest)
+	GameState.gear_state.connect(gear_notice)
 	if Net.remote_client():
 		Net.action_applied.connect(_on_net_action)
 
@@ -122,6 +147,18 @@ func _ready() -> void:
 		if multiplayer.is_server():
 			multiplayer.peer_connected.connect(_on_peer_joined)
 			multiplayer.peer_disconnected.connect(_on_peer_left)
+			Net.linger_ended.connect(func(peer: int):
+				Enemy.forget_peer(peer)
+				if is_instance_valid(_players) and _players.has_node(str(peer)):
+					_players.get_node(str(peer)).queue_free()
+					print("Lingering body left: peer %d" % peer))
+			# The Guardian wakes when the server sees a player on the summit
+			# (a client's request_boss can beat its teleported position here).
+			var st := Timer.new()
+			st.wait_time = 1.0
+			st.autostart = true
+			st.timeout.connect(_srv_summit_check)
+			add_child(st)
 			# One server = one floor: tell every connecting peer which floor
 			# this is during the auth handshake, before its world is built
 			# (the main menu waits for this before loading the world).
@@ -142,6 +179,12 @@ func _ready() -> void:
 
 
 var _bot_mode := false
+## Soak hook (--bot --summit): skip chores, take the pad to the summit and
+## fight the Guardian; re-enter after each death.
+var _summit_mode := false
+var _summit_next := 6.0
+## Soak hook (--bot --duel): meet outside the north gate and duel once.
+var _duel_mode := false
 var _cheat_mode := false
 
 
@@ -151,12 +194,17 @@ func _print_report() -> void:
 	for p in get_tree().get_nodes_in_group("players"):
 		ps.append("%s@(%.1f,%.1f,%.1f)" % [p.display_name, p.global_position.x, p.global_position.y, p.global_position.z])
 	var mobs := get_tree().get_nodes_in_group("enemies").size()
+	var parried := 0
+	for p in get_tree().get_nodes_in_group("players"):
+		parried += int(p.get("parries"))
 	var alive := 0
 	for e in get_tree().get_nodes_in_group("enemies"):
 		if e.visible:
 			alive += 1
-	print("[report %s] players=%s mobs=%d visible=%d me=Lv%d xp=%d col=%d hides=%d | objs=%d nodes=%d orphans=%d mem=%dKB" % [
-		who, ", ".join(ps), mobs, alive, GameState.level, GameState.xp, GameState.money, GameState.materials.get("beast_hide", 0),
+	if _boss != null and is_instance_valid(_boss) and _boss.brain != null and _boss.brain.has_method("report"):
+		print("[report %s] boss %s" % [who, _boss.brain.report()])
+	print("[report %s] players=%s mobs=%d visible=%d me=Lv%d xp=%d col=%d hides=%d parries=%d | objs=%d nodes=%d orphans=%d mem=%dKB" % [
+		who, ", ".join(ps), mobs, alive, GameState.level, GameState.xp, GameState.money, GameState.materials.get("beast_hide", 0), parried,
 		Performance.get_monitor(Performance.OBJECT_COUNT), Performance.get_monitor(Performance.OBJECT_NODE_COUNT),
 		Performance.get_monitor(Performance.OBJECT_ORPHAN_NODE_COUNT), int(Performance.get_monitor(Performance.MEMORY_STATIC) / 1024)])
 
@@ -184,6 +232,16 @@ func _spawn_player_for(peer: int, character: Dictionary) -> void:
 
 func _on_peer_left(peer: int) -> void:
 	_last_chat_ms.erase(peer)
+	if _duels != null:
+		_duels.on_peer_left(peer)
+	if Net.is_lingering(peer):
+		# Permadeath body left mid-fight: it stays, still and unguarded,
+		# until Net.linger_ended (Permadeath.LINGER_SECS).
+		var body := _players.get_node_or_null(str(peer))
+		if body:
+			body.set("blocking", false)
+			body.set("lingering", true)
+		return
 	Enemy.forget_peer(peer)
 	if _players.has_node(str(peer)):
 		_players.get_node(str(peer)).queue_free()
@@ -211,6 +269,24 @@ func _spawn_player_fn(data: Dictionary) -> Node:
 
 func _spawn_mob_fn(data: Dictionary) -> Node:
 	var e := Enemy.from_data(data)
+	if str(data.get("brain", "")) != "":
+		# Boss state machine (scripts/boss_brain.gd) on every peer: the same
+		# child path everywhere so its events arrive; only the authority ticks.
+		var brain := BossBrain.new()
+		brain.name = "BossBrain"
+		brain.preset = str(data["brain"])
+		brain.arena_center = ARENA_POS
+		brain.arena_radius = ARENA_RADIUS
+		if brain.preset == "warlord" and GameState.floor == 1:
+			brain.throne = throne_pos()
+		if Net.is_authority():
+			brain.spawn_adds = _guardian_adds
+		e.add_child(brain)
+		e.brain = brain
+	if data.get("la") is Dictionary and not data.get("boss", false) and Net.is_authority():
+		var la: Dictionary = data["la"]
+		var foe := str(data.get("name", "the foe"))
+		e.died.connect(func(x): _grant_last_attack(x._last_hitter, la, foe))
 	if data.get("boss", false) and Net.is_authority():
 		_boss = e
 		e.died.connect(_on_boss_died)
@@ -219,13 +295,16 @@ func _spawn_mob_fn(data: Dictionary) -> Node:
 	return e
 
 
-## Creates a mob on the server (replicated) or locally when offline.
-func _spawn_mob(data: Dictionary) -> void:
+## Creates a mob on the server (replicated) or locally when offline. Returns
+## the node on the authority (null on a client, which gets it replicated).
+func _spawn_mob(data: Dictionary) -> Node:
 	if Net.online:
 		if multiplayer.is_server():
-			_mob_spawner.spawn(data)
-	else:
-		_mobs.add_child(_spawn_mob_fn(data))
+			return _mob_spawner.spawn(data)
+		return null
+	var e := _spawn_mob_fn(data)
+	_mobs.add_child(e)
+	return e
 
 
 var _last_chat_ms := {}
@@ -261,11 +340,39 @@ func chat_line(sender_name: String, text: String) -> void:
 var _arena_lit := false
 
 
+## -1 unknown, 0 outer field, 1 inside a settlement's Inner Area.
+var _inner_state := -1
+
+
+## Entering or leaving a settlement's Inner Area (Duels.SAFE_ZONES): no
+## monster follows you inside. The HUD says so on every crossing.
+func _inner_area_check() -> void:
+	if GameState.floor != 1:
+		return
+	var inside := 1 if Duels.in_safe_zone(player.global_position) else 0
+	if inside == _inner_state:
+		return
+	var first := _inner_state == -1
+	_inner_state = inside
+	if first:
+		return
+	if inside == 1:
+		hud.toast("INNER AREA", "Monsters cannot follow you here", "", Color(0.55, 0.9, 1.0))
+		Audio.play("notify")
+	else:
+		hud.toast("OUTER FIELD", "Monsters roam beyond the walls", "", Color(1.0, 0.7, 0.4))
+		Audio.play("notify")
+	var fx := VFX.get_for(player)
+	if fx and fx.has_method("inner_area_notice"):
+		fx.call("inner_area_notice", inside == 1)
+
+
 func _process(_delta: float) -> void:
 	if player == null or hud == null:
 		return
 	var near := _nearest_interactable()
 	hud.set_prompt("[E] " + near[1] if near[0] else "")
+	_inner_area_check()
 	# The summit braziers only burn (as lights) while the local player is up there.
 	var lit := player.global_position.distance_to(ARENA_POS) < ARENA_RADIUS + 40.0
 	if lit != _arena_lit:
@@ -301,6 +408,8 @@ func _nearest_interactable() -> Array:
 	for v in get_tree().get_nodes_in_group("ore_veins"):
 		if v.visible and player.global_position.distance_to(v.global_position) < 3.0:
 			return [v, "Mine Iron Ore"]
+	if _monument and _monument.near(player.global_position):
+		return [_monument, "Read the Monument of Climbers"]
 	if player.global_position.distance_to(TOWER_POS + Vector3(0, 0, 14)) < 5:
 		return [self, "Enter the Labyrinth"]
 	for pad in _pads:
@@ -319,7 +428,19 @@ func _on_interact() -> void:
 	var near := _nearest_interactable()
 	if near[0] is Dictionary:
 		# Pads, the cottage ("kind") and camp fires ("where") are plain dicts.
-		if near[0].has("beacon"):
+		if near[0].has("stall"):
+			_stalls.open(int(near[0]["stall"]), hud)
+		elif near[0].has("plot"):
+			_farms.open(int(near[0]["plot"]), hud)
+		elif near[0].has("guild_board"):
+			_guilds.open(hud)
+		elif near[0].has("tavern"):
+			_tavern.open(hud, str(near[0]["tavern"]))
+		elif near[0].has("smithy"):
+			_smithy.open(hud)
+		elif near[0].has("chest"):
+			_lab.interact(int(near[0]["chest"]), hud)
+		elif near[0].has("beacon"):
 			_light_beacon(int(near[0]["beacon"]))
 		elif near[0].has("kind"):
 			var line: String = _home_interact_online(near[0]) if Net.remote_client() else _home.interact(near[0], player, hud, self)
@@ -341,6 +462,9 @@ func _on_interact() -> void:
 		player.velocity = Vector3.ZERO
 	elif near[0] == _gate and _gate:
 		_use_floor_gate()
+	elif _monument and near[0] == _monument:
+		Audio.play("ui_open")
+		hud.show_dialogue("Monument of Climbers", _monument.text())
 	elif near[0] is Dictionary and near[0].has("dest"):
 		_use_pad(near[0])
 	elif near[0] is NPC:
@@ -353,6 +477,10 @@ func _on_interact() -> void:
 			hud.show_dialogue(near[0].npc_name, near[0].talk())
 	elif near[0] != null and near[0].is_in_group("ore_veins"):
 		_mine(near[0])
+	elif near[0] == null and HiddenClasses.cooks_anywhere(GameState.hidden_class) and player.is_on_floor():
+		# A Hearthwright's field kitchen: interact with nothing near and the
+		# pot comes out (the server accepts the cook without a fire too).
+		_open_cooking("Field kitchen")
 
 
 func _try_enter_labyrinth() -> void:
@@ -427,6 +555,18 @@ func request_boss() -> void:
 	_spawn_boss()
 
 
+## Server, every second: spawn the Guardian once an accepted player position
+## is on the summit and the floor is not cleared yet.
+func _srv_summit_check() -> void:
+	if _boss != null or _floor_cleared_on_server or GameState.floor != 1:
+		return
+	for sp in _players.get_children():
+		var where: Vector3 = sp.srv_position() if sp.has_method("srv_position") else sp.global_position
+		if where.distance_to(ARENA_POS) <= ARENA_RADIUS + 6.0:
+			_spawn_boss()
+			return
+
+
 func _mine(vein: Node3D) -> void:
 	vein.visible = false
 	get_tree().create_timer(30.0, false).timeout.connect(func():
@@ -459,6 +599,30 @@ func _track_ore_quest() -> void:
 ## The life-layer prompt, checked after NPCs and before ore veins.
 func _life_interactable() -> Array:
 	var p := player.global_position
+	if _lab:
+		var ch: Dictionary = _lab.nearest(p)
+		if not ch.is_empty():
+			return [ch, ch["label"]]
+	if _stalls:
+		var st: Dictionary = _stalls.nearest(p)
+		if not st.is_empty():
+			return [st, st["label"]]
+	if _guilds:
+		var gb: Dictionary = _guilds.nearest(p)
+		if not gb.is_empty():
+			return [gb, gb["label"]]
+	if _farms:
+		var fp: Dictionary = _farms.nearest(p)
+		if not fp.is_empty():
+			return [fp, fp["label"]]
+	if _smithy:
+		var sm: Dictionary = _smithy.nearest(p)
+		if not sm.is_empty():
+			return [sm, sm["label"]]
+	if _tavern:
+		var tv: Dictionary = _tavern.nearest(p)
+		if not tv.is_empty():
+			return [tv, tv["label"]]
 	if _home:
 		var hit := _home.nearest(p)
 		if not hit.is_empty():
@@ -624,8 +788,8 @@ func _default_talk(npc: NPC, gs) -> String:
 ## Online client: what a talk does on this machine besides the line the
 ## server will send (open the anvil or the stall).
 func _talk_local_side_effects(npc: NPC) -> void:
-	if npc.npc_name in ["Smith Haldor", "Smith Orla"]:
-		_open_craft()
+	if npc.npc_name in SMITHS:
+		_open_craft("%s's anvil" % npc.npc_name.trim_prefix("Smith "))
 	elif npc.npc_name == "Trader Pell":
 		_open_shop()
 
@@ -720,6 +884,13 @@ func _build_life_floor1() -> void:
 		_life_keep.append([sp, 2.0])
 
 
+## Hollowbrook market: six rentable player stalls (scripts/life/stalls.gd).
+func _build_market_floor1() -> void:
+	_stalls = preload("res://scripts/life/stalls.gd").build(self, HOLLOWBROOK)
+	_farms = preload("res://scripts/life/farms.gd").build(self, HOLLOWBROOK)
+	_guilds = preload("res://scripts/life/guilds.gd").build(self, HOLLOWBROOK)
+
+
 func _build_life_floor2(village: Dictionary) -> void:
 	_new_fishing()
 	var lake: Vector3 = Floor2Art.LAKE
@@ -776,6 +947,10 @@ func _build_life_floor2(village: Dictionary) -> void:
 ## Returns {"error": why} or the result the client shows.
 func srv_action(peer: int, rs, kind: String, payload: Dictionary, pos: Vector3) -> Dictionary:
 	match kind:
+		"duel":
+			if _duels == null:
+				return {"error": "There are no duels on this floor."}
+			return _duels.srv(peer, rs, payload, pos)
 		"mine":
 			var i := int(payload.get("vein", -1))
 			if i < 0 or i >= _vein_positions.size():
@@ -828,9 +1003,38 @@ func srv_action(peer: int, rs, kind: String, payload: Dictionary, pos: Vector3) 
 				return {"error": "You need a fire to cook."}
 			return LifeData.cook(str(payload.get("id", "")), rs)
 		"craft":
-			if _srv_npc_near(pos, ["Smith Haldor", "Smith Orla"]) == null:
+			if _srv_npc_near(pos, SMITHS) == null:
 				return {"error": "You need an anvil (talk to a smith)."}
 			return Crafting.craft(str(payload.get("recipe", "")), rs)
+		"forge_start":
+			if _srv_npc_near(pos, SMITHS) == null:
+				return {"error": "You need an anvil (talk to a smith)."}
+			var fr := str(payload.get("recipe", ""))
+			if not Forging.uses_minigame(fr):
+				return {"error": "Nothing to hammer: forge that one directly."}
+			var ferr := Crafting.check(fr, rs)
+			return {"error": ferr} if ferr != "" else Forging.srv_open(rs, fr)
+		"forge_strike":
+			var st := Forging.srv_strike(rs, int(payload.get("i", -1)), int(payload.get("at", -1)), Net.srv_rtt(peer))
+			if not st.get("done", false):
+				return st
+			# The last strike lands the piece: re-check at the anvil, then
+			# forge at the quality the server graded.
+			if _srv_npc_near(pos, SMITHS) == null:
+				return {"error": "You walked away from the anvil; the piece is spoiled."}
+			var made := Crafting.craft(str(st["recipe"]), rs, float(st["quality"]))
+			if not made.has("error"):
+				made["forge_q"] = float(st["quality"])
+				made["grades"] = st["grades"]
+			return made
+		"repair":
+			if _srv_npc_near(pos, SMITHS) == null:
+				return {"error": "You need an anvil (talk to a smith)."}
+			var slot := str(payload.get("slot", ""))
+			var rerr := Durability.repair(rs, slot)
+			if rerr == "":
+				rs._sync_weapon()
+			return {"slot": slot} if rerr == "" else {"error": rerr}
 		"buy":
 			if _srv_npc_near(pos, ["Trader Pell"]) == null:
 				return {"error": "Trader Pell is not here."}
@@ -889,6 +1093,30 @@ func srv_action(peer: int, rs, kind: String, payload: Dictionary, pos: Vector3) 
 			if not rs.visit("waystone_%d" % i):
 				return {"error": "That stone is already awake."}
 			return {"i": i, "lit": GameState.visited_count(rs.visited, "waystone_")}
+		"smithy":
+			if _smithy == null:
+				return {"error": "There is no village forge on this floor."}
+			return _smithy.srv(peer, rs, payload, pos)
+		"tavern":
+			if _tavern == null:
+				return {"error": "There is no tavern on this floor."}
+			return _tavern.srv(peer, rs, payload, pos)
+		"stall", "stall_signs":
+			if _stalls == null:
+				return {"error": "There is no market on this floor."}
+			return _stalls.srv(peer, rs, kind, payload, pos)
+		"farm", "farm_signs":
+			if _farms == null:
+				return {"error": "There are no farm plots on this floor."}
+			return _farms.srv(peer, rs, kind, payload, pos)
+		"chest":
+			if _lab == null:
+				return {"error": "There are no chests on this floor."}
+			return _lab.srv(peer, rs, payload, pos)
+		"guild":
+			if _guilds == null:
+				return {"error": "There is no guild office on this floor."}
+			return _guilds.srv(peer, rs, kind, payload, pos)
 		"enter_labyrinth":
 			if not _srv_near(pos, TOWER_POS + Vector3(0, 0, 14), 5.0):
 				return {"error": "You are not at the Labyrinth gate."}
@@ -905,6 +1133,8 @@ func _srv_near(pos: Vector3, target: Vector3, range_: float) -> bool:
 
 
 func _srv_near_fire(pos: Vector3, rs) -> bool:
+	if HiddenClasses.cooks_anywhere(str(rs.hidden_class)):
+		return true  # a Hearthwright carries the fire
 	for cf in _campfires:
 		if _srv_near(pos, cf["pos"], float(cf["range"])):
 			return true
@@ -959,9 +1189,51 @@ func _home_interact_online(hit: Dictionary) -> String:
 func _on_net_action(kind: String, res: Dictionary) -> void:
 	if hud == null:
 		return
+	if kind in ["stall", "stall_signs"]:
+		if _stalls:
+			_stalls.on_net(kind, res)
+		return
+	if kind == "tavern":
+		if _tavern:
+			_tavern.on_net(kind, res)
+		return
+	if kind == "smithy":
+		if _smithy:
+			_smithy.on_net(kind, res)
+		return
+	if kind in ["farm", "farm_signs"]:
+		if _farms:
+			_farms.on_net(kind, res)
+		return
+	if kind == "chest":
+		if _lab:
+			_lab.show_result(res, hud)
+		return
+	if kind in ["guild", "guild_invite"]:
+		if _guilds:
+			_guilds.hud = hud
+			_guilds.on_net(kind, res)
+		return
+	if kind == "duel":
+		if _duels:
+			_duels.hud = hud
+			_duels.on_net(kind, res)
+		return
 	if kind in ["cast", "land"]:
 		if _fishing:
 			_fishing.on_net(kind, res)
+		return
+	if kind == "forge_start" or kind == "forge_strike":
+		if res.has("error"):
+			hud.forge_failed(str(res["error"]))
+		elif kind == "forge_start":
+			hud.forge_begin(res)
+		elif res.has("name"):
+			hud.forge_result(res)
+			if _bot_mode:
+				print("[bot] forged %s at quality %.2f %s" % [res["name"], float(res.get("forge_q", -1)), str(res.get("grades", []))])
+		if res.has("error") and _bot_mode:
+			print("[bot] forge refused: %s" % res["error"])
 		return
 	if res.has("error"):
 		Audio.play("craft_fail")
@@ -977,10 +1249,21 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 			Audio.play("cook")
 			if hud.life:
 				hud.life._on_cooked(res)
+		"crystal":
+			crystal_effect(str(res.get("id", "")))
+		"loot":
+			if _results:
+				var got: Dictionary = res.get("drops", {}) if res.get("drops") is Dictionary else {}
+				for id in got:
+					_results.note_item(str(id), int(got[id]))
+		"gear":
+			gear_notice(str(res.get("slot", "")), str(res.get("state", "")))
+		"repair":
+			repaired(str(res.get("slot", "")))
 		"buy":
 			Audio.play("coins")
 			var id := str(res.get("id", ""))
-			var nm: String = LifeData.TOOLS[id]["name"] if LifeData.TOOLS.has(id) else LifeData.DECOR.get(id, {}).get("name", id)
+			var nm: String = LifeData.TOOLS[id]["name"] if LifeData.TOOLS.has(id) else (LifeData.CRYSTALS[id]["name"] if LifeData.CRYSTALS.has(id) else LifeData.DECOR.get(id, {}).get("name", id))
 			hud.toast(nm, "Bought from Trader Pell", "Purchase", UITheme.GOLD)
 		"buy_home":
 			Audio.play("coins")
@@ -1009,10 +1292,16 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 			hud.show_dialogue(str(res.get("npc", "")), str(res.get("line", "")))
 		"floor_cleared":
 			hud.toast("FLOOR %d CLEARED!" % GameState.floor)
+		"last_attack":
+			_show_last_attack(res)
+		"unique_skill":
+			pass  # GameState.unique_skill_changed already toasts
 		"respawn":
 			if player:
-				Audio.play("teleport")
-				player.respawn()
+				player.die(int(res.get("xp_lost", 0)))
+		"fallen":
+			if player and res.get("fallen") is Dictionary:
+				player.fall(res["fallen"])
 		"hp":
 			if player and float(res.get("hp", 0.0)) < float(res.get("prev", 0.0)):
 				var lost: float = float(res["prev"]) - float(res["hp"])
@@ -1021,6 +1310,58 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 				var fx := VFX.get_for(self)
 				if fx:
 					fx.hit(player.global_position + Vector3(0, 1.1, 0), -player.model.global_transform.basis.z, Color(1.0, 0.35, 0.3))
+
+
+## Equipped gear crossed a durability line ("low" / "broken"): offline via
+## GameState.gear_state, online via the server's "gear" event.
+func gear_notice(slot: String, state: String) -> void:
+	var it = GameState.equipped.get(slot)
+	if hud == null or not (it is Dictionary):
+		return
+	if state == "broken":
+		Audio.play("craft_fail")
+		hud.toast("%s broke!" % str(it.get("name", "Gear")), "It adds nothing until a smith repairs it", "Durability", UITheme.ROSE)
+	else:
+		Audio.play("ui_error")
+		hud.toast("%s is wearing out" % str(it.get("name", "Gear")), "%s  ·  repair at an anvil" % Durability.text(it), "Durability", UITheme.GOLD)
+
+
+## A repair went through (offline right away, online on the server's answer).
+func repaired(slot: String) -> void:
+	var it = GameState.equipped.get(slot)
+	Audio.play("anvil")
+	Audio.play("craft_pot")
+	if hud and it is Dictionary:
+		hud.toast("%s repaired" % str(it.get("name", "Gear")), Durability.text(it), "Anvil", UITheme.CYAN)
+		if hud.has_method("refresh_craft"):
+			hud.refresh_craft()
+
+
+## A crystal was crushed (offline right away, online once the server agreed):
+## the flash, the sound, the toast, and for a Teleport Crystal the move to
+## the floor's arrival point. VFX hook: crystal_burst(pos, color, teleport).
+func crystal_effect(id: String) -> void:
+	if not LifeData.CRYSTALS.has(id) or player == null:
+		return
+	var c := LifeData.item_color(id)
+	var fx := VFX.get_for(self)
+	var tele := id == "teleport_crystal"
+	if fx:
+		if fx.has_method("crystal_burst"):
+			fx.call("crystal_burst", player.global_position + Vector3(0, 1.0, 0), c, tele)
+		else:
+			fx.flash(player.global_position + Vector3(0, 1.0, 0), c, 1.4)
+			fx.sparkle(player.global_position + Vector3(0, 1.0, 0), c)
+	Audio.play("respawn" if tele else "quest_complete")
+	if tele:
+		player.global_position = GameState.spawn_point()
+		player.velocity = Vector3.ZERO
+		if fx:
+			fx.sparkle(player.global_position + Vector3(0, 1.0, 0), c)
+		if hud:
+			hud.toast("Teleport: Hollowbrook", "The crystal shatters and the plaza forms around you", "Crystal", c)
+	elif hud:
+		hud.toast("HP fully restored", "Healing Crystal", "Crystal", c)
 
 
 # --- Test bots: honest chores and cheat probes -------------------------------
@@ -1057,6 +1398,21 @@ func _physics_process(delta: float) -> void:
 	if not _bot_mode or player == null or not Net.remote_client():
 		return
 	_chore_t += delta
+	if _bot_forge_tick():
+		player.velocity.x = 0.0
+		player.velocity.z = 0.0
+		return
+	if _duel_mode and _duels != null and _duels.bot_tick(self, player, delta):
+		return
+	if _summit_mode:
+		if _chore_t >= _summit_next:
+			_summit_next = _chore_t + 10.0
+			var far := player.global_position.distance_to(ARENA_POS) > ARENA_RADIUS + 4.0
+			if far and not player.is_dying():
+				player.bot = true
+				print("[bot] heading to the summit")
+				_enter_summit()
+		return
 	if _cheat_mode:
 		if not _probes_sent and _chore_t > 1.5:
 			_probes_sent = true
@@ -1090,6 +1446,26 @@ func _physics_process(delta: float) -> void:
 		_chore_act(CHORES[_chore_i])
 		return
 	_chore_walk(goal, delta)
+
+
+var _bot_forging := false
+
+
+## Bot: strike the anvil bar whenever the spark sits dead centre; close the
+## panel once the piece is forged (or refused).
+func _bot_forge_tick() -> bool:
+	if not _bot_forging or hud == null:
+		return false
+	var fw: ForgeWidget = hud._forge
+	if fw != null and fw._active:
+		var spec: Dictionary = fw.specs[fw.grades.size()]
+		if Forging.grade(spec, float(fw._elapsed() - fw._last)) == "perfect":
+			fw.strike()
+	elif fw == null:
+		if hud._craft_panel.visible:
+			hud.toggle_craft()
+		_bot_forging = false
+	return _bot_forging
 
 
 func _chore_next(note := "") -> void:
@@ -1148,9 +1524,15 @@ func _chore_act(kind: String) -> void:
 			_pick_herb(_herbs.nearest(player.global_position, 3.0))
 			_chore_next()
 		"smith":
+			# Through the real anvil minigame: open the panel, hammer each
+			# strike dead centre (_bot_forge_tick), let the server grade it.
 			Net.request_action("talk", {"npc": "Smith Haldor"})
-			var r := Crafting.craft("Iron Sword")
-			_chore_next("forge requested" if r.has("pending") else str(r))
+			if not hud._craft_panel.visible:
+				hud.toggle_craft()
+			var ferr := Crafting.check("Iron Sword", GameState)
+			hud._start_forge("Iron Sword")
+			_bot_forging = ferr == "" and hud._craft_panel.visible
+			_chore_next("forging at the anvil" if ferr == "" else ferr)
 		"tam":
 			Net.request_action("talk", {"npc": "Old Tam"})
 			_chore_next()
@@ -1221,7 +1603,7 @@ func _send_cheat_probes() -> void:
 	print("[bot] cheat: sending forged requests")
 	var blades := []
 	for i in 50:
-		blades.append({"id": "hack_%d" % i, "name": "Mythical Spirit Blade", "kind": "weapon", "rank": 5, "atk": 55})
+		blades.append({"id": "hack_%d" % i, "name": "Myth Spirit Blade", "kind": "weapon", "rank": 5, "atk": 55})
 	Net.net_client_snapshot.rpc_id(1, {"money": 99999, "level": 99, "materials": {"moonscale_koi": 50, "iron_ore": 9999}, "inventory": blades})
 	for probe in [["craft", {"recipe": "Spirit Blade"}], ["land", {"spot": 0}], ["buy_home", {}], ["talk", {"npc": "Elder Wren"}],
 			["talk", {"npc": "Guide Mira"}], ["mine", {"vein": 0}], ["eat", {"id": "koi_sashimi"}], ["spend_point", {"stat": "strength"}],
@@ -1232,7 +1614,7 @@ func _send_cheat_probes() -> void:
 ## Five Floor 1 quests, each NPC pointing to the next: Vesna's wolf pelts
 ## (gather, from the Dire Wolves by the tower), Hesper's herbs (the field
 ## clumps), Rook's stew (cooking), Fen's three waystones around Talven
-## (visit) and Captain Rhys's bounty on Gravelmaw (kill), which pays a Rare
+## (visit) and Captain Rhys's bounty on the Kobold Warlord (kill), which pays a Rare
 ## Spirit Blade and the "Warden of Talven" title. Every handler takes `gs`
 ## so the server runs it on the record (srv_action "talk").
 
@@ -1262,6 +1644,19 @@ func _spawn_hollowbrook_chain() -> void:
 	rook.appearance = {"hair_color": "4a3a2a", "outfit_color": "6a3a2a", "hair_style": 0, "eye_color": "5a4a3a", "height": 1.08}
 	rook.position = c + Vector3(-2.2, 0, -6.4)
 	rook.rotation.y = PI * 0.15
+	if _tavern:
+		rook.position = _tavern.interior + Tavern.ROOK_SPOT  # behind his bar
+		rook.rotation.y = PI
+		rook.set_meta("map_pos", _tavern.door_pos)
+	if _smithy:
+		var kesra := NPC.new()
+		kesra.npc_name = "Smith Kesra"
+		kesra.appearance = {"hair_color": "c4262e", "outfit_color": "4a3a32", "hair_style": 3, "eye_color": "d9a441", "height": 1.0}
+		kesra.position = _smithy.interior + Smithy.KESRA_SPOT
+		kesra.rotation.y = PI * 0.8
+		kesra.set_meta("map_pos", _smithy.door_pos)
+		_set_talk(kesra, _kesra_talk)
+		add_child(kesra)
 	rook.quest_id = "tavern_stew"
 	_set_talk(rook, _rook_talk)
 	add_child(rook)
@@ -1273,6 +1668,176 @@ func _spawn_hollowbrook_chain() -> void:
 	fen.quest_id = "talven_waystones"
 	_set_talk(fen, _fen_talk)
 	add_child(fen)
+	_spawn_limited_npcs()
+
+
+# --- Limited quests (LimitedContent: 1-3 holders in the whole realm) --------
+
+func _spawn_limited_npcs() -> void:
+	var bram := NPC.new()
+	bram.npc_name = "Old Watchman Bram"
+	bram.appearance = {"hair_color": "d8d4cc", "outfit_color": "3a3f4a", "hair_style": 0, "eye_color": "6a7a8a", "height": 1.0}
+	bram.position = TALVEN + Vector3(-3.6, 0, 3.2)
+	bram.rotation.y = PI * 0.8
+	bram.quest_id = "old_watch_whispers"
+	_set_talk(bram, _bram_talk)
+	add_child(bram)
+	# A lamplighter nobody in town remembers, at the far edge of the first
+	# Labyrinth terrace.
+	var iselde := NPC.new()
+	iselde.npc_name = "Lamplighter Iselde"
+	iselde.appearance = {"hair_color": "f1d9a0", "outfit_color": "e8e4de", "hair_style": 3, "eye_color": "f0c060", "height": 0.94}
+	iselde.position = LAB_LEVELS[0] + Vector3(-7.0, 0, 5.0)
+	iselde.rotation.y = PI * 0.25
+	iselde.quest_id = "lantern_below"
+	_set_talk(iselde, _iselde_talk)
+	add_child(iselde)
+
+
+## Shared flow: accept reserves a realm slot (refused when full), the slot
+## frees itself if the quest sits unfinished too long, the turn-in confirms
+## it and pays the limited item.
+func _limited_talk(gs, qid: String, req: String, lines: Dictionary) -> String:
+	var q: Dictionary = LimitedContent.QUESTS[qid]
+	var mat: String = q["mat"]
+	var need := int(q["need"])
+	if gs.quest_done(qid):
+		return lines["done"]
+	if req != "" and not gs.quest_done(req):
+		return lines["locked"]
+	if not gs.quests.has(qid):
+		var res := LimitedContent.reserve_quest(gs, qid)
+		if not res.get("ok", false):
+			return lines["full"]
+		gs.start_quest(qid, need)
+		var left := LimitedContent.slots_left(qid)
+		return "%s\n(Limited quest: %d of %d places left in the realm. Finish within two hours of play or the place passes on.)" % [lines["offer"], left, int(q["cap"])]
+	if not LimitedContent.holds_quest(gs, qid):
+		gs.quests.erase(qid)
+		if gs == GameState:
+			GameState.quest_changed.emit()
+		return lines["expired"]
+	var have := int(gs.materials.get(mat, 0))
+	gs.quests[qid]["progress"] = mini(have, need)
+	if gs == GameState:
+		GameState.quest_changed.emit()
+	if have < need:
+		return lines["in_progress"] % [have, need]
+	var conf := LimitedContent.confirm_quest(gs, qid)
+	if not conf.get("ok", false):
+		gs.quests.erase(qid)
+		return lines["expired"]
+	gs.spend_materials({mat: need})
+	gs.complete_quest(qid)
+	gs.add_xp(int(q["xp"]))
+	gs.add_money(int(q["col"]))
+	var item_id: String = q["reward"]
+	var got := LimitedContent.grant_item(gs, item_id)
+	var reward: String = LimitedContent.ITEMS[item_id]["name"] if got.get("ok", false) else "no item (the realm refused it)"
+	return "%s\n(+%d XP, +%d Col, %s)" % [lines["turn_in"], int(q["xp"]), int(q["col"]), reward]
+
+
+func _bram_talk(gs = GameState) -> String:
+	return _limited_talk(gs, "old_watch_whispers", "talven_waystones", {
+		"locked": "The stones are dark and so am I. Wake the old line with Fen first, then we will talk about what the watch left behind.",
+		"offer": "You lit the line. Then you have earned the rest of the story: the last watch-captains forged three blades at those stones, and the wolves dragged the scabbards off. Bring me 5 wolf pelts from the north slope and I will kindle one more blade. Only three were ever made.",
+		"in_progress": "%d of %d pelts. The pack runs the scrub below the tower. Do not dawdle: the fire in these stones does not wait forever.",
+		"turn_in": "Five. The stones remember you. Take it: a Wisplight blade, one of three. It will not leave your hand for anyone else's.",
+		"done": "Carry it well. Three blades, three wardens. The watch is not dead while one of you walks.",
+		"full": "Three blades were promised and three wardens carry them now. I am sorry. The stones have nothing left to give.",
+		"expired": "You took too long, and the stones gave your place to another. That is the way of the old watch. Come back if a place opens again.",
+	})
+
+
+func _iselde_talk(gs = GameState) -> String:
+	return _limited_talk(gs, "lantern_below", "", {
+		"locked": "",
+		"offer": "Oh. You can see me. Nobody climbs this far and looks at the corners. My lantern went out when the Guardian woke, and only the shards of this tower can relight it. Bring me 6 Spirit Shards. I only have the one veil to give, and I will give it once.",
+		"in_progress": "%d of %d shards. The terraces' guardians carry them. Please hurry: if you wander off too long, the lantern will choose someone else.",
+		"turn_in": "Light. Real light. Here: the Veil of First Dawn. There is only one, and now it is yours. When you climb higher, take a little of this floor's morning with you.",
+		"done": "The lantern burns. Thank you, Lamplighter's friend.",
+		"full": "Someone already carries my lantern's promise. I am sorry, traveller. There was only ever one veil.",
+		"expired": "The lantern waited, and you did not come. Someone else carries the promise now, or will soon.",
+	})
+
+
+## Last Attack bonus, as in Aincrad: whoever lands the killing blow gets
+## something nobody else in the fight does. `la` = {"item": LimitedContent id
+## (a realm-capped, bound piece) or "", "xp", "col", "mats": {id: n},
+## "realm": announce to the whole realm}. The first holders get the limited
+## item; once its slots are gone (or the killer already holds one) the bonus
+## is the EXP / Col / materials instead, so a Last Attack always pays. The
+## killer's party hears about it. Defaults to the Floor Guardian's bonus.
+const BOSS_LA := {"item": "la_floor1", "xp": 150, "col": 200, "mats": {"spirit_shard": 2}, "realm": true}
+const SERGEANT_LA := {"item": "la_sergeant", "xp": 60, "col": 40, "mats": {"terrace_key": 1}}
+const GREYTUSK_LA := {"item": "la_greytusk", "xp": 50, "col": 35, "mats": {"beast_hide": 3}}
+
+
+func _grant_last_attack(killer: int, la: Dictionary = {}, foe := "") -> Dictionary:
+	if la.is_empty():
+		if GameState.floor != 1:
+			return {}
+		la = BOSS_LA
+	if foe == "":
+		foe = "the Floor Guardian"
+	var local := not Net.online or (killer == multiplayer.get_unique_id() and not Net.srv_records.has(killer))
+	var gs
+	if local:
+		gs = GameState
+	elif Net.srv_records.has(killer):
+		gs = Net.RecordState.new(Net.srv_records[killer])
+	else:
+		return {}
+	var who := str(GameState.character.get("name", "Someone")) if local else str(Net.srv_records[killer].get("name", "Someone"))
+	var data := {"foe": foe, "item": "", "xp": 0, "col": 0, "mats": {}}
+	var lid := str(la.get("item", ""))
+	if lid != "" and LimitedContent.ITEMS.has(lid):
+		var res := LimitedContent.grant_item(gs, lid)
+		if res.get("ok", false) and not res.get("already", false):
+			data["item"] = str(LimitedContent.ITEMS[lid]["name"])
+	if data["item"] == "":
+		var mult := 1.0 + (Permadeath.LA_BONUS if Permadeath.is_on(gs) else 0.0)
+		data["xp"] = int(round(int(la.get("xp", 0)) * mult))
+		data["col"] = int(round(int(la.get("col", 0)) * mult))
+		gs.add_xp(data["xp"])
+		data["xp"] = Permadeath.xp_gain(gs, data["xp"])  # what add_xp really paid
+		gs.add_money(data["col"])
+		var mats: Dictionary = la.get("mats", {})
+		for m in mats:
+			if GameState.MATERIAL_NAMES.has(m):
+				gs.add_material(m, int(mats[m]))
+				data["mats"][m] = int(mats[m])
+	var text := "%s took the Last Attack on %s%s." % [who, foe, (" and won the %s" % data["item"]) if data["item"] != "" else ""]
+	if bool(la.get("realm", false)):
+		Net.srv_announce(text)
+	if Net.online and multiplayer.is_server():
+		for m in Net._srv_party_members(killer):
+			if m != killer:
+				Net._send(m, Net.net_system, [text])
+	if local:
+		_show_last_attack(data)
+	else:
+		Net.save_record(Net.srv_records[killer])
+		Net._srv_reply(killer, "last_attack", data)
+	return data
+
+
+## The "LAST ATTACK BONUS" pop-up (hud.show_last_attack when the HUD has it).
+func _show_last_attack(data: Dictionary) -> void:
+	if hud == null:
+		return
+	if hud.has_method("show_last_attack"):
+		hud.show_last_attack(data)  # the banner plays its own sounds
+		return
+	Audio.stinger("last_attack", 2.0)
+	var what := str(data.get("item", ""))
+	if what == "":
+		var parts: Array = ["+%d EXP" % int(data.get("xp", 0)), "+%d Col" % int(data.get("col", 0))]
+		var mats: Dictionary = data.get("mats", {})
+		for m in mats:
+			parts.append("%s x%d" % [GameState.MATERIAL_NAMES.get(m, m), int(mats[m])])
+		what = "  ·  ".join(parts)
+	hud.toast("LAST ATTACK BONUS", what, str(data.get("foe", "")), UITheme.GOLD)
 
 
 ## Shared flow for the chain's gather quests: progress mirrors the material
@@ -1316,6 +1881,8 @@ func _vesna_talk(gs = GameState) -> String:
 
 
 func _hesper_talk(gs = GameState) -> String:
+	if gs.quest_done("field_herbs") and (gs.quests.has("grove_bloom") or gs.quest_done("tavern_stew")):
+		return _bloom_talk(gs)
 	return _gather_talk(gs, "field_herbs", "wild_herb", 6, 220, 140, "wolf_pelts", {
 		"locked": "Vesna's wolves first, if you would. I patch up what they bite, and my shelves are bare. Come back when the snares are safe to set.",
 		"offer": "Feverleaf and fog-root, the pale clumps on the open grass between here and the town. I need 6 before the next field hand limps in. Pick them clean and they grow back within the hour.",
@@ -1327,7 +1894,28 @@ func _hesper_talk(gs = GameState) -> String:
 		return ", +2 Grilled Trout")
 
 
+## Hesper's second errand (after Rook's stew): a bloom from the one Snaptrap
+## in flower in the north-east grove. Pays the Verdant Edge, a blade forged
+## by Haldor and tempered in the bloom's sap: a strong first-floor sword.
+func _bloom_talk(gs = GameState) -> String:
+	return _gather_talk(gs, "grove_bloom", "snaptrap_bloom", 1, 320, 120, "field_herbs", {
+		"locked": "",
+		"offer": "Past the pond, in the woods north-east of town, the snaptraps have taken root: pitcher-mouthed vines that spit. One of them is in flower. Its bloom's sap, pressed and boiled, tempers steel like nothing else on this floor. Bring me the bloom and Haldor will forge you a blade with it. Do not strike the ones with a swollen fruit; the burst draws every vine in the grove.",
+		"in_progress": "%d of %d blooms. The flowering one is pink-crowned and wary; if someone beat you to it, it blooms again in a few minutes. Mind the fruit-bearers.",
+		"turn_in": "Still fragrant. Haldor has had the steel ready for a week; he'll fold the sap in tonight. Here. It is light, and it will not dull on kobold plate.",
+		"done": "Keep the Verdant Edge oiled. The sap remembers being alive.",
+	}, func(g):
+		var blade := Crafting.make_item("Iron Sword", 2, "Smith Haldor")
+		blade["name"] = "Verdant Edge"
+		blade["atk"] = int(ceil(Crafting.RECIPES["Iron Sword"]["base"] * Crafting.RANK_MULT[2] * 1.1))
+		g.add_item(blade)
+		return ", Verdant Edge (Epic sword)")
+
+
 func _rook_talk(gs = GameState) -> String:
+	var hearth := _hearth_talk(gs)
+	if hearth != "":
+		return hearth
 	return _gather_talk(gs, "tavern_stew", "boar_stew", 1, 300, 180, "field_herbs", {
 		"locked": "Hesper sends me every stray with a strong back. Help her first; I will still be short a cook when you are done.",
 		"offer": "My cook walked out and the field hands want boar stew. Trimmings from one boar hide, two of Hesper's herbs, and a fire: the Talven camp fire will do, or your own hearth. Bring me one pot that would not shame this house and the job is yours, in spirit at least.",
@@ -1337,6 +1925,35 @@ func _rook_talk(gs = GameState) -> String:
 	}, func(g):
 		g.add_material("koi_sashimi", 1)
 		return ", +1 Koi Sashimi")
+
+
+## Innkeeper Rook's hidden rite (HiddenClasses): once his stew is served and
+## the fishers and field hands have talked about your fires (twelve dishes
+## over four recipes, five fish, three harvests), he asks for a trail supper.
+## Returns "" when the plain stew talk should run instead.
+func _hearth_talk(gs) -> String:
+	var qid := HiddenClasses.HEARTH_QUEST
+	if str(gs.hidden_class) == HiddenClasses.HEARTHWRIGHT:
+		return "Hearthwright! Pull up a stool; no, the other way round, you feed me for once. The road is lucky to have you."
+	if not gs.quest_done("tavern_stew") or gs.quest_done(qid):
+		return ""
+	if gs.quests.has(qid):
+		var have := HiddenClasses.supper_count(gs)
+		gs.quests[qid]["progress"] = mini(have, 3)
+		if gs == GameState:
+			GameState.quest_changed.emit()
+		if HiddenClasses.has_supper(gs):
+			gs.spend_materials(HiddenClasses.HEARTH_SUPPER)
+			gs.complete_quest(qid)
+			gs.unlock_hidden_class(HiddenClasses.HEARTHWRIGHT)
+			return "Trout off the coals, soup still steaming, bread that has not had time to cool. That is a supper for a road. The cooks who walked the Spire with a pot on their back were called Hearthwrights, and you are one now: your food will hold longer and do more, you will not need a fire to cook on, and when the coals fly, keep them. Hearth Flare, they called that."
+		return "%d of 3 dishes. Grilled Trout from the pond, Turnip Soup from the plots, Harvest Bread from the sunwheat. Cooked by you, mind, at any fire you like." % have
+	if str(gs.hidden_class) != "":
+		return ""  # one hidden class per character
+	if HiddenClasses.hearth_ready(gs):
+		gs.start_quest(qid, 3)
+		return "Tam says you fish like you mean it, the plots west of here know your boots, and the field hands come in smelling of your cooking instead of mine. There was a name for cooks like that once. Bring me a trail supper, Grilled Trout, Turnip Soup and Harvest Bread, all three at once, and I will tell you what it was."
+	return ""
 
 
 func _fen_talk(gs = GameState) -> String:
@@ -1375,7 +1992,7 @@ func _rhys_talk(npc: NPC, gs) -> String:
 		if int(gs.floors_cleared) >= 1:
 			gs.advance_quest("gravelmaw_bounty")  # the Guardian already fell to you
 			return "You have already done it? Then I owe you the bounty before the words are out. Say so again and it is yours."
-		return "Then hear it: the town has posted a bounty on the Floor Guardian. Gravelmaw, at the summit of the Labyrinth, past the gate that only opens at level %d. Bring it down and come back to me. The town names its own." % GATE_LEVEL
+		return "Then hear it: the town has posted a bounty on the Floor Guardian. Vargash, the kobold warlord, at the summit of the Labyrinth, past the gate that only opens at level %d. Bring it down and come back to me. The town names its own." % GATE_LEVEL
 	if gs.quest_ready("gravelmaw_bounty"):
 		gs.title = "Warden of Talven"
 		gs.complete_quest("gravelmaw_bounty")
@@ -1383,7 +2000,7 @@ func _rhys_talk(npc: NPC, gs) -> String:
 		gs.add_money(400)
 		gs.add_item(Crafting.make_item("Spirit Blade", 1, "Captain Rhys"))
 		return "The Guardian is down and the fields are ours again. Haldor forged this for whoever did it; it is yours. And the name: Warden of Talven. Wear it where the next floor can see it.\n(+600 XP, +400 Col, Rare Spirit Blade, title: Warden of Talven)"
-	return "Gravelmaw waits at the summit of the Labyrinth. Don't stand in the slam. We will be here when it is done."
+	return "Vargash waits at the summit of the Labyrinth with his halberdiers. When he crouches, he is about to leap: move. We will be here when it is done."
 
 
 # --- Blacksmith ----------------------------------------------------------
@@ -1403,7 +2020,8 @@ func _smith_talk(gs = GameState) -> String:
 	return "Bring ore and hides, pay the forge fee, and I'll let you work the anvil."
 
 
-func _open_craft() -> void:
+func _open_craft(anvil := "Haldor's anvil") -> void:
+	hud.anvil_name = anvil
 	if not hud.toggle_craft():
 		hud.toggle_craft()
 	player.input_enabled = false
@@ -1427,13 +2045,20 @@ func _build_floor1() -> void:
 	_build_tower()
 	_build_arena()
 	_build_labyrinth()
+	_lab = preload("res://scripts/labyrinth_features.gd").build(self, LAB_LEVELS)
 	await LoadingScreen.step("Settling Hollowbrook and Talven", 0.55)
 	_build_hollowbrook()
 	_build_talven()
 	_spawn_ore_veins()
 	_spawn_npcs()
 	_build_life_floor1()
+	_build_market_floor1()
 	_build_beacons()
+	_routines = preload("res://scripts/npc_routines.gd").build(self)
+	_monument = preload("res://scripts/monument.gd").build(self)
+	_results = preload("res://scripts/battle_results.gd").build(self)
+	_results.hud = hud
+	NpcBark.attach(self, _routines)
 	await LoadingScreen.step("Planting the meadow", 0.7)
 	_dress_world()
 	await LoadingScreen.step("Waking the wilds", 0.92)
@@ -1553,6 +2178,11 @@ func _build_town() -> void:
 		var pos := Vector3(cos(a) * 28, 0, sin(a) * 28 + 15)
 		var face := atan2(-pos.x, -(pos.z - 15))
 		var scl := WorldProps.HOUSE * (0.92 if kinds[i] == "tavern" else 1.0)
+		if i == 4 or i == 5:
+			# The Hall of Iron stands here instead (below).
+			_rng.randf()
+			_rng.randf()
+			continue
 		WorldProps.house(self, pos, kinds[i], colors[i], face, scl)
 		_rng.randf()  # Keeps the gameplay RNG stream where the old houses left it.
 		_rng.randf()
@@ -1567,6 +2197,11 @@ func _build_town() -> void:
 			hedge_lines.append([front - side * fp.x * 0.5, front - side * 1.3])
 			hedge_lines.append([front + side * 1.3, front + side * fp.x * 0.5])
 	WorldProps.hedges(self, hedge_lines)
+	# Hall of Iron across the north road (after the Black Iron Palace on
+	# the north side of the Town of Beginnings' plaza), with the Monument of
+	# Climbers in front of its east wing, facing the plaza.
+	WorldProps.iron_hall(self, Vector3(0, 0, -12.5))
+	MonumentArt.make(self, Vector3(7.5, 0, -7.2), 0.0)
 	# Town wall with gates north (to the tower), south, and west (Hollowbrook).
 	var hb_dir := Vector2(HOLLOWBROOK.x, HOLLOWBROOK.z) - WorldArt.PLAZA
 	WorldArt.town_wall(self, Vector3(0, 0, 15), 36.0, [
@@ -1577,7 +2212,7 @@ func _build_town() -> void:
 ## gameplay placed (NPCs, ore veins, the gate, villages, the spawn point).
 func _dress_world() -> void:
 	var keep := [[Vector3(0, 0, 6), 4.0], [TOWER_POS + Vector3(0, 0, 14), 8.0], [HOLLOWBROOK, 17.0], [TALVEN, 13.0],
-		[Vector3(-62, 0, -10), 7.0], [Vector3(0, 0, 27), 5.0], [Vector3(17.5, 0, 20), 4.0]]
+		[Vector3(-62, 0, -10), 7.0], [Vector3(0, 0, -12.5), 11.0], [Vector3(0, 0, 27), 5.0], [Vector3(17.5, 0, 20), 4.0]]
 	for n in get_tree().get_nodes_in_group("npcs"):
 		keep.append([n.position, 3.0])
 	for v in _vein_positions:
@@ -1585,7 +2220,11 @@ func _dress_world() -> void:
 	for lvl in LAB_LEVELS:
 		keep.append([lvl, LAB_RADIUS + 2])
 	keep.append_array(_life_keep)
+	# Snaptrap Grove: each vine stands in its own small clearing in the woods.
+	for sp in GROVE_SPOTS:
+		keep.append([GROVE + sp, 2.8])
 	WorldArt.build_vegetation(self, _art_rng, FLOOR_RADIUS, keep)
+	WorldProps.grove_dress(self, GROVE, GROVE_SPOTS)
 	WorldArt.build_ambience(self)
 	WorldProps.flush(self)
 
@@ -1598,7 +2237,7 @@ func _build_field() -> void:
 	else:
 		WorldArt.windmill(self, Vector3(-62, 0, -10), 1.2)
 	WorldProps.fences(self, [
-		[Vector3(-4.5, 0, -10), Vector3(-4.5, 0, -40)], [Vector3(4.5, 0, -22), Vector3(4.5, 0, -50)],
+		[Vector3(-4.5, 0, -17), Vector3(-4.5, 0, -40)], [Vector3(4.5, 0, -22), Vector3(4.5, 0, -50)],
 		[Vector3(-4.5, 0, 40), Vector3(-4.5, 0, 58)], [Vector3(4.5, 0, 44), Vector3(4.5, 0, 60)],
 		[Vector3(-70, 0, -4), Vector3(-56, 0, 2)], [Vector3(-56, 0, 2), Vector3(-50, 0, -10)],
 		[Vector3(-56, 0, 26), Vector3(-64, 0, 36)], [Vector3(-64, 0, 36), Vector3(-60, 0, 48)]])
@@ -1720,6 +2359,8 @@ func _build_arena() -> void:
 		WorldArt.brazier(self, ARENA_POS + p)
 		WorldArt.box_collider(self, Vector3(1.4, 2.2, 1.4), ARENA_POS + p + Vector3(0, 1.1, 0))
 	WorldProps.summit_props(self, ARENA_POS, ARENA_RADIUS, rune, gate_dir, entry_dir)
+	# The Guardian's throne before the sealed gate (it waits there, then leaps down).
+	WorldProps.boss_throne(self, ARENA_POS + Vector3(0, 0, -10.5), rune)
 
 
 func _build_platform(pos: Vector3, radius: float, color: Color) -> void:
@@ -1752,16 +2393,24 @@ func _add_pad(pos: Vector3, label: String, dest, color: Color, toast := "") -> v
 	cm.bottom_radius = 1.5
 	cm.height = 0.15
 	cm.radial_segments = 24
-	cm.material = WorldArt.mat(color.darkened(0.5), 0.0, color, 1.2)
+	cm.material = WorldArt.ruin_mat("trim")
 	pad.mesh = cm
 	pad.position = pos + Vector3(0, 0.08, 0)
 	add_child(pad)
+	# Glowing inlay inside a stone rim, instead of a solid lit slab.
+	var inlay := CylinderMesh.new()
+	inlay.top_radius = 1.15
+	inlay.bottom_radius = 1.15
+	inlay.height = 0.02
+	inlay.radial_segments = 24
+	WorldArt.mesh_node(self, inlay, pos + Vector3(0, 0.165, 0), WorldArt.mat(color.darkened(0.35), 0.0, color, 0.35))
 	WorldArt.rune_ring(self, pos + Vector3(0, 0.18, 0), 1.25, color, 0.18)
-	var crystal := CylinderMesh.new()
-	crystal.top_radius = 0.0
-	crystal.bottom_radius = 0.35
+	# Floating octahedral crystal (both points), a classic waypoint marker.
+	var crystal := SphereMesh.new()
+	crystal.radius = 0.32
 	crystal.height = 1.2
 	crystal.radial_segments = 4
+	crystal.rings = 1
 	var c := WorldArt.mesh_node(self, crystal, pos + Vector3(0, 1.6, 0), WorldArt.mat(color.lightened(0.3), 0.0, color, 3.0))
 	var tw := c.create_tween().set_loops()
 	tw.tween_property(c, "position:y", pos.y + 2.0, 1.6).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
@@ -1823,8 +2472,7 @@ func _build_labyrinth() -> void:
 		for k in 5:
 			var a := TAU * k / 5.0 + 1.1 + i
 			var s := 0.6 + 0.3 * k
-			var boulder := WorldArt.sphere(self, s, base + Vector3(cos(a) * 10, s * 0.4, sin(a) * 10), Color("8a8398"), Vector3(1, 0.6, 1))
-			boulder.material_override = WorldArt.ruin_mat("trim")
+			WorldArt.mesh_node(self, WorldArt.boulder_mesh(k + 3 * i), base + Vector3(cos(a) * 10, s * 0.35, sin(a) * 10), WorldArt.ruin_mat("trim"), Vector3(0, a, 0), Vector3(2.0, 1.1, 2.0) * s)
 		_add_pad(base + Vector3(0, 0, 9), home_label, GameState.spawn_point(), down_color, GameState.floor_name())
 		if i + 1 < LAB_LEVELS.size():
 			var next: Vector3 = LAB_LEVELS[i + 1]
@@ -1843,15 +2491,51 @@ func _spawn_boss() -> void:
 			"drops": {"spirit_shard": 1.0, "wisp_essence": 1.0, "stag_horn": 1.0}, "pos": [bp.x, bp.y, bp.z]})
 		_boss_summon(null)
 		return
-	_spawn_mob({"name": "Floor Guardian: Gravelmaw", "level": 7, "hp": 650, "dmg": 18, "xp": 600, "money": 400,
-		"color": "806b8c", "size": [3.0, 2.6, 3.6], "speed": 2.6, "aggro": 40, "boss": true, "respawns": false,
-		"drops": {"spirit_shard": 1.0, "iron_ore": 1.0}, "pos": [bp.x, bp.y, bp.z]})
-	# Two sentinels guard the Guardian; they do not respawn.
-	for side in [-1, 1]:
-		var sp := ARENA_POS + Vector3(6 * side, 1, -2)
-		_spawn_mob({"name": "Ruin Sentinel", "level": 5, "hp": 120, "dmg": 10, "xp": 90, "money": 30,
-			"color": "667380", "size": [1.0, 1.6, 1.0], "speed": 3.6, "aggro": 40, "respawns": false,
-			"drops": {"iron_ore": 0.8}, "pos": [sp.x, sp.y, sp.z]})
+	# The Kobold Warlord: four stacked HP bars, a guard of halberdiers on
+	# engage and on every bar break, the weapon swap and second moveset on
+	# the last bar (BossBrain.PRESETS["warlord"]). Twice a man's height.
+	# He waits on his throne at the back of the room and leaps down when the
+	# raid comes in (BossBrain.throne).
+	var tp := throne_pos()
+	_spawn_mob({"name": BOSS_NAME, "level": 7, "hp": 650, "dmg": 18, "xp": 600, "money": 400,
+		"color": "8a6a4a", "size": [2.2, 3.4, 2.2], "speed": 3.0, "aggro": 40, "boss": true, "respawns": false,
+		"brain": "warlord", "drops": {"spirit_shard": 1.0, "iron_ore": 1.0}, "pos": [tp.x, tp.y, tp.z]})
+
+
+const BOSS_NAME := "Floor Guardian: Vargash the Kobold Warlord"
+
+
+## Top of the throne dais (WorldProps.boss_throne at ARENA_POS + (0, 0, -10.5)).
+func throne_pos() -> Vector3:
+	return ARENA_POS + Vector3(0, 1.0, -10.3)
+
+
+## The Warlord's guard: plated kobolds with halberds. Their plate halves any
+## blow until a parry staggers them (then the gaps are open), so a party
+## parries and Switches through them.
+func _halberdier_data(sp: Vector3) -> Dictionary:
+	return {"name": "Kobold Halberdier", "level": 6, "hp": 130, "dmg": 11, "xp": 90, "money": 30,
+		"color": "667380", "size": [1.0, 1.7, 1.0], "speed": 3.6, "aggro": 40, "respawns": false, "armor": 0.5,
+		"drops": {"iron_ore": 0.8}, "pos": [sp.x, sp.y, sp.z]}
+
+
+## The Warlord's call (BossBrain.spawn_adds, authority only): `count`
+## halberdiers step out in a ring around him, on engage and when one of his
+## HP bars breaks. They vanish with the boss or on reset.
+func _guardian_adds(brain: Node, count: int) -> Array:
+	var out: Array = []
+	var boss: Node3D = brain.get_parent() as Node3D
+	var at := boss.global_position if boss else ARENA_POS + Vector3(0, 1, -6)
+	for i in count:
+		var a := TAU * float(i) / float(maxi(count, 1)) + _rng.randf_range(0.0, 0.8)
+		var sp := at + Vector3(cos(a) * 5.5, 0, sin(a) * 5.5)
+		if sp.distance_to(ARENA_POS) > ARENA_RADIUS - 1.0:
+			sp = ARENA_POS + (sp - ARENA_POS).normalized() * (ARENA_RADIUS - 1.0)
+		sp.y = ARENA_POS.y + 1.0
+		var e := _spawn_mob(_halberdier_data(sp))
+		if e != null:
+			out.append(e)
+	return out
 
 
 ## Mirelord's call: two Drowned Wisps rise beside him (at the start of the
@@ -1876,6 +2560,8 @@ func _boss_summon(boss: Enemy) -> void:
 func _on_boss_died(_e: Enemy) -> void:
 	_boss = null
 	_floor_cleared_on_server = true
+	if is_instance_valid(_e):
+		_grant_last_attack(_e._last_hitter)
 	if Net.online:
 		# Server: the clear reward goes onto the record of everyone on the
 		# summit (server-accepted positions) and reaches them as a patch.
@@ -2040,6 +2726,10 @@ func _build_hollowbrook() -> void:
 			WorldProps.house(self, pos, kinds[i], colors[i], face, WorldProps.HOUSE * 0.9)
 		else:
 			WorldArt.house(self, pos, 5.0, 4.5, 3.4, face, [1, 3, 0, 1, 2][i])
+		if kinds[i] == "tavern":
+			_build_tavern(pos, face, WorldProps.footprint("tavern", colors[i], WorldProps.HOUSE * 0.9))
+		elif kinds[i] == "blacksmith":
+			_build_smithy(pos, face, WorldProps.footprint("blacksmith", colors[i], WorldProps.HOUSE * 0.9))
 	# Well in the middle.
 	if WorldProps.ready():
 		WorldProps.house(self, HOLLOWBROOK, "well", "red", 0.6, 4.2)
@@ -2078,6 +2768,29 @@ func _build_hollowbrook() -> void:
 	elder.rotation.y = PI
 	_set_talk(elder, _elder_talk)
 	add_child(elder)
+
+
+## Rook's tavern: its door and exit mat are pads (the server knows the jump)
+## and its hearth is a cooking fire.
+func _build_tavern(pos: Vector3, face: float, footprint: Vector2) -> void:
+	_tavern = Tavern.build(self, pos, face, footprint)
+	_pads.append({"pos": _tavern.door_pos, "label": "Enter the Hollow Hearth", "dest": _tavern.spawn_inside, "toast": "The Hollow Hearth"})
+	_pads.append({"pos": _tavern.exit_pos, "label": "Leave the tavern", "dest": _tavern.door_out + Vector3(0, 1, 0), "toast": "Hollowbrook"})
+	_campfires.append({"pos": _tavern.interior + Tavern.HEARTH + Vector3(1.4, 0, 0), "range": 2.2, "label": "Cook at the tavern hearth", "where": "The Hollow Hearth"})
+
+
+func _build_smithy(pos: Vector3, face: float, footprint: Vector2) -> void:
+	_smithy = Smithy.build(self, pos, face, footprint)
+	_pads.append({"pos": _smithy.door_pos, "label": "Enter Hollowbrook Forge", "dest": _smithy.spawn_inside, "toast": "Hollowbrook Forge"})
+	_pads.append({"pos": _smithy.exit_pos, "label": "Leave the forge", "dest": _smithy.door_out + Vector3(0, 1, 0), "toast": "Hollowbrook"})
+
+
+func _kesra_talk(gs = GameState) -> String:
+	if gs == GameState:
+		_open_craft("Kesra's anvil")
+	if gs.quest_done("ore_delivery"):
+		return "Wren's ore lit this forge, and you carried it. The anvil is yours whenever you need it. The village pins its commissions on the board by the door."
+	return "Cold iron and no ore wagons. I can still lend you the anvil; the village pins its commissions on the board by the door. Wren could use your help with ore."
 
 
 func _elder_talk(gs = GameState) -> String:
@@ -2179,12 +2892,42 @@ func _build_talven() -> void:
 	qm.appearance = {"hair_color": "2b2b2b", "outfit_color": "2f4858", "hair_style": 1, "eye_color": "f6ae2d"}
 	qm.position = TALVEN + Vector3(0, 0, 3)
 	qm.rotation.y = PI
-	_set_talk(qm, func(gs):
-		gs.heal_full()
-		if gs.floors_cleared >= 1:
-			return "You did it. The whole camp is talking about the Guardian's fall."
-		return "Sit by the fire, you're patched up. The Guardian hits like a landslide; bring armor and don't stand in the slam.")
+	_set_talk(qm, _dain_talk)
 	add_child(qm)
+
+
+## Quartermaster Dain patches you up; and if he has seen you turn eight
+## blows in a row without a scratch (hidden stat, HiddenClasses), he opens
+## the Stillblade rite nobody is told about.
+func _dain_talk(gs = GameState) -> String:
+	gs.heal_full()
+	var still := _still_talk(gs)
+	if still != "":
+		return still
+	if gs.floors_cleared >= 1:
+		return "You did it. The whole camp is talking about the Guardian's fall."
+	return "Sit by the fire, you're patched up. The Guardian hits like a landslide; bring armor and don't stand in the slam."
+
+
+func _still_talk(gs) -> String:
+	var qid := HiddenClasses.STILL_QUEST
+	if str(gs.hidden_class) == HiddenClasses.STILLBLADE:
+		return "Stillblade. Keep the edge where it is and let them come to it. The fire is yours whenever you want it."
+	if gs.quest_done(qid):
+		return ""
+	if gs.quests.has(qid):
+		if gs.quest_ready(qid):
+			gs.complete_quest(qid)
+			gs.unlock_hidden_class(HiddenClasses.STILLBLADE)
+			return "Ten, and not one of them moved you. The old drill has a name for that: Stillblade. Your guard will come back faster now, and you will feel two cuts the rest of us never learn. Still Water, in the breath after a parry; Breaking Wave, when something needs putting on its knees."
+		var q: Dictionary = gs.quests[qid]
+		return "%d of %d. Turn the blow, do not chase it. The mob tells you when it swings; you only have to be there." % [int(q["progress"]), int(q["goal"])]
+	if str(gs.hidden_class) != "":
+		return ""  # one hidden class per character
+	if HiddenClasses.still_ready(gs):
+		gs.start_quest(qid, HiddenClasses.STILL_QUEST_GOAL)
+		return "I watched you from the fire. Eight blows turned, not a scratch taken. The camp had a drill for that once, before the Guardian woke, and a name at the end of it. Ten more parries, anywhere on this floor, and come back to me. Tell nobody; the ones who go looking for it never find it."
+	return ""
 
 
 func _spawn_ore_veins(count := 10) -> void:
@@ -2294,10 +3037,23 @@ func _spawn_mobs() -> void:
 	for i in 8:
 		var a := _rng.randf_range(0.2, PI - 0.2)
 		var r := _rng.randf_range(48, 75)
-		_add_mob("Field Boar", 1, 40, 6, 25, 5, "8c5940", Vector3(cos(a) * r, 1, sin(a) * r), "boar_trouble", {"beast_hide": 0.7})
+		# Boars paw the ground and charge (telegraphed, parryable, sidestep it).
+		_spawn_mob({"name": "Field Boar", "level": 1, "hp": 40, "dmg": 6, "xp": 25, "money": 5, "color": "8c5940",
+			"pos": [cos(a) * r, 1, sin(a) * r], "quest": "boar_trouble", "drops": {"beast_hide": 0.7}, "rush": true})
+	# Greytusk: a named field elite (Satisfy-style): an old scarred boar that
+	# roams the far end of the south field, comes back slowly, and pays a Last
+	# Attack bonus (three Greytusk Hide Vests in the realm, then EXP and hide).
+	_spawn_mob({"name": "Greytusk, the Old Boar", "level": 6, "hp": 380, "dmg": 15, "xp": 260, "money": 90, "color": "6b5a4a",
+		"size": [1.5, 1.4, 2.2], "speed": 3.6, "aggro": 14, "rush": true, "armor": 0.8, "respawn": 900.0,
+		"pos": [0.0, 1, 82.0], "quest": "boar_trouble", "drops": {"beast_hide": 1.0, "spirit_shard": 0.4}, "la": GREYTUSK_LA})
+	# Wolves hunt as a pack: strike one and the others come running.
 	for i in 7:
 		var p := TOWER_POS + Vector3(_rng.randf_range(-25, 25), 1, _rng.randf_range(16, 30))
-		_add_mob("Dire Wolf", 4, 90, 14, 70, 15, "59596b", p, "wolf_hunt", {"beast_hide": 0.8, "wolf_pelt": 0.7, "spirit_shard": 0.35})
+		if Duels.in_safe_zone(p) or p.distance_to(TALVEN) < 18.0:
+			p.x = absf(p.x - TOWER_POS.x) + TOWER_POS.x + 6.0  # never den inside the Talven camp's Inner Area
+		_spawn_mob({"name": "Dire Wolf", "level": 4, "hp": 90, "dmg": 14, "xp": 70, "money": 15, "color": "59596b",
+			"pos": [p.x, p.y, p.z], "quest": "wolf_hunt", "drops": {"beast_hide": 0.8, "wolf_pelt": 0.7, "spirit_shard": 0.35}, "pack": "wolf"})
+	_spawn_grove()
 	# Cliff Bats flit along the tower's foot, between the wolves and the gate.
 	for i in 4:
 		var p := TOWER_POS + Vector3(-30 + 20 * i, 1, _rng.randf_range(10, 14))
@@ -2309,8 +3065,11 @@ func _spawn_mobs() -> void:
 		var base: Vector3 = LAB_LEVELS[lvl]
 		for i in 3:
 			var a := TAU * i / 3.0 + lvl
-			_add_mob("Kobold Scout", 5 + lvl, 110 + 30 * lvl, 12 + 3 * lvl, 80 + 20 * lvl, 20, "6b7a3a",
-				base + Vector3(cos(a) * 5, 1, sin(a) * 5), "", {"iron_ore": 0.6, "spirit_shard": 0.2})
+			# Kobold Scouts patrol in threes and answer each other.
+			var kp := base + Vector3(cos(a) * 5, 1, sin(a) * 5)
+			_spawn_mob({"name": "Kobold Scout", "level": 5 + lvl, "hp": 110 + 30 * lvl, "dmg": 12 + 3 * lvl, "xp": 80 + 20 * lvl, "money": 20,
+				"color": "6b7a3a", "size": [0.9, 1.5, 0.9], "pos": [kp.x, kp.y, kp.z], "pack": "kobold",
+				"drops": {"iron_ore": 0.6, "spirit_shard": 0.2, "terrace_key": 0.12}})
 		# Tunnel Rats scurry round the terrace rim (quick, weak).
 		for i in 2:
 			var a := TAU * i / 2.0 + lvl + 1.0
@@ -2318,13 +3077,46 @@ func _spawn_mobs() -> void:
 				"color": "6e6258", "size": [0.6, 0.5, 1.0], "speed": 4.2, "aggro": 7, "drops": {"beast_hide": 0.3},
 				"model": {"pack": "creatures", "name": "Rat", "fit": 1.3}, "pos": [base.x + cos(a) * 8, base.y + 1, base.z + sin(a) * 8]})
 	_spawn_mob({"name": "Kobold Sergeant", "level": 7, "hp": 260, "dmg": 16, "xp": 220, "money": 80, "color": "8a5a2b",
-		"size": [1.3, 1.4, 1.5], "speed": 3.4, "aggro": 12, "drops": {"iron_ore": 1.0, "spirit_shard": 0.6},
+		"size": [1.3, 1.4, 1.5], "speed": 3.4, "aggro": 12, "pack": "kobold", "armor": 0.7, "drops": {"iron_ore": 1.0, "spirit_shard": 0.6, "terrace_key": 1.0}, "la": SERGEANT_LA,
 		"pos": [LAB_LEVELS[1].x, LAB_LEVELS[1].y + 1, LAB_LEVELS[1].z - 4]})
 
 
-func _add_mob(n: String, lvl: int, hp: float, dmg: float, xp: int, money: int, c: String, pos: Vector3, quest: String, drops: Dictionary) -> void:
-	_spawn_mob({"name": n, "level": lvl, "hp": hp, "dmg": dmg, "xp": xp, "money": money, "color": c,
-		"pos": [pos.x, pos.y, pos.z], "quest": quest, "drops": drops})
+## The Snaptrap Grove, in the woods north-east of town: carnivorous vines
+## rooted among the trees (slow, a whip up close and an acid spit at range).
+## Most are plain; two bear a swollen fruit that bursts when struck and
+## draws every vine in the grove onto the striker; one is in bloom and drops
+## the Snaptrap Bloom (Herbalist Hesper's errand).
+const GROVE := Vector3(38, 0, -48)
+const GROVE_SPOTS := [Vector3(0, 0, 0), Vector3(6, 0, 3), Vector3(-5, 0, 4), Vector3(4, 0, -6), Vector3(-6, 0, -4),
+	Vector3(9, 0, -2), Vector3(-2, 0, 8), Vector3(1, 0, -10)]
+
+
+func _spawn_grove() -> void:
+	for i in GROVE_SPOTS.size():
+		var p: Vector3 = GROVE + GROVE_SPOTS[i] + Vector3(0, 1, 0)
+		var d := {"name": "Snaptrap Vine", "level": 2, "hp": 48, "dmg": 7, "xp": 34, "money": 6, "color": "5f8a3a",
+			"size": [1.0, 1.5, 1.0], "speed": 1.1, "aggro": 8, "ranged": 6.0, "pack": "vine",
+			"drops": {"wild_herb": 0.5, "spirit_shard": 0.1}, "pos": [p.x, p.y, p.z]}
+		if i == 2 or i == 5:
+			d["name"] = "Fruiting Snaptrap"
+			d["lure"] = true
+			d["color"] = "7a8a3a"
+		elif i == 7:
+			d["name"] = "Blossoming Snaptrap"
+			d["color"] = "c26a8a"
+			d["hp"] = 60
+			d["xp"] = 60
+			d["drops"] = {"snaptrap_bloom": 1.0, "wild_herb": 1.0}
+			d["respawn"] = 240.0  # rarely in flower: four minutes to bloom again
+		_spawn_mob(d)
+
+
+func _add_mob(n: String, lvl: int, hp: float, dmg: float, xp: int, money: int, c: String, pos: Vector3, quest: String, drops: Dictionary, size: Array = []) -> void:
+	var d := {"name": n, "level": lvl, "hp": hp, "dmg": dmg, "xp": xp, "money": money, "color": c,
+		"pos": [pos.x, pos.y, pos.z], "quest": quest, "drops": drops}
+	if size.size() == 3:
+		d["size"] = size
+	_spawn_mob(d)
 
 
 # =========================================================== Floor 2 =====
@@ -2428,7 +3220,7 @@ func _spawn_npcs_floor2(village: Dictionary) -> void:
 
 func _orla_talk(gs = GameState) -> String:
 	if gs == GameState:
-		_open_craft()
+		_open_craft("Orla's anvil")
 	if gs.recipe_unlocked("shrine_rite"):
 		return "Ilsa taught you the rite? Then I can temper plate in the Mere's water. Bring hides, ore and essence."
 	return "Stag horn takes an edge like nothing else; bring me some with ore and I'll forge a Mirewood Blade. Plate work I only do for those the shrine has blessed."

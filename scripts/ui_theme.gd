@@ -429,6 +429,80 @@ static func make_button(text: String, kind: String = "normal") -> Button:
 	return b
 
 
+## Small inline action ("Use" on a provision cell): cyan outline pill,
+## 12 px bold text, 24 px tall, so it sits inside a grid cell.
+static func mini_button(text: String) -> Button:
+	var b := make_button(text, "chip")
+	b.add_theme_font_override("font", ui_bold())
+	b.add_theme_font_size_override("font_size", 12)
+	for st in ["normal", "hover", "pressed", "focus"]:
+		var bg := Color(CYAN, 0.16 if st == "normal" else 0.32)
+		var sb := box(bg, Color(CYAN, 0.7 if st != "normal" else 0.45), 999, 1)
+		sb.content_margin_left = 10
+		sb.content_margin_right = 10
+		sb.content_margin_top = 2
+		sb.content_margin_bottom = 2
+		b.add_theme_stylebox_override(st, sb)
+	b.add_theme_color_override("font_color", PARCH)
+	b.custom_minimum_size = Vector2(0, 24)
+	return b
+
+
+## Thin durability / wear gauge: fill in the HP band colours (green, yellow
+## under half, red under a fifth), grey track. set_frac(0..1).
+class WearGauge extends Control:
+	var frac := 1.0
+
+	func _init(f := 1.0, w := 120.0) -> void:
+		frac = f
+		custom_minimum_size = Vector2(w, 5)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func set_frac(f: float) -> void:
+		frac = clampf(f, 0.0, 1.0)
+		queue_redraw()
+
+	func _draw() -> void:
+		var r := Rect2(Vector2(0, (size.y - 5) * 0.5), Vector2(size.x, 5))
+		draw_rect(r, Color(1, 1, 1, 0.12))
+		if frac > 0.0:
+			var cols: Array = PlayerStatus.band_colors(frac)
+			draw_rect(Rect2(r.position, Vector2(r.size.x * frac, r.size.y)), cols[0])
+			draw_rect(Rect2(r.position, Vector2(r.size.x * frac, 1.5)), Color(cols[1], 0.9))
+		else:
+			draw_rect(r, Color(UITheme.ROSE, 0.35))
+
+
+## Broken-gear cover for an item card: a dim wash and a branching crack
+## across the face (fixed pattern per card so it does not flicker).
+class CrackOverlay extends Control:
+	var seed_v := 1
+
+	func _init(sd := 1) -> void:
+		seed_v = sd
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		set_anchors_preset(Control.PRESET_FULL_RECT)
+
+	func _draw() -> void:
+		var bg := StyleBoxFlat.new()
+		bg.bg_color = Color(0.05, 0.03, 0.04, 0.45)
+		bg.set_corner_radius_all(10)
+		draw_style_box(bg, Rect2(Vector2.ZERO, size))
+		var rng := RandomNumberGenerator.new()
+		rng.seed = seed_v
+		var p := Vector2(size.x * rng.randf_range(0.55, 0.8), 0)
+		var pts := PackedVector2Array([p])
+		while p.y < size.y:
+			p += Vector2(rng.randf_range(-18, 14), rng.randf_range(10, 22))
+			pts.append(p)
+			if rng.randf() < 0.3:
+				# A short branch off the main crack.
+				var q := p + Vector2(rng.randf_range(-26, 26), rng.randf_range(6, 16))
+				draw_line(p, q, Color(1, 0.86, 0.86, 0.75), 1.0, true)
+		draw_polyline(pts, Color(0, 0, 0, 0.6), 3.0, true)
+		draw_polyline(pts, Color(1, 0.9, 0.9, 0.9), 1.2, true)
+
+
 ## 150 ms scale pop on hover (pivot kept centred as the button resizes).
 static func hover_fx(b: Control, amount := 1.04) -> void:
 	b.resized.connect(func(): b.pivot_offset = b.size * 0.5)
@@ -522,7 +596,25 @@ class ActionCap extends PanelContainer:
 
 	func refresh() -> void:
 		var t: String = InputSetup.hint(action)
+		# Unique arts have no pad button of their own: they are the target
+		# trigger held plus the matching Sword Art button ("LT+RB").
+		# Hidden-class arts likewise: target + Attack / Dash ("LT+X", "LT+B").
+		var chord := InputSetup.using_gamepad() and action in ["skill_4", "skill_5", "skill_6", "class_1", "class_2"]
+		if chord and action.begins_with("class_"):
+			t = "%s+%s" % [InputSetup.hint("target"), InputSetup.hint("attack" if action == "class_1" else "dash")]
+		elif chord:
+			t = "%s+%s" % [InputSetup.hint("target"), InputSetup.hint("skill_%d" % (int(action.substr(6)) - 3))]
 		_label.text = t
+		if chord:
+			var cb := UITheme.box(Color(UITheme.GOLD, 0.95), Color(1, 1, 1, 0.5), 999, 1)
+			cb.set_content_margin_all(2)
+			cb.content_margin_left = 7
+			cb.content_margin_right = 7
+			add_theme_stylebox_override("panel", cb)
+			_label.add_theme_color_override("font_color", UITheme.NAVY)
+			_label.add_theme_font_size_override("font_size", 12)
+			return
+		_label.add_theme_font_size_override("font_size", 14)
 		if InputSetup.using_gamepad():
 			var fc: Color = InputSetup.face_color(t)
 			var sb: StyleBoxFlat
@@ -702,3 +794,187 @@ static func ring(parent: Control, fill: Color, stroke: Color, width := 3.0) -> v
 		parent.draw_arc(c, r, 0.0, TAU, 64, stroke, width, true)
 		parent.draw_arc(c, r - width - 2.0, 0.0, TAU, 64, Color(stroke.r, stroke.g, stroke.b, 0.35), 1.0, true))
 	parent.resized.connect(parent.queue_redraw)
+
+
+## Look of HUD.show_death's overlay: grey-out shader on the ColorRect (its
+## colour alpha stays the fade strength) and a spaced system-font title.
+## Duel countdown / "DUEL!" / VICTORY-DEFEAT: big bold system type
+## with a dark outline and a soft drop shadow (keeps the label's colour).
+static func style_duel_label(l: Label) -> void:
+	if l == null or l.has_meta("duel_styled"):
+		return
+	l.set_meta("duel_styled", true)
+	var f := ui_bold()
+	if f:
+		l.add_theme_font_override("font", f)
+	l.add_theme_font_size_override("font_size", 104)
+	l.add_theme_color_override("font_outline_color", Color(0.04, 0.05, 0.1, 0.95))
+	l.add_theme_constant_override("outline_size", 10)
+	l.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.4))
+	l.add_theme_constant_override("shadow_offset_y", 4)
+	l.add_theme_constant_override("shadow_offset_x", 0)
+
+
+static func death_screen(overlay: ColorRect, title: Label, sub: Label) -> void:
+	var m := ShaderMaterial.new()
+	m.shader = load("res://shaders/death_screen.gdshader")
+	overlay.material = m
+	title.add_theme_font_override("font", spaced(ui_bold(), 10))
+	title.add_theme_font_size_override("font_size", 40)
+	title.add_theme_color_override("font_color", Color(1.0, 0.3, 0.26))
+	title.add_theme_color_override("font_outline_color", Color(0.2, 0.0, 0.0, 0.85))
+	title.add_theme_constant_override("outline_size", 6)
+	sub.add_theme_font_override("font", spaced(ui_font(), 2))
+	sub.add_theme_color_override("font_color", Color(0.88, 0.88, 0.92))
+
+
+## Look of the HUD guard bar (shown while guarding or recovering): a thin
+## steel-blue gauge in a dark sleeve, so it reads as separate from HP.
+static func style_guard_bar(bar: ProgressBar) -> void:
+	bar.custom_minimum_size.y = 6
+	var bg := box(Color(0.03, 0.05, 0.1, 0.7), Color(0.55, 0.75, 1.0, 0.35), 3, 1)
+	bg.content_margin_left = 0
+	bg.content_margin_right = 0
+	bg.content_margin_top = 0
+	bg.content_margin_bottom = 0
+	bar.add_theme_stylebox_override("background", bg)
+	bar.add_theme_stylebox_override("fill", gradient_fill_box([Color("3d7bd9"), Color("8cc4ff"), Color("e6f3ff")], 3))
+
+
+## Locked-art cover for a skill slot: the card darkens, a padlock sits in
+## the middle with the proficiency the art needs under it, and a thin bar
+## along the bottom fills toward it. set_state(prof, need) each refresh.
+class LockOverlay extends Control:
+	var prof := 0
+	var need := 1
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		set_anchors_preset(Control.PRESET_FULL_RECT)
+
+	func set_state(p: int, n: int) -> void:
+		var locked := p < n
+		if locked != visible or p != prof or n != need:
+			prof = p
+			need = maxi(n, 1)
+			visible = locked
+			queue_redraw()
+
+	func _draw() -> void:
+		var r := Rect2(Vector2.ZERO, size)
+		var cover := StyleBoxFlat.new()
+		cover.bg_color = Color(UITheme.NAVY, 0.72)
+		cover.set_corner_radius_all(10)
+		draw_style_box(cover, r)
+		# Diagonal hatching, very faint, so it reads as sealed rather than empty.
+		var step := 9.0
+		var x := -size.y
+		while x < size.x:
+			draw_line(Vector2(x, size.y), Vector2(x + size.y, 0), Color(1, 1, 1, 0.035), 1.0)
+			x += step
+		# Padlock: rounded body and an open-topped shackle.
+		var c := Vector2(size.x * 0.5, size.y * 0.38)
+		var body := Rect2(c + Vector2(-9, -2), Vector2(18, 14))
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(UITheme.MUTED, 0.95)
+		sb.set_corner_radius_all(3)
+		draw_style_box(sb, body)
+		draw_arc(c + Vector2(0, -3), 5.5, PI, TAU, 14, Color(UITheme.MUTED, 0.95), 2.5, true)
+		draw_line(c + Vector2(-5.5, -3), c + Vector2(-5.5, -1), Color(UITheme.MUTED, 0.95), 2.5)
+		draw_line(c + Vector2(5.5, -3), c + Vector2(5.5, -1), Color(UITheme.MUTED, 0.95), 2.5)
+		draw_circle(c + Vector2(0, 4), 1.8, UITheme.NAVY)
+		draw_line(c + Vector2(0, 4), c + Vector2(0, 8), UITheme.NAVY, 1.5)
+		var f := UITheme.ui_bold()
+		var t := "PROF %d" % need
+		var tw := f.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+		draw_string(f, Vector2((size.x - tw) * 0.5, c.y + 25), t, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(UITheme.GOLD, 0.95))
+		# Progress toward the unlock.
+		var bw := size.x - 16.0
+		draw_rect(Rect2(8, size.y - 5, bw, 2), Color(1, 1, 1, 0.12))
+		draw_rect(Rect2(8, size.y - 5, bw * clampf(float(prof) / need, 0.0, 1.0), 2), Color(UITheme.CYAN, 0.9))
+
+
+## Weapon proficiency readout (SAO's skill proficiency): the skill name and
+## "41 / 1000" over a thin gauge with a notch at each Sword Art unlock.
+class ProfLine extends Control:
+	var skill := "One-Handed Sword"
+	var value := 0
+	var cap := 1000
+	var marks: Array = []
+
+	func _init() -> void:
+		custom_minimum_size = Vector2(0, 30)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func set_value(v: int, c: int, m: Array) -> void:
+		value = v
+		cap = maxi(c, 1)
+		marks = m
+		queue_redraw()
+
+	func _draw() -> void:
+		var f := UITheme.ui_bold()
+		draw_string(f, Vector2(0, 13), skill.to_upper(), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, UITheme.MUTED)
+		var t := "%d / %d" % [value, cap]
+		draw_string(f, Vector2(0, 13), t, HORIZONTAL_ALIGNMENT_RIGHT, size.x, 12, UITheme.PARCH)
+		var y := 20.0
+		var w := size.x
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.06, 0.08, 0.13, 0.7)
+		sb.border_color = Color(1, 1, 1, 0.18)
+		sb.set_border_width_all(1)
+		sb.set_corner_radius_all(3)
+		draw_style_box(sb, Rect2(0, y, w, 6))
+		var frac := clampf(float(value) / cap, 0.0, 1.0)
+		if frac > 0.0:
+			var fill := StyleBoxFlat.new()
+			fill.bg_color = UITheme.CYAN
+			fill.set_corner_radius_all(3)
+			draw_style_box(fill, Rect2(1, y + 1, maxf((w - 2) * frac, 3.0), 4))
+		for m in marks:
+			var mx := w * clampf(float(m) / cap, 0.0, 1.0)
+			if m <= 0:
+				continue
+			var got: bool = value >= int(m)
+			draw_line(Vector2(mx, y - 2), Vector2(mx, y + 8), UITheme.GOLD if got else Color(1, 1, 1, 0.45), 2.0)
+
+
+## Permadeath look for a save-slot card (main_menu _slot_card). A living
+## one-life climber gets a crimson frame, a crimson portrait ring and a
+## "ONE LIFE" badge in the header; a fallen one becomes a memorial: ash
+## frame, the card dimmed, the name struck through in red.
+static func style_life_card(card: PanelContainer, header: HBoxContainer, name_l: Label, fallen: bool) -> void:
+	var crimson := Color(0.86, 0.18, 0.24)
+	var sb := card_box(crimson if not fallen else Color(0.45, 0.4, 0.42), 0.9)
+	sb.border_width_top = 3
+	if not fallen:
+		sb.shadow_color = Color(crimson, 0.22)
+		sb.shadow_size = 16
+	card.add_theme_stylebox_override("panel", sb)
+	var badge := PanelContainer.new()
+	var bb := box(Color(crimson, 0.18 if not fallen else 0.08), Color(crimson, 0.7 if not fallen else 0.35), 8, 1)
+	bb.content_margin_left = 8
+	bb.content_margin_right = 8
+	bb.content_margin_top = 1
+	bb.content_margin_bottom = 1
+	badge.add_theme_stylebox_override("panel", bb)
+	var bl := label("FALLEN" if fallen else "ONE LIFE", 11, crimson.lightened(0.25) if not fallen else Color(0.7, 0.55, 0.58), true)
+	bl.add_theme_font_override("font", spaced(ui_bold(), 3))
+	badge.add_child(bl)
+	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	header.add_child(badge)
+	header.move_child(badge, 1)
+	var gap := Control.new()
+	gap.custom_minimum_size = Vector2(10, 0)
+	header.add_child(gap)
+	header.move_child(gap, 1)
+	if fallen:
+		card.modulate = Color(0.78, 0.74, 0.76)
+		var strike := ColorRect.new()
+		strike.color = Color(crimson, 0.9)
+		strike.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		name_l.add_child(strike)
+		name_l.resized.connect(func():
+			var w := name_l.get_theme_font("font").get_string_size(name_l.text, HORIZONTAL_ALIGNMENT_LEFT, -1, name_l.get_theme_font_size("font_size")).x
+			strike.position = Vector2(-4, name_l.size.y * 0.5)
+			strike.size = Vector2(w + 8, 3))

@@ -12,8 +12,8 @@ const MOBS := [
 	{"name": "Dire Wolf", "color": "59596b"},
 	{"name": "Kobold Scout", "color": "6b7a3a"},
 	{"name": "Kobold Sergeant", "color": "8a5a2b", "size": [1.3, 1.4, 1.5]},
-	{"name": "Ruin Sentinel", "color": "667380", "size": [1.0, 1.6, 1.0]},
-	{"name": "Floor Guardian: Gravelmaw", "color": "806b8c", "size": [3.0, 2.6, 3.6], "boss": true},
+	{"name": "Kobold Halberdier", "color": "667380", "size": [1.0, 1.6, 1.0]},
+	{"name": "Floor Guardian: Vargash the Kobold Warlord", "color": "806b8c", "size": [3.0, 2.6, 3.6], "boss": true},
 	{"name": "Mire Toad", "color": "5f7a3a", "size": [1.3, 0.9, 1.4]},
 	{"name": "Thornback Stag", "color": "7a4a2a"},
 	{"name": "Marsh Wisp", "color": "7fe8d0", "size": [0.7, 0.9, 0.7], "ranged": 11.0},
@@ -29,8 +29,12 @@ const FLOOR1 := [
 	{"name": "Tunnel Rat", "color": "6e6258", "size": [0.6, 0.5, 1.0], "model": {"pack": "creatures", "name": "Rat", "fit": 1.3}},
 	{"name": "Kobold Scout", "color": "6b7a3a"},
 	{"name": "Kobold Sergeant", "color": "8a5a2b", "size": [1.3, 1.4, 1.5]},
-	{"name": "Ruin Sentinel", "color": "667380", "size": [1.0, 1.6, 1.0]},
-	{"name": "Floor Guardian: Gravelmaw", "color": "806b8c", "size": [3.0, 2.6, 3.6], "boss": true},
+	{"name": "Kobold Halberdier", "color": "667380", "size": [1.0, 1.6, 1.0]},
+	{"name": "Greytusk, the Old Boar", "color": "6b5a4a", "size": [1.5, 1.4, 2.2], "la": {"item": "la_greytusk"}},
+	{"name": "Snaptrap Vine", "color": "5f8a3a", "size": [1.0, 1.5, 1.0]},
+	{"name": "Fruiting Snaptrap", "color": "7a8a3a", "size": [1.0, 1.5, 1.0]},
+	{"name": "Blossoming Snaptrap", "color": "c26a8a", "size": [1.0, 1.5, 1.0]},
+	{"name": "Floor Guardian: Vargash the Kobold Warlord", "color": "806b8c", "size": [3.0, 2.6, 3.6], "boss": true},
 ]
 const NPCS := [
 	["Smith Haldor", {"hair_color": "6b3e26", "outfit_color": "4a4a4a", "hair_style": 0, "eye_color": "8d6e63", "height": 1.1}],
@@ -137,17 +141,29 @@ func _ready() -> void:
 			mlist = MOBS.slice(0, 5)
 		elif group == 2:
 			mlist = MOBS.slice(5)
+		# --only NAME: just the mobs whose name contains NAME (closer camera).
+		# --turn DEG: extra yaw so a profile lineup can be seen 3/4 on.
+		var only := ""
+		var turn := 0.0
+		for i in args.size():
+			if args[i] == "--only" and i + 1 < args.size():
+				only = args[i + 1].to_lower()
+			if args[i] == "--turn" and i + 1 < args.size():
+				turn = deg_to_rad(float(args[i + 1]))
 		for spec in mlist:
+			if only != "" and not only in str(spec["name"]).to_lower():
+				continue
 			var d: Dictionary = spec.duplicate()
 			var sz: Array = d.get("size", [0.9, 0.8, 1.3])
 			x += sz[0] * 0.5 + 0.6
 			d["pos"] = [x, 0.2, 0.0]
 			var en := Enemy.from_data(d)
 			add_child(en)
-			en.rotation.y = PI
+			en.rotation.y = PI + turn
 			en.aggro_range = 0.0
 			en.speed = 0.0
 			en._wander_timer = 999.0
+			en._wander_target = en.global_position  # nowhere to walk: keep the set facing
 			subjects.append(en)
 			x += sz[0] * 0.5 + 0.6
 	var cam := Camera3D.new()

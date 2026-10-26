@@ -29,3 +29,7 @@
 *.OTF filter=lfs diff=lfs merge=lfs -text
 *.zip filter=lfs diff=lfs merge=lfs -text
 *.ZIP filter=lfs diff=lfs merge=lfs -text
+assets/audio/crystal/boss_sting.ogg -filter -diff -merge binary
+assets/audio/crystal/boss_phase_sting.ogg -filter -diff -merge binary
+assets/audio/crystal/floor_victory.ogg -filter -diff -merge binary
+assets/audio/crystal/last_attack.ogg -filter -diff -merge binary

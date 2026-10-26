@@ -124,11 +124,11 @@ void sky() {
 			under *= mix(horizon_color, vec3(0.85, 0.88, 0.95), 0.55) * (1.0 - 0.3 * zen);
 			// Hazy aerial perspective toward the rim so it never looks pasted on.
 			// It is far off: always half lost in the blue, more so near the rim.
-			float haze = 0.4 + 0.45 * (1.0 - smoothstep(edge, edge + 0.3, y));
+			float haze = 0.4 + 0.25 * (1.0 - smoothstep(edge, edge + 0.3, y));
 			under = mix(under, mix(horizon_color, top_color, 0.65), haze);
 			// A bright lip where daylight from outside catches the rim.
 			float lip = smoothstep(edge + 0.03, edge, y) * m;
-			under += horizon_color * lip * 0.12 * (1.0 - night);
+			under += horizon_color * lip * 0.05 * (1.0 - night);
 			if (!AT_CUBEMAP_PASS) {
 				vec2 cell = floor(p * 9.0);
 				float lamp = step(0.992, hash12(cell)) * smoothstep(0.35, 0.0, length(fract(p * 9.0) - 0.5));

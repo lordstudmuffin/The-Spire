@@ -26,6 +26,21 @@ signal died(enemy: Enemy)
 ## Rigged creature model override: {"pack", "name", "fit", "tint", "yaw",
 ## "lift", "scale"}; empty = the MODELS entry of this mob's rig kind.
 @export var model := {}
+## Field behaviours (accuracy pass: Aincrad's first floor):
+## rush - boars paw the ground (RUSH_WINDUP telegraph), then charge in a
+##        straight line; parryable on contact, dodge sideways.
+## pack - mobs sharing a pack tag answer each other: the first to spot or be
+##        struck by a player calls every packmate within PACK_RANGE.
+## armor - damage taken while NOT staggered is multiplied by this (plated
+##        guards: parry or Switch them open, then strike the gaps).
+## lure - a fruit-bearing plant: the first blow bursts the fruit and its
+##        scent calls every packmate within LURE_RANGE onto the striker.
+@export var rush := false
+@export var pack := ""
+@export var armor := 1.0
+@export var lure := false
+## Seconds before a slain mob returns (a rare variant waits much longer).
+@export var respawn_time := 8.0
 
 const SLAM_RANGE := 5.0
 const BOLT_PERIOD := 2.6
@@ -36,6 +51,10 @@ var _summon_timer := 9.0
 ## Boss summon hook: the world sets Callable(enemy) that spawns adds. Only
 ## the authority ever calls it.
 var summon: Callable
+## Boss state machine (scripts/boss_brain.gd, child "BossBrain"): when set,
+## the brain owns movement and attacks on the authority (tick() replaces the
+## chase / strike / slam logic below) and reports bar breaks and telegraphs.
+var brain: Node
 
 var hp := 0.0
 var home := Vector3.ZERO
@@ -43,9 +62,51 @@ var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 var _wander_target := Vector3.ZERO
 var _wander_timer := 0.0
 var _hit_cd := 0.0
+## Telegraphed strikes: the attack animation starts, the blow lands WINDUP
+## seconds later only if the target is still in reach. Stepping or dashing
+## out at the last moment is a dodge (a hidden "reaction" point, UniqueSkills).
+const WINDUP := 0.42
+const WINDUP_BOSS := 0.6
+var _windup := 0.0
+var _windup_target: Node3D
+## Parried strikes build posture; a full bar staggers the mob (it stops,
+## can't strike, and takes riposte damage). Bosses take three parries.
+const STAGGER_TIME := 1.5
+const STAGGER_TIME_BOSS := 2.2
+const RIPOSTE_MULT := 1.5
+## Switch: when a parry staggers a mob, a party mate who cuts in within
+## SWITCH_WINDOW lands one boosted blow and keeps the mob reeling a little
+## longer (the parrier "switches" out, the mate steps in).
+const SWITCH_WINDOW_MS := 2000
+const SWITCH_MULT := 1.3
+const SWITCH_EXTEND := 0.6
+const RUSH_WINDUP := 0.75
+const RUSH_SPEED := 11.0
+const RUSH_TIME := 0.75
+const RUSH_MULT := 1.5
+const PACK_RANGE := 16.0
+const LURE_RANGE := 22.0
+const CALL_TIME := 8.0
+var _rush_cd := 3.0
+var _rush_wind := 0.0
+var _rush_t := 0.0
+var _rush_dir := Vector3.ZERO
+var _rush_target: Node3D
+var _called_by: Node3D
+var _called_t := 0.0
+var _was_chasing := false
+var _lure0 := false
+var _switch_from := -1
+var _switch_until := 0
+var _switched := false
+var _posture := 0
+var _stagger := 0.0
 var _knock := Vector3.ZERO
 var _mesh: MeshInstance3D
 var _label: Label3D
+var _plate: MobPlate
+## A named field elite (it carries a Last Attack bonus): the plate shows it in gold.
+var elite := false
 var _dead := false
 var _last_hitter := 1
 var _shown_hp := -1.0
@@ -95,6 +156,12 @@ static func from_data(d: Dictionary) -> Enemy:
 	e.size = Vector3(sz[0], sz[1], sz[2])
 	e.quest_id = d.get("quest", "")
 	e.ranged = float(d.get("ranged", 0))
+	e.rush = bool(d.get("rush", false))
+	e.pack = str(d.get("pack", ""))
+	e.armor = clampf(float(d.get("armor", 1.0)), 0.1, 1.0)
+	e.elite = d.get("la") is Dictionary and not bool(d.get("boss", false))  # named elite: gold plate
+	e.lure = bool(d.get("lure", false))
+	e.respawn_time = clampf(float(d.get("respawn", 8.0)), 1.0, 3600.0)
 	var md = d.get("model", {})
 	e.model = md if md is Dictionary else {}
 	var p: Array = d.get("pos", [0, 1, 0])
@@ -105,6 +172,7 @@ static func from_data(d: Dictionary) -> Enemy:
 func _ready() -> void:
 	add_to_group("enemies")
 	home = global_position
+	_lure0 = lure
 	hp = max_hp
 	# Layer 4 = mobs: collide with the world (1) and players (2), not each other.
 	collision_layer = 4
@@ -124,6 +192,13 @@ func _ready() -> void:
 	_label.font_size = 40
 	_label.outline_size = 8
 	add_child(_label)
+	# Styled plate (cursor crystal, name, HP bar) replaces the text label on
+	# rendering clients; the label stays as the headless/debug fallback.
+	if DisplayServer.get_name() != "headless":
+		_plate = MobPlate.new()
+		_plate.position.y = _label.position.y
+		add_child(_plate)
+		_label.visible = false
 	_update_label()
 
 	if Net.online:
@@ -138,6 +213,16 @@ func _ready() -> void:
 
 func _update_label() -> void:
 	_label.text = "%s  Lv%d\n%d / %d" % [display_name, mob_level, ceil(hp), max_hp]
+	if _plate:
+		_plate.set_info(display_name, mob_level, mob_level - GameState.level, is_boss)
+		if elite:
+			_plate.set_elite()
+		var brain := get_node_or_null("BossBrain")
+		if brain and brain.has_method("bar_count") and brain.bar_count() > 1:
+			_plate.set_hp(brain.bar_fraction())
+			_plate.set_bars(brain.bar_count(), brain.current_bar())
+		else:
+			_plate.set_hp(hp / maxf(1.0, max_hp))
 	_shown_hp = hp
 
 
@@ -146,6 +231,10 @@ func _physics_process(delta: float) -> void:
 		# Client: mirror what the server sends. Dead mobs must not block anyone.
 		var was_dead := _dead
 		_dead = not visible
+		if was_dead and not _dead:
+			lure = _lure0  # respawned with its fruit
+			if _fruit():
+				_fruit().visible = lure
 		if _dead and not was_dead:
 			Audio.play("boss_death" if is_boss else "death", global_position, 0.15, 0.0, 0.8)
 			_death_fx()
@@ -182,15 +271,62 @@ func _physics_process(delta: float) -> void:
 	var player := _nearest_player()
 	var target := _wander_target
 	var spd := speed * 0.4
-	if player and player.global_position.distance_to(global_position) < aggro_range \
-			and player.global_position.distance_to(home) < aggro_range * 2.5:
+	var ctl: Dictionary = brain.tick(delta, player) if brain != null and brain.has_method("tick") else {}
+	var chasing := player != null and player.global_position.distance_to(global_position) < aggro_range \
+			and player.global_position.distance_to(home) < aggro_range * 2.5
+	# Called by a packmate (or a burst lure): hunt that player for a while,
+	# from further away, but never past a long leash from home.
+	_called_t = maxf(_called_t - delta, 0.0)
+	if _called_t > 0.0 and _hunt_ok(_called_by) and _called_by.global_position.distance_to(home) < maxf(aggro_range * 4.0, 30.0):
+		player = _called_by
+		chasing = true
+	if chasing and not _was_chasing and pack != "":
+		_call_pack(player, PACK_RANGE)
+	_was_chasing = chasing and ctl.is_empty()
+	if not ctl.is_empty():
+		# A boss brain decided this frame (leash, telegraphs, charge run).
+		target = ctl.get("target", global_position)
+		spd = float(ctl.get("spd", 0.0))
+	elif rush and _rush_t > 0.0:
+		# Mid-charge: straight on, whatever the target does.
+		_rush_t -= delta
+		target = global_position + _rush_dir * 6.0
+		spd = RUSH_SPEED
+		_rush_contact()
+		if _rush_t <= 0.0:
+			_end_rush()
+	elif rush and _rush_wind > 0.0:
+		_rush_wind -= delta
+		spd = 0.0
+		if _hunt_ok(_rush_target):
+			target = _rush_target.global_position
+			var to_t := _rush_target.global_position - global_position
+			to_t.y = 0.0
+			if to_t.length() > 0.05:
+				rotation.y = lerp_angle(rotation.y, atan2(-to_t.x, -to_t.z), 12.0 * delta)
+		if _rush_wind <= 0.0:
+			_start_rush()
+	elif chasing:
 		target = player.global_position
 		spd = speed
 		var reach := 1.3 + size.z * 0.5
 		var dist := player.global_position.distance_to(global_position)
-		if dist < reach and _hit_cd == 0.0:
-			_damage_player(player, damage)
-			_hit_cd = 1.0
+		if rush:
+			_rush_cd = maxf(_rush_cd - delta, 0.0)
+		if rush and _rush_cd == 0.0 and _stagger == 0.0 and _windup <= 0.0 and dist > 4.0 and dist < 10.0:
+			_begin_rush(player, dist)
+		elif _stagger > 0.0:
+			_stagger = maxf(_stagger - delta, 0.0)
+			spd = 0.0
+			target = global_position
+		elif _windup > 0.0:
+			_windup -= delta
+			spd *= 0.25
+			if _windup <= 0.0:
+				_resolve_strike(reach)
+		elif dist < reach and _hit_cd == 0.0:
+			_windup = WINDUP_BOSS if is_boss else WINDUP
+			_windup_target = player
 			_swing()
 		if ranged > 0.0:
 			# Keep a casting distance instead of closing in, and lob bolts.
@@ -228,10 +364,224 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 
 
+# --- Field behaviours: rush, pack calls, lures --------------------------------
+
+func _hunt_ok(p) -> bool:
+	return p != null and is_instance_valid(p) and p is Node3D and p.is_inside_tree() and not (p.has_method("is_dying") and p.is_dying()) \
+		and not (GameState.floor == 1 and Duels.in_safe_zone(p.global_position))
+
+
+## Authority: every living packmate within `radius` turns on `p`.
+func _call_pack(p: Node3D, radius: float) -> int:
+	if pack == "" or not _hunt_ok(p):
+		return 0
+	var n := 0
+	for e in get_tree().get_nodes_in_group("enemies"):
+		if e == self or not (e is Enemy) or e.pack != pack or e._dead or e.is_boss:
+			continue
+		if e.global_position.distance_to(global_position) <= radius:
+			e._called_by = p
+			e._called_t = CALL_TIME
+			n += 1
+	if Net.online:
+		net_pack_call.rpc(n)
+	else:
+		net_pack_call(n)
+	return n
+
+
+## Everyone: the howl / scent cue (VFX hook mob_pack_call(enemy, answered)).
+@rpc("authority", "call_local", "reliable")
+func net_pack_call(answered: int) -> void:
+	if _dead:
+		return
+	Audio.play("boss_roar" if pack == "wolf" else "grunt", global_position, 0.1, -6.0, 1.6 if pack == "wolf" else 1.2)
+	var fx := VFX.get_for(self)
+	if fx and fx.has_method("mob_pack_call"):
+		fx.call("mob_pack_call", self, answered)
+
+
+func _begin_rush(p: Node3D, dist: float) -> void:
+	_rush_target = p
+	_rush_wind = RUSH_WINDUP
+	var eta := RUSH_WINDUP + dist / RUSH_SPEED
+	if Net.online:
+		net_rush_warn.rpc(p.global_position, RUSH_WINDUP, eta)
+	else:
+		net_rush_warn(p.global_position, RUSH_WINDUP, eta)
+
+
+## Everyone: the paw-and-snort telegraph. Bots time their parry on `eta`
+## (when the charge reaches them); VFX hook mob_rush_warning(enemy, to, secs).
+@rpc("authority", "call_local", "reliable")
+func net_rush_warn(to: Vector3, secs: float, eta: float) -> void:
+	if _dead:
+		return
+	Audio.play("grunt", global_position, 0.1, 0.0, 0.8)
+	for p in get_tree().get_nodes_in_group("players"):
+		if p.get("bot") and p.get("is_local") and p.global_position.distance_to(to) < 3.0:
+			p.bot_incoming(eta)
+	var fx := VFX.get_for(self)
+	if fx and fx.has_method("mob_rush_warning"):
+		fx.call("mob_rush_warning", self, to, secs)
+	elif fx:
+		fx.ring(to + Vector3(0, 0.1, 0), Color(1.0, 0.55, 0.25), 2.0, secs)
+
+
+func _start_rush() -> void:
+	if not _hunt_ok(_rush_target):
+		_end_rush()
+		return
+	var to := _rush_target.global_position - global_position
+	to.y = 0.0
+	_rush_dir = to.normalized() if to.length() > 0.05 else -global_transform.basis.z
+	_rush_t = minf(RUSH_TIME, to.length() / RUSH_SPEED + 0.3)
+	if _rig != null:
+		var fx := VFX.get_for(self)
+		if fx:
+			fx.puff(global_position, 1.2)
+
+
+## The charge reaches whoever is in front of it: one parryable blow.
+func _rush_contact() -> void:
+	var reach := 1.0 + size.z * 0.5
+	for p in get_tree().get_nodes_in_group("players"):
+		if not _hunt_ok(p):
+			continue
+		var to: Vector3 = p.global_position - global_position
+		to.y = 0.0
+		if to.length() < reach and (to.length() < 0.5 or _rush_dir.dot(to.normalized()) > 0.2):
+			var outcome: String = p.defend(global_position) if p.has_method("defend") else ""
+			_show_defence(p, outcome)
+			match outcome:
+				"parry":
+					_parried(p)
+				"block":
+					_damage_player(p, damage * RUSH_MULT * (1.0 - Player.BLOCK_REDUCTION))
+				_:
+					_damage_player(p, damage * RUSH_MULT)
+			_end_rush()
+			return
+
+
+func _end_rush() -> void:
+	_rush_t = 0.0
+	_rush_wind = 0.0
+	_rush_target = null
+	_rush_cd = randf_range(5.0, 8.0)
+	_hit_cd = maxf(_hit_cd, 0.6)
+
+
+func _resolve_strike(reach: float) -> void:
+	_hit_cd = 1.0
+	var t := _windup_target
+	_windup_target = null
+	if t == null or not is_instance_valid(t) or not t.is_inside_tree():
+		return
+	if t.has_method("is_dying") and t.is_dying():
+		return
+	var d := t.global_position.distance_to(global_position)
+	if d < reach * 1.1:
+		var outcome: String = t.defend(global_position) if t.has_method("defend") else ""
+		_show_defence(t, outcome)
+		match outcome:
+			"parry":
+				_parried(t)
+			"block":
+				_damage_player(t, damage * (1.0 - Player.BLOCK_REDUCTION))
+			_:
+				_damage_player(t, damage)
+	elif d < reach * 2.6 and "peer_id" in t:
+		Net.note_hidden(t.peer_id, "dodge")
+
+
+## Tell the defender's machine what happened (the server judged it).
+func _show_defence(t: Node3D, outcome: String) -> void:
+	if outcome == "":
+		return
+	if not Net.online or t.peer_id == multiplayer.get_unique_id():
+		t.defend_fx(outcome, global_position)
+	elif multiplayer.get_peers().has(t.peer_id):
+		t.net_defended.rpc_id(t.peer_id, outcome, global_position, t.guard, t._stun)
+
+
+func _parried(t: Node3D) -> void:
+	_hit_cd = maxf(_hit_cd, 1.2)
+	Net.note_hidden(t.peer_id, "parry")
+	if brain != null and brain.has_method("stagger_immune") and brain.stagger_immune():
+		return  # the parry deflected, but a roaring Guardian builds no posture
+	_build_posture(1)
+	if _stagger > 0.0 and "peer_id" in t:
+		_switch_from = int(t.peer_id)
+		_switch_until = Time.get_ticks_msec() + SWITCH_WINDOW_MS
+		_switched = false
+
+
+## True when `a` and `b` are different players in the same party (server).
+static func same_party(a: int, b: int) -> bool:
+	if a == b or not Net.online:
+		return false
+	var pa := int(Net.srv_party_of.get(a, 0))
+	return pa != 0 and pa == int(Net.srv_party_of.get(b, 0))
+
+
+## Everyone: a Switch landed (`from` parried, `to` cut in).
+@rpc("authority", "call_local", "reliable")
+func net_switch(from: int, to: int) -> void:
+	var me := multiplayer.get_unique_id() if Net.online else 1
+	var fx := VFX.get_for(self)
+	if fx and fx.has_method("switch_flash"):
+		fx.call("switch_flash", self, from, to)
+	if me == from or me == to:
+		var hud := get_tree().get_first_node_in_group("hud")
+		if hud and hud.has_method("toast"):
+			hud.toast("SWITCH!", "", "", Color(0.5, 0.95, 1.0))
+		Audio.play("crit", global_position, 0.05, 2.0, 1.2)
+
+
+## Posture from a parry or a posture-breaking art (Breaking Wave): a full
+## bar staggers the mob (one count on a normal mob, three on a Guardian).
+func _build_posture(n: int) -> void:
+	_posture += n
+	if _posture >= (3 if is_boss else 1):
+		_posture = 0
+		_stagger = STAGGER_TIME_BOSS if is_boss else STAGGER_TIME
+		_windup = 0.0
+		if Net.online:
+			net_staggered.rpc(_stagger)
+		else:
+			net_staggered(_stagger)
+
+
+## Everyone: the mob reels (stagger look and sound; the hit window is the
+## server's _stagger).
+@rpc("authority", "call_local", "reliable")
+func net_staggered(seconds: float) -> void:
+	_stagger = clampf(seconds, 0.0, 3.0)
+	Audio.play("stagger", global_position, 0.05)
+	var fx := VFX.get_for(self)
+	if fx and fx.has_method("stagger"):
+		fx.call("stagger", self, seconds)
+	elif fx:
+		fx.ring(global_position + Vector3(0, size.y * 0.9, 0), Color(1.0, 0.85, 0.3), 1.4, 0.4)
+	if _anim != null:
+		_anim.speed_scale = 0.25
+		get_tree().create_timer(seconds, false).timeout.connect(func():
+			if is_instance_valid(self) and _anim != null:
+				_anim.speed_scale = 1.0)
+
+
+func is_staggered() -> bool:
+	return _stagger > 0.0
+
+
 func _nearest_player() -> Node3D:
 	var best: Node3D = null
 	var best_d := INF
 	for p in get_tree().get_nodes_in_group("players"):
+		# Monsters never follow anyone into a settlement's Inner Area.
+		if GameState.floor == 1 and Duels.in_safe_zone(p.global_position):
+			continue
 		var d: float = p.global_position.distance_to(global_position)
 		if d < best_d:
 			best_d = d
@@ -242,7 +592,8 @@ func _nearest_player() -> Node3D:
 func _damage_player(p: Node3D, amount: float) -> void:
 	# Offline / host: the local GameState. Server, remote player: the record
 	# (Player.take_damage -> Net.srv_damage), which then informs the owner.
-	if not Net.online or p.peer_id == multiplayer.get_unique_id() or multiplayer.get_peers().has(p.peer_id):
+	if not Net.online or p.peer_id == multiplayer.get_unique_id() or multiplayer.get_peers().has(p.peer_id) or Net.is_lingering(p.peer_id):
+		p.set("last_attacker", display_name)
 		p.take_damage(amount)
 
 
@@ -325,9 +676,26 @@ func _swing() -> void:
 
 @rpc("authority", "call_local", "unreliable")
 func net_swing() -> void:
-	if _dead or _rig == null:
+	_swing_local(WINDUP_BOSS if is_boss else WINDUP)
+
+
+## This peer's side of a telegraphed strike with a `windup` of its own (boss
+## brains send theirs with the move): bots time their parry on it when the
+## blow is parryable, the attack clip and glint play either way.
+func _swing_local(windup: float, parryable := true) -> void:
+	if _dead:
+		return
+	# Local bots (soak clients) react to the telegraph like a player would.
+	if parryable:
+		for p in get_tree().get_nodes_in_group("players"):
+			if p.get("bot") and p.get("is_local") and p.global_position.distance_to(global_position) < size.z * 0.5 + 4.0:
+				p.bot_incoming(windup)
+	if _rig == null:
 		return
 	var now := Time.get_ticks_msec() / 1000.0
+	var fx := VFX.get_for(self)
+	if fx and fx.has_method("windup_glint"):
+		fx.call("windup_glint", self, windup)
 	if _anim != null:
 		_anim.speed_scale = 1.0
 		var clip_len := _set_anim("attack", false)
@@ -381,9 +749,31 @@ func net_hit(kind: int, from_dir: Vector3, swing: int = 0) -> void:
 			return
 		var mult := 1.0
 		var cooldown := Player.ATTACK_COOLDOWN
+		var class_art := {}
 		if kind >= 0 and kind < Player.SKILLS.size():
+			if not Player.art_unlocked(kind, Net.srv_sword_prof(sender)):
+				return  # the record has not learned this Sword Art yet
 			mult = Player.SKILLS[kind]["mult"]
 			cooldown = Player.SKILLS[kind]["cooldown"]
+		elif HiddenClasses.is_art_kind(kind):
+			# Hidden-class arts: the caster must hold the class on its record,
+			# and a counter (Still Water) must follow a parry this server judged.
+			class_art = HiddenClasses.art_for_kind(kind)
+			if class_art.is_empty() or Net.srv_hidden_class(sender) != str(class_art["class"]):
+				return
+			if bool(class_art.get("after_parry", false)):
+				var since_parry: int = Time.get_ticks_msec() - int(p.last_parry_ms)
+				if since_parry > int((HiddenClasses.COUNTER_WINDOW + HiddenClasses.COUNTER_LATENCY) * 1000.0):
+					return
+			mult = float(class_art["mult"])
+			cooldown = float(class_art["cooldown"])
+		elif UniqueSkills.is_unique_kind(kind):
+			# Unique Sword Arts: only the realm's holder may land them.
+			var art := UniqueSkills.art_for_kind(kind)
+			if art.is_empty() or not Net.srv_holds_unique(sender, UniqueSkills.TWIN_FANG):
+				return
+			mult = float(art["mult"])
+			cooldown = float(art["cooldown"])
 		elif kind != -1:
 			return
 		var key := "%d:%d" % [sender, kind]
@@ -394,18 +784,48 @@ func net_hit(kind: int, from_dir: Vector3, swing: int = 0) -> void:
 			if now - int(last[0]) < int(cooldown * 900.0):
 				return
 			_swing_times[key] = [now, swing]
+			if kind < Player.SKILLS.size():
+				Net.srv_add_prof(sender)  # once per swing, basic attacks and Sword Arts
+				Net.srv_wear(sender, "weapon", Durability.WEAR_SWING)
 		if int(_hit_by.get(sender, -1)) == swing and swing != 0:
 			return  # This swing already landed on this mob.
 		_hit_by[sender] = swing
 		# The server uses the attack the owner reported, already clamped to
 		# what a legit player of that level could reach (Player.attack_cap).
 		take_hit(float(p.srv_attack) * mult, from_dir, sender, kind)
+		if class_art.has("buff"):
+			Net.srv_class_buff(sender, str(class_art["buff"]), HiddenClasses.HEARTH_GLOW)
 		return
 
 
 func take_hit(amount: float, from_dir: Vector3, hitter := 1, kind := -1) -> void:
 	if _dead or not Net.is_authority():
 		return
+	if _stagger > 0.0:
+		amount *= RIPOSTE_MULT  # riposte on a staggered mob
+		kind = maxi(kind, 0)    # reads as a heavy (crit) hit
+		if not _switched and Time.get_ticks_msec() < _switch_until and same_party(hitter, _switch_from):
+			_switched = true
+			amount *= SWITCH_MULT
+			_stagger += SWITCH_EXTEND
+			net_switch.rpc(_switch_from, hitter)
+	elif HiddenClasses.is_art_kind(kind) and int(HiddenClasses.art_for_kind(kind).get("posture", 0)) > 0:
+		# Breaking Wave (Stillblade): the blow itself builds posture, so the
+		# follow-up hits land as ripostes.
+		_build_posture(int(HiddenClasses.art_for_kind(kind)["posture"]))
+	if armor < 1.0 and _stagger <= 0.0:
+		amount *= armor  # plate turns the blade; staggered, the gaps are open
+	if pack != "" or lure:
+		var striker := _player_of(hitter)
+		if lure:
+			lure = false
+			_call_pack(striker, LURE_RANGE)
+			if Net.online:
+				net_lure_burst.rpc()
+			else:
+				net_lure_burst()
+		elif pack != "" and _called_t <= 0.0:
+			_call_pack(striker, PACK_RANGE)
 	hp -= amount
 	_last_hitter = hitter
 	# Offline, and for the listen-server host, the popup is drawn here; clients
@@ -414,18 +834,62 @@ func take_hit(amount: float, from_dir: Vector3, hitter := 1, kind := -1) -> void
 	_popup("-%d" % int(round(amount)), Color(1.0, 0.85, 0.3), crit)
 	_hit_sfx(amount)
 	_hit_fx(from_dir, crit, VFX.kind_color(kind))
+	if armor < 1.0 and _stagger <= 0.0:
+		# Plate turned the blade: sparks and a clang on every peer.
+		if Net.online:
+			net_plated.rpc(from_dir)
+		else:
+			net_plated(from_dir)
 	_knock = from_dir * (2.0 if is_boss else 8.0)
 	if hp <= 0:
 		_die()
 	else:
+		if brain != null and brain.has_method("on_damaged"):
+			brain.on_damaged()  # HP bar breaks fire on the hit that caused them
 		var tw := create_tween()
 		tw.tween_property(_mesh, "scale", Vector3(1.2, 0.8, 1.2), 0.05)
 		tw.tween_property(_mesh, "scale", Vector3.ONE, 0.1)
 		_update_label()
 
 
+## Everyone: a plated hit (VFX hook mob_plated_hit(enemy, dir)).
+@rpc("authority", "call_local", "unreliable")
+func net_plated(from_dir: Vector3) -> void:
+	var pfx := VFX.get_for(self)
+	if pfx and pfx.has_method("mob_plated_hit"):
+		pfx.call("mob_plated_hit", self, from_dir)
+
+
+## The player node of `peer` (the nearest one, should two worlds overlap
+## for a moment, as in the smoke test).
+func _player_of(peer: int) -> Node3D:
+	var best: Node3D = null
+	for p in get_tree().get_nodes_in_group("players"):
+		if int(p.get("peer_id")) == peer and (best == null or p.global_position.distance_to(global_position) < best.global_position.distance_to(global_position)):
+			best = p
+	return best
+
+
+## Everyone: a lure fruit burst (VFX hook mob_lure_burst(enemy)).
+@rpc("authority", "call_local", "reliable")
+func net_lure_burst() -> void:
+	lure = false
+	var fr := _fruit()
+	if fr:
+		fr.visible = false
+	Audio.play("craft_pot", global_position, 0.1, -2.0, 1.5)
+	var fx := VFX.get_for(self)
+	if fx and fx.has_method("mob_lure_burst"):
+		fx.call("mob_lure_burst", self)
+	elif fx:
+		fx.sparkle(global_position + Vector3(0, size.y, 0), Color(1.0, 0.7, 0.3))
+
+
 func _die() -> void:
 	_dead = true
+	_windup = 0.0
+	_windup_target = null
+	Net.note_hidden(_last_hitter, "kill")
 	Audio.play("boss_death" if is_boss else "death", global_position, 0.15, 0.0, 0.8)
 	if not Net.online:
 		_grant_local()
@@ -436,9 +900,9 @@ func _die() -> void:
 		var shares: Dictionary = Net.srv_reward_kill(_last_hitter, xp_reward, money_reward, global_position, drops, quest_id)
 		for peer in shares:
 			if peer == multiplayer.get_unique_id():
-				_grant_share(int(shares[peer][0]), int(shares[peer][1]), peer == _last_hitter)
+				_grant_share(int(shares[peer][0]), int(shares[peer][1]), peer == _last_hitter, shares.size())
 			elif multiplayer.get_peers().has(peer):
-				net_reward_split.rpc_id(peer, int(shares[peer][0]), int(shares[peer][1]), peer == _last_hitter)
+				net_reward_split.rpc_id(peer, int(shares[peer][0]), int(shares[peer][1]), peer == _last_hitter, shares.size())
 	died.emit(self)
 	visible = false
 	_death_fx()
@@ -447,7 +911,7 @@ func _die() -> void:
 	process_mode = Node.PROCESS_MODE_DISABLED
 	remove_from_group("enemies")
 	if respawns:
-		get_tree().create_timer(8.0, false).timeout.connect(_respawn)
+		get_tree().create_timer(respawn_time, false).timeout.connect(_respawn)
 	else:
 		queue_free()
 
@@ -461,16 +925,45 @@ func _hit_sfx(amount: float) -> void:
 	var ev := "hit_flesh"
 	if is_boss:
 		ev = "hit_heavy"
-	elif "sentinel" in n or "golem" in n or "sergeant" in n or "gravelmaw" in n or "drowned" in n or "knight" in n:
+	elif "sentinel" in n or "halberdier" in n or "golem" in n or "sergeant" in n or "warlord" in n or "drowned" in n or "knight" in n:
 		ev = "hit_metal"
 	Audio.play(ev, global_position, 0.1, clampf(amount / 15.0, 0.0, 4.0))
 	if ev == "hit_flesh" and randf() < 0.5:
 		Audio.play("grunt", global_position, 0.15, -4.0, 0.7 if "boar" in n else 0.85)
 
 
+## Hit-stop: a crit near the local player freezes time for a few frames so
+## Sword Art hits land with weight. Never on a dedicated server, and only
+## offline (online the world can't stop; the shake carries it instead).
+const HIT_STOP := 0.05
+static var _stop_until := 0
+
+
+func _hit_stop() -> void:
+	if not Audio.enabled:
+		return
+	var me := get_tree().get_first_node_in_group("player") as Node3D
+	if me == null or me.global_position.distance_to(global_position) > 14.0:
+		return
+	if Net.online:
+		if me.has_method("shake"):
+			me.shake(0.12)
+		return
+	var now := Time.get_ticks_msec()
+	if now < _stop_until or Engine.time_scale < 1.0:
+		return
+	_stop_until = now + int(HIT_STOP * 1000.0) + 120
+	Engine.time_scale = 0.05
+	get_tree().create_timer(HIT_STOP, true, false, true).timeout.connect(func():
+		if Engine.time_scale == 0.05:
+			Engine.time_scale = 1.0)
+
+
 ## Floating damage number: pops in with a scale bounce, drifts up and to the
 ## side, then fades and frees itself. Sword Art hits are bigger and hotter.
 func _popup(text: String, color := Color(1.0, 0.85, 0.3), crit := false) -> void:
+	if crit:
+		_hit_stop()
 	var l := Label3D.new()
 	l.text = text
 	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
@@ -563,7 +1056,12 @@ func _death_fx() -> void:
 		var clip_len := _set_anim("death", false)
 		if clip_len > 0.0:
 			delay = clampf(clip_len * 0.7, 0.3, 1.4)
-	fx.dissolve(_mesh, _rig, _dissolve_cache, edge, 0.6, delay)
+	# Crystal shatter when the visuals provide it (same arguments as dissolve
+	# plus `big` for bosses); the burn-away dissolve is the fallback.
+	if fx.has_method("shatter"):
+		fx.call("shatter", _mesh, _rig, _dissolve_cache, edge, is_boss, delay)
+	else:
+		fx.dissolve(_mesh, _rig, _dissolve_cache, edge, 0.6, delay)
 	_min_hit = INF
 
 
@@ -585,17 +1083,22 @@ func _grant_local() -> void:
 
 ## `xp`/`money` is this machine's share of the kill (the whole reward solo,
 ## a party_split share online); only the killer rolls drops and quest credit.
-func _grant_share(xp: int, money: int, killer: bool) -> void:
+func _grant_share(xp: int, money: int, killer: bool, party := 1) -> void:
 	var fx := VFX.get_for(self)
 	if fx:
 		fx.sparkle(global_position + Vector3(0, size.y * 0.6, 0))
 	GameState.add_xp(maxi(xp, 0))
 	GameState.add_money(maxi(money, 0))
+	var results := get_tree().get_first_node_in_group("battle_results")
+	if results:
+		results.note_kill(display_name, xp, money, party)
 	if not killer or Net.remote_client():
 		return  # online, drops and quest credit are rolled on the server record (net_apply "loot")
 	for mat in drops:
-		if randf() < drops[mat]:
+		if randf() < Permadeath.drop_chance(GameState, float(drops[mat])):
 			GameState.add_material(mat)
+			if results:
+				results.note_item(mat)
 	if quest_id != "":
 		GameState.advance_quest(quest_id)
 
@@ -607,10 +1110,32 @@ func net_reward() -> void:
 
 ## Server -> one party member (or the killer): your share of this kill.
 @rpc("authority", "call_remote", "reliable")
-func net_reward_split(xp: int, money: int, killer: bool) -> void:
+func net_reward_split(xp: int, money: int, killer: bool, party := 1) -> void:
 	if multiplayer.get_remote_sender_id() != 1:
 		return
-	_grant_share(clampi(xp, 0, 1000000), clampi(money, 0, 1000000), killer)
+	_grant_share(clampi(xp, 0, 1000000), clampi(money, 0, 1000000), killer, clampi(party, 1, Net.PARTY_MAX))
+
+
+## Authority: this mob is gone with no reward (boss adds when the Guardian
+## falls or resets). Clients see the shatter through the replicated `visible`.
+func vanish() -> void:
+	if _dead or not Net.is_authority():
+		return
+	_dead = true
+	_windup = 0.0
+	_windup_target = null
+	visible = false
+	_death_fx()
+	process_mode = Node.PROCESS_MODE_DISABLED
+	remove_from_group("enemies")
+	if Net.online:
+		# Let the synchronizer carry `visible` first so clients play the
+		# shatter; the spawner despawns the node when it is freed.
+		get_tree().create_timer(0.6, false).timeout.connect(func():
+			if is_instance_valid(self):
+				queue_free())
+	else:
+		queue_free()
 
 
 func _respawn() -> void:
@@ -618,6 +1143,11 @@ func _respawn() -> void:
 		return
 	global_position = home
 	hp = max_hp
+	lure = _lure0
+	if _fruit():
+		_fruit().visible = lure
+	_called_t = 0.0
+	_end_rush()
 	_dead = false
 	visible = true
 	process_mode = Node.PROCESS_MODE_INHERIT
@@ -677,7 +1207,9 @@ func _rig_kind() -> String:
 		return "stag"
 	if "wisp" in n:
 		return "wisp"
-	if is_boss or "gravelmaw" in n:
+	if "snaptrap" in n or "vine" in n:
+		return "plant"
+	if is_boss or "warlord" in n:
 		return "king"
 	if "boar" in n:
 		return "boar"
@@ -685,10 +1217,10 @@ func _rig_kind() -> String:
 		return "wolf"
 	if "sergeant" in n:
 		return "sergeant"
+	if "sentinel" in n or "halberdier" in n or "golem" in n:
+		return "sentinel"
 	if "kobold" in n:
 		return "kobold"
-	if "sentinel" in n or "golem" in n:
-		return "sentinel"
 	for k in ["slime", "bat", "rat"]:
 		if k in n:
 			return k
@@ -715,6 +1247,8 @@ func _build_kind(kind: String) -> void:
 			_build_kobold(maxf(size.y * 1.3, 1.0), 0)
 		"sentinel":
 			_build_sentinel()
+		"plant":
+			_build_plant()
 		_:
 			_build_boar()
 
@@ -907,6 +1441,107 @@ func _build_boar() -> void:
 	# Curly tail.
 	_pt(body, _cy(0.025, 0.018, l * 0.22), md, Vector3(0, w * 0.2, l * 0.5), Vector3(0.9, 0, 0))
 	_pt(body, _sph(0.045), md, Vector3(0, w * 0.27, l * 0.6))
+
+
+# -- Snaptrap Vine (carnivorous plant) ------------------------------------------
+# A walking pitcher: a swollen, veined bulb on splayed root legs, a flared
+# toothed rim with a lid hinged at the back, a pool of acid inside, and two
+# whip vines ending in serrated leaf blades. Variants by name: "Blossoming"
+# carries a flower on its crown, "Fruiting" a heavy bulb on a stem (node
+# "Fruit", kept out of the mesh merge so it can be hidden once it bursts;
+# see net_lure_burst).
+
+func _build_plant() -> void:
+	var w := size.x
+	var h := size.y
+	_visual_height = h * 1.05
+	var m := _pm(color)
+	var md := _pm(color.darkened(0.45))
+	var ml := _pm(color.lightened(0.3))
+	var vein := _pm(color.darkened(0.15).lerp(Color(0.62, 0.2, 0.25), 0.35), 0.0)
+	var maw := _pm(Color(0.45, 0.08, 0.14), 0.0)
+	var acid := _pm(Color(0.65, 1.0, 0.35), 0.0, Color(0.55, 1.0, 0.3), 0.8)
+	var tooth := _pm(Color(0.95, 0.92, 0.8), 0.01)
+	var base_y := h * 0.24
+	# Root legs: five splayed, two-jointed roots that scuttle when it moves.
+	for i in 5:
+		var a := TAU * i / 5.0 + 0.3
+		var dir := Vector3(sin(a), 0, cos(a))
+		var root := _nd(_rig, dir * w * 0.16 + Vector3(0, base_y, 0), Vector3(0, a, 0))
+		var hip := _nd(root, Vector3.ZERO, Vector3(-1.0, 0, 0))
+		_pt(hip, _cy(w * 0.05, w * 0.085, h * 0.2), md, Vector3(0, -h * 0.08, 0))
+		var knee := _nd(hip, Vector3(0, -h * 0.17, 0), Vector3(1.3, 0, 0))
+		_pt(knee, _cy(w * 0.015, w * 0.05, h * 0.2), md, Vector3(0, -h * 0.09, 0))
+		_limb(hip, a * 2.0, -1.0, 0.35)
+	# The bulb: wide belly, a waist, a flared rim tipped forward.
+	var body := _nd(_rig, Vector3(0, base_y, 0))
+	_breath = body
+	_pt(body, _sph(w * 0.36), m, Vector3(0, h * 0.13, 0), Vector3.ZERO, Vector3(1.0, 1.05, 1.0))
+	_pt(body, _cy(w * 0.2, w * 0.33, h * 0.2), m, Vector3(0, h * 0.3, -w * 0.02), Vector3(-0.12, 0, 0))
+	for i in 6:  # vertical veins over the belly
+		var a := TAU * i / 6.0
+		_pt(body, _cap(w * 0.016, h * 0.36), vein, Vector3(sin(a) * w * 0.335, h * 0.15, cos(a) * w * 0.335), Vector3(0, a, 0))
+	_pt(body, _sph(w * 0.26), ml, Vector3(0, h * 0.08, -w * 0.13), Vector3.ZERO, Vector3(0.8, 0.9, 0.5))  # pale belly
+	for i in 4:  # leaf collar at the waist
+		var a := TAU * i / 4.0 + PI / 4
+		_pt(body, _sph(w * 0.2), md, Vector3(sin(a) * w * 0.28, h * 0.28, cos(a) * w * 0.28), Vector3(0.9, a, 0), Vector3(0.45, 0.08, 1.0))
+	var head := _nd(body, Vector3(0, h * 0.42, -w * 0.05), Vector3(-0.38, 0, 0))
+	var rim := TorusMesh.new()
+	rim.inner_radius = w * 0.2
+	rim.outer_radius = w * 0.3
+	rim.rings = 20
+	rim.ring_segments = 8
+	_pt(head, rim, ml, Vector3.ZERO)
+	_pt(head, _cy(w * 0.21, w * 0.21, h * 0.03), maw, Vector3(0, -h * 0.01, 0))
+	_pt(head, _cy(w * 0.15, w * 0.15, h * 0.02), acid, Vector3(0, h * 0.005, 0))
+	for i in 10:  # inward fangs round the rim
+		var a := TAU * i / 10.0
+		_pt(head, _cy(0.0, w * 0.035, w * 0.12), tooth, Vector3(sin(a) * w * 0.22, h * 0.02, cos(a) * w * 0.22), Vector3(-0.6, a, 0))
+	# Lid hinged at the back of the rim, propped open.
+	var lid := _nd(head, Vector3(0, h * 0.02, w * 0.26), Vector3(-1.05, 0, 0))
+	_pt(lid, _sph(w * 0.3), md, Vector3(0, 0, -w * 0.24), Vector3.ZERO, Vector3(1.0, 0.16, 0.95))
+	_pt(lid, _cy(0.0, w * 0.04, w * 0.16), md, Vector3(0, 0, -w * 0.52), Vector3(-PI / 2, 0, 0))  # lid spur
+	_limb(lid, 0.0, -1.05, 0.25)
+	# Eyes under the rim, small and mean.
+	_eye_pair(body, Vector3(w * 0.12, h * 0.36, -w * 0.25), w * 0.045, Color(1.0, 0.85, 0.3), 0.8, true)
+	# Two whip vines from the shoulders, ending in serrated blades.
+	for side: float in [-1.0, 1.0]:
+		var sh := _nd(body, Vector3(side * w * 0.3, h * 0.24, -w * 0.02), Vector3(-0.3, 0, side * -1.25))
+		_pt(sh, _cy(w * 0.04, w * 0.06, h * 0.24), m, Vector3(0, h * 0.11, 0))
+		var el := _nd(sh, Vector3(0, h * 0.22, 0), Vector3(-0.5, 0, side * 1.5))
+		_pt(el, _cy(w * 0.03, w * 0.04, h * 0.22), m, Vector3(0, h * 0.1, 0))
+		var blade := _nd(el, Vector3(0, h * 0.2, 0), Vector3(-0.3, 0, side * 0.5))
+		_pt(blade, _sph(w * 0.2), md, Vector3(0, w * 0.18, 0), Vector3.ZERO, Vector3(0.45, 1.0, 0.1))
+		_pt(blade, _sph(w * 0.17), ml, Vector3(0, w * 0.18, -w * 0.012), Vector3.ZERO, Vector3(0.3, 0.9, 0.06))
+		for k in 3:  # serrations
+			_pt(blade, _cy(0.0, w * 0.025, w * 0.09), md, Vector3(side * w * 0.09, w * (0.08 + k * 0.1), 0), Vector3(0, 0, side * -1.1))
+		_limb(sh, 0.0 if side > 0 else PI, -0.3, 0.55)
+		_limb(el, 0.6 if side > 0 else PI + 0.6, -0.5, 0.4)
+	var n := display_name.to_lower()
+	if "blossom" in n:
+		var crown := _nd(head, Vector3(0, h * 0.12, w * 0.3), Vector3(0.5, 0, 0))
+		_pt(crown, _cy(w * 0.03, w * 0.04, h * 0.14), m, Vector3(0, -h * 0.06, 0))
+		var petal := _pm(Color(1.0, 0.6, 0.78), 0.015, Color(1.0, 0.45, 0.65), 0.3)
+		for i in 6:
+			var a := TAU * i / 6.0
+			_pt(crown, _sph(w * 0.16), petal, Vector3(sin(a) * w * 0.15, 0.02, cos(a) * w * 0.15), Vector3(0.35, a, 0), Vector3(0.6, 0.12, 1.0))
+		_pt(crown, _sph(w * 0.08), _pm(Color(1.0, 0.9, 0.4), 0.0, Color(1.0, 0.85, 0.3), 0.6), Vector3(0, w * 0.04, 0))
+	elif "fruit" in n:
+		var fruit := _nd(head, Vector3(0, h * 0.1, w * 0.3), Vector3(0.35, 0, 0))
+		fruit.name = "Fruit"
+		MeshMerge.mark(fruit)
+		var glow := _pm(Color(0.98, 0.62, 0.2), 0.02, Color(1.0, 0.5, 0.12), 0.35)
+		_pt(fruit, _cy(w * 0.03, w * 0.04, h * 0.08), md, Vector3(0, h * 0.0, 0))
+		_pt(fruit, _sph(w * 0.24), glow, Vector3(0, h * 0.12, 0), Vector3.ZERO, Vector3(1.0, 1.1, 1.0))
+		for i in 4:  # ripe spots
+			var a := TAU * i / 4.0 + 0.4
+			_pt(fruit, _sph(w * 0.05), _pm(Color(1.0, 0.88, 0.5), 0.0, Color(1.0, 0.8, 0.4), 0.4), Vector3(sin(a) * w * 0.2, h * 0.14 + (i % 2) * w * 0.08, cos(a) * w * 0.2))
+		_pt(fruit, _cy(0.0, w * 0.05, w * 0.12), md, Vector3(0, h * 0.12 + w * 0.3, 0))
+
+
+## The fruit node on a Fruiting Snaptrap's rig (null on other mobs).
+func _fruit() -> Node3D:
+	return _rig.find_child("Fruit", true, false) as Node3D if _rig != null else null
 
 
 # -- Dire Wolf -----------------------------------------------------------------
@@ -1355,12 +1990,15 @@ func _build_drowned_knight() -> void:
 ## Floor 1 kinds only for now; Floor 2 mobs (toads, stags, wisps, Mirelord)
 ## keep their primitive rigs until that floor gets its own pass.
 const MODELS := {
-	"boar": {"pack": "animals", "name": "Pig", "tint": "7a4f36", "fit": 1.15},
+	"boar": {"pack": "animals", "name": "Pig", "tint": "4fa4d4", "fit": 1.15},
 	"wolf": {"pack": "animals", "name": "Wolf", "tint": "9a9aae", "fit": 1.25, "yaw": 90},
-	"kobold": {"pack": "skeletons", "name": "Skeleton_Minion", "tint": "cfd0a4", "fit": 1.5},
-	"sergeant": {"pack": "skeletons", "name": "Skeleton_Warrior", "tint": "d8bf92", "fit": 1.35},
-	"sentinel": {"pack": "adventurers", "name": "Knight", "tint": "9aa4b0", "fit": 1.2},
-	"king": {"pack": "creatures", "name": "Dragon", "tint": "b4a6bc", "fit": 1.35, "yaw": 0},
+	# Kobolds: KayKit bodies tinted to red-brown fur, dressed by MobDress with
+	# a kobold head, long ears, a tail and their weapons (Aincrad's Ruin Kobolds).
+	"kobold": {"pack": "adventurers", "name": "Barbarian", "tint": "d0715a", "fit": 1.55, "dress": "kobold"},
+	"sergeant": {"pack": "adventurers", "name": "Barbarian", "tint": "b86a50", "fit": 1.3, "dress": "sergeant"},
+	"sentinel": {"pack": "adventurers", "name": "Knight", "tint": "c98a78", "fit": 1.2, "dress": "sentinel"},
+	# Floor Guardian: a kobold lord (after Aincrad's first boss), not the old dragon.
+	"king": {"pack": "adventurers", "name": "Barbarian", "tint": "c06048", "fit": 1.0, "dress": "lord"},
 	"slime": {"pack": "creatures", "name": "Slime", "tint": "", "fit": 1.0},
 	"rat": {"pack": "creatures", "name": "Rat", "tint": "", "fit": 1.0},
 	"bat": {"pack": "creatures", "name": "Bat", "tint": "", "fit": 1.0, "lift": 1.2, "yaw": 0},
@@ -1404,6 +2042,10 @@ static var _kaykit_libs := {}      # pack dir + skeleton path -> AnimationLibrar
 
 func _model_spec() -> Dictionary:
 	var spec: Dictionary = MODELS.get(_rig_kind(), {}).duplicate()
+	if display_name.begins_with("Greytusk"):
+		# The named elite boar: grey with age, dressed by MobDress.
+		spec["tint"] = "7abcbc"  # cancels the Pig texture's pink to an old grey
+		spec["dress"] = "greytusk"
 	for k in model:
 		spec[k] = model[k]
 	return spec
@@ -1459,9 +2101,11 @@ func _build_model(spec: Dictionary) -> bool:
 			continue
 		for s in mi.mesh.get_surface_count():
 			var src: Material = mi.get_active_material(s)
-			mi.set_surface_override_material(s, _creature_material(src, tint).duplicate())
+			mi.set_surface_override_material(s, _creature_material(src, tint, float(spec.get("min_value", 0.0))).duplicate())
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		RenderProfile.register_lod(mi, MOB_LOD_RANGE)
+	if spec.has("dress"):
+		MobDress.apply(inst, str(spec["dress"]))
 	_set_anim("idle")
 	return true
 
@@ -1532,8 +2176,8 @@ func _model_bounds(inst: Node3D, pack: String, mname: String) -> AABB:
 
 ## Cel version of an imported material (toon_creature.gdshader), tinted.
 ## Templates are shared per source material + tint; callers duplicate.
-static func _creature_material(src: Material, tint: Color) -> ShaderMaterial:
-	var key := "%d|%s" % [src.get_instance_id() if src else 0, tint.to_html(false)]
+static func _creature_material(src: Material, tint: Color, min_value := 0.0) -> ShaderMaterial:
+	var key := "%d|%s|%.2f" % [src.get_instance_id() if src else 0, tint.to_html(false), min_value]
 	if _creature_mats.has(key):
 		return _creature_mats[key]
 	if _creature_shader == null:
@@ -1554,6 +2198,8 @@ static func _creature_material(src: Material, tint: Color) -> ShaderMaterial:
 		var a = src.get_shader_parameter("albedo")
 		if a is Color:
 			base = a
+	if min_value > 0.0 and base.v < min_value:
+		base = Color.from_hsv(base.h, base.s * 0.8, lerpf(base.v, min_value, 0.85))
 	m.set_shader_parameter("albedo", Color(base.r * tint.r, base.g * tint.g, base.b * tint.b, 1.0))
 	_creature_mats[key] = m
 	return m

@@ -3,6 +3,8 @@ extends Node
 ## Everything here is plain data so SaveSystem can serialize it as JSON.
 
 signal xp_changed(xp: int, xp_to_next: int)
+## Equipped gear crossed a durability line: state is "low" or "broken".
+signal gear_state(slot: String, state: String)
 signal leveled_up(level: int)
 signal stats_changed
 signal health_changed(hp: float, max_hp: float)
@@ -14,6 +16,7 @@ signal class_unlocked(class_name_: String)
 signal buffs_changed
 signal home_changed
 signal life_skill_up(skill: String, level: int)
+signal unique_skill_changed(id: String)
 
 # Starting classes. Hidden classes unlock later through quests.
 const ORIGINS := {
@@ -25,6 +28,9 @@ const ORIGINS := {
 # Hidden classes: name -> stat bonus and perk text. Unlocked by secret quests.
 const HIDDEN_CLASSES := {
 	"Forgeborn": {"bonus": {"strength": 3, "endurance": 2}, "perk": "Crafted gear rolls one rank higher more often."},
+	# Rules, arts and unlock deeds: scripts/hidden_classes.gd.
+	"Stillblade": {"bonus": {"agility": 2, "endurance": 2, "strength": 1}, "perk": "Guard recovers faster. Still Water counters right after a parry; Breaking Wave staggers."},
+	"Hearthwright": {"bonus": {"endurance": 2, "spirit": 2, "agility": 1}, "perk": "Food lasts longer and works harder. Cook anywhere. Hearth Flare scatters coals and leaves you glowing."},
 }
 const STAT_NAMES := ["strength", "agility", "endurance", "spirit"]
 const POINTS_PER_LEVEL := 3
@@ -36,7 +42,17 @@ const MATERIAL_NAMES := {"iron_ore": "Iron Ore", "beast_hide": "Beast Hide", "sp
 	# under Provisions, not in the smithing materials strip).
 	"minnow": "Minnow", "river_trout": "River Trout", "mire_eel": "Mire Eel", "moonscale_koi": "Moonscale Koi",
 	"wild_herb": "Wild Herb", "willow_rod": "Willow Rod",
-	"grilled_trout": "Grilled Trout", "boar_stew": "Boar Stew", "eel_pie": "Eel Pie", "koi_sashimi": "Koi Sashimi"}
+	"grilled_trout": "Grilled Trout", "boar_stew": "Boar Stew", "eel_pie": "Eel Pie", "koi_sashimi": "Koi Sashimi",
+	# Farm plots (P8): seeds, crops and the dishes they cook into.
+	"turnip_seeds": "Turnip Seeds", "sunwheat_seeds": "Sunwheat Seeds", "honeymelon_seeds": "Honeymelon Seeds",
+	"turnip": "Turnip", "sunwheat": "Sunwheat", "honeymelon": "Honeymelon",
+	"turnip_soup": "Turnip Soup", "harvest_bread": "Harvest Bread", "melon_tart": "Honeymelon Tart",
+	# Labyrinth: opens the terraces' locked vaults (LabyrinthFeatures).
+	"terrace_key": "Terrace Key",
+	# One-use crystals (LifeData.CRYSTALS).
+	"heal_crystal": "Healing Crystal", "teleport_crystal": "Teleport Crystal",
+	# Snaptrap Grove: the flowering vine's crown (Hesper's grove_bloom errand).
+	"snaptrap_bloom": "Snaptrap Bloom"}
 ## Floor layout data the world and the player need before the scene exists:
 ## where a character arrives on each floor (also the respawn point).
 const FLOOR_SPAWNS := {1: Vector3(0, 1, 6), 2: Vector3(0, 1, 37)}
@@ -59,7 +75,15 @@ var smithing_level := 1
 var smithing_xp := 0
 var items_crafted := 0
 var hidden_class := ""
+## One-holder-per-realm skill this character holds ("" none; UniqueSkills).
+var unique_skill := ""
+## Hidden stats that unique skills watch (never shown, never sent to clients).
+var hidden_stats := {}
 var floors_cleared := 0
+## One-Handed Sword proficiency, 0..PROF_CAP: rises by one per landed swing
+## and unlocks the later Sword Arts (Player.SKILLS "prof").
+var sword_prof := 0
+const PROF_CAP := 1000
 ## Which floor of the Spire this character is on (1-based). Offline it is
 ## saved with the character; online it follows the server (one server = one
 ## floor). A dedicated server reads it from `--floor N`.
@@ -74,6 +98,8 @@ var fishing_level := 1
 var fishing_xp := 0
 var cooking_level := 1
 var cooking_xp := 0
+var farming_level := 1
+var farming_xp := 0
 var fish_caught := 0
 var home_owned := false
 var home_storage: Array = []
@@ -86,6 +112,12 @@ const HOME_SLOTS := 6
 var title := ""
 ## Location ids visited for visit-objective quests ("waystone_0" ...).
 var visited: Array = []
+## Labyrinth chests this character opened: {chest_id: unix seconds}.
+var chests: Dictionary = {}
+## Duel record (scripts/duels.gd): {"won": n, "lost": n}.
+var duels: Dictionary = {"won": 0, "lost": 0}
+## Permadeath only: how this character fell ({} while alive; Permadeath).
+var fallen: Dictionary = {}
 
 
 func _ready() -> void:
@@ -121,13 +153,18 @@ func reset() -> void:
 	smithing_xp = 0
 	items_crafted = 0
 	hidden_class = ""
+	unique_skill = ""
+	hidden_stats = {}
 	floors_cleared = 0
+	sword_prof = 0
 	floor = 1
 	recipes_unlocked = []
 	fishing_level = 1
 	fishing_xp = 0
 	cooking_level = 1
 	cooking_xp = 0
+	farming_level = 1
+	farming_xp = 0
 	fish_caught = 0
 	home_owned = false
 	home_storage = []
@@ -136,6 +173,9 @@ func reset() -> void:
 	buffs = {}
 	title = ""
 	visited = []
+	chests = {}
+	duels = {"won": 0, "lost": 0}
+	fallen = {}
 	has_position = false
 	hp = max_hp()
 
@@ -149,6 +189,20 @@ func class_title() -> String:
 	return hidden_class if hidden_class != "" else character["origin"]
 
 
+## Offline: a hidden-stat event for the local character. Online the server
+## does this on the record (Net.note_hidden picks the right side).
+func note_hidden(event: String) -> void:
+	HiddenClasses.note(self, event)  # hidden-class deeds (parry streaks, dishes, catches)
+	if not UniqueSkills.note(hidden_stats, event, Time.get_ticks_msec() / 1000.0):
+		return
+	var realm = Net.get_realm()
+	var id := UniqueSkills.try_grant(realm, Net.local_holder(), level, hidden_stats, unique_skill)
+	if id != "":
+		unique_skill = id
+		unique_skill_changed.emit(id)
+		Net.srv_announce(UniqueSkills.announce_text(str(character.get("name", "Someone")), id))
+
+
 func unlock_hidden_class(cls: String) -> void:
 	if hidden_class == cls or not HIDDEN_CLASSES.has(cls):
 		return
@@ -158,6 +212,22 @@ func unlock_hidden_class(cls: String) -> void:
 	stats_changed.emit()
 	heal_full()
 	class_unlocked.emit(cls)
+
+
+## Proficiency credited to a character that predates the stat.
+static func prof_for_level(lv: int) -> int:
+	return clampi((lv - 1) * 60, 0, PROF_CAP)
+
+
+## One landed swing: +n proficiency. Returns the name of a Sword Art this
+## just unlocked, or "".
+func add_sword_prof(n := 1) -> String:
+	var before := sword_prof
+	sword_prof = mini(sword_prof + n, PROF_CAP)
+	for sk in Player.SKILLS:
+		if before < int(sk["prof"]) and sword_prof >= int(sk["prof"]):
+			return str(sk["name"])
+	return ""
 
 
 ## Where the player arrives (and respawns) on the current floor.
@@ -204,6 +274,7 @@ func xp_to_next() -> int:
 
 
 func add_xp(amount: int) -> void:
+	amount = Permadeath.xp_gain(self, amount)
 	xp += amount
 	while xp >= xp_to_next():
 		xp -= xp_to_next()
@@ -255,6 +326,20 @@ func add_item(item: Dictionary) -> void:
 	inventory_changed.emit()
 
 
+## Takes the item with `id` out of the pack (unequipping it first).
+func remove_item(id: String) -> bool:
+	for i in inventory.size():
+		if str(inventory[i].get("id", "")) == id:
+			for slot in equipped:
+				if equipped[slot] is Dictionary and str(equipped[slot].get("id", "")) == id:
+					equipped[slot] = null
+			inventory.remove_at(i)
+			stats_changed.emit()
+			inventory_changed.emit()
+			return true
+	return false
+
+
 func equip(item: Dictionary) -> void:
 	equipped[item["kind"]] = item
 	stats_changed.emit()
@@ -302,6 +387,14 @@ func add_life_xp(skill: String, amount: int) -> bool:
 			leveled = true
 		if leveled:
 			life_skill_up.emit("cooking", cooking_level)
+	elif skill == "farming":
+		farming_xp += amount
+		while farming_xp >= life_xp_to_next(farming_level) and farming_level < 99:
+			farming_xp -= life_xp_to_next(farming_level)
+			farming_level += 1
+			leveled = true
+		if leveled:
+			life_skill_up.emit("farming", farming_level)
 	inventory_changed.emit()
 	return leveled
 
@@ -410,12 +503,25 @@ func place_furniture(slot: int, id: String) -> bool:
 
 # --- Derived stats -------------------------------------------------------
 
+## A broken piece (Durability) adds nothing until it is repaired.
 func weapon_attack() -> float:
-	return equipped["weapon"]["atk"] if equipped["weapon"] != null else 0.0
+	return equipped["weapon"]["atk"] if equipped["weapon"] != null and not Durability.is_broken(equipped["weapon"]) else 0.0
 
 
 func armor_defense() -> float:
-	return equipped["armor"]["def"] if equipped["armor"] != null else 0.0
+	return equipped["armor"]["def"] if equipped["armor"] != null and not Durability.is_broken(equipped["armor"]) else 0.0
+
+
+## Wears equipped gear (Durability.wear). Offline / host announce the
+## "low" and "broken" moments through gear_state; an online client only
+## mirrors the wear (the server sends its own "gear" event).
+func wear_gear(slot: String, amount: float) -> void:
+	var ev := Durability.wear(self, slot, amount)
+	if ev != "" and not Net.remote_client():
+		gear_state.emit(slot, ev)
+		if slot == "armor" and ev == "broken":
+			hp = minf(hp, max_hp())
+			health_changed.emit(hp, max_hp())
 
 
 func max_hp() -> float:
@@ -433,7 +539,9 @@ func move_speed() -> float:
 func take_damage(amount: float) -> void:
 	# Armor soaks half its defense value per hit; every hit does at least 1.
 	var dmg: float = max(amount - armor_defense() * 0.5, 1.0)
+	Permadeath.note_hurt(self)
 	hp = max(hp - dmg, 0.0)
+	wear_gear("armor", Durability.WEAR_HIT)
 	health_changed.emit(hp, max_hp())
 
 
@@ -483,6 +591,23 @@ static func visited_count(list: Array, prefix: String) -> int:
 	return n
 
 
+static func _parse_duels(raw) -> Dictionary:
+	var out := {"won": 0, "lost": 0}
+	if raw is Dictionary:
+		out["won"] = maxi(int(raw.get("won", 0)), 0)
+		out["lost"] = maxi(int(raw.get("lost", 0)), 0)
+	return out
+
+
+static func _parse_chests(raw) -> Dictionary:
+	var out := {}
+	if raw is Dictionary:
+		for k in raw:
+			if k is String and k.length() <= 24 and out.size() < 32:
+				out[k] = float(raw[k])
+	return out
+
+
 ## Records a visited location. Returns true when it was new.
 func visit(id: String) -> bool:
 	if visited.has(id):
@@ -525,13 +650,18 @@ func to_dict() -> Dictionary:
 		"smithing_xp": smithing_xp,
 		"items_crafted": items_crafted,
 		"hidden_class": hidden_class,
+		"unique_skill": unique_skill,
+		"hidden": hidden_stats,
 		"floors_cleared": floors_cleared,
+		"sword_prof": sword_prof,
 		"floor": floor,
 		"recipes_unlocked": recipes_unlocked,
 		"fishing_level": fishing_level,
 		"fishing_xp": fishing_xp,
 		"cooking_level": cooking_level,
 		"cooking_xp": cooking_xp,
+		"farming_level": farming_level,
+		"farming_xp": farming_xp,
 		"fish_caught": fish_caught,
 		"home_owned": home_owned,
 		"home_storage": home_storage,
@@ -540,6 +670,9 @@ func to_dict() -> Dictionary:
 		"buffs": buffs,
 		"title": title,
 		"visited": visited,
+		"chests": chests,
+		"duels": duels,
+		"fallen": fallen,
 	}
 
 
@@ -552,6 +685,7 @@ func apply_patch(d: Dictionary) -> void:
 	var prev_class := hidden_class
 	var prev_fish := fishing_level
 	var prev_cook := cooking_level
+	var prev_farm := farming_level
 	var prev_hp := hp
 	level = clampi(int(d.get("level", level)), 1, 100)
 	xp = maxi(int(d.get("xp", xp)), 0)
@@ -590,7 +724,11 @@ func apply_patch(d: Dictionary) -> void:
 	items_crafted = maxi(int(d.get("items_crafted", items_crafted)), 0)
 	var hc := str(d.get("hidden_class", hidden_class))
 	hidden_class = hc if HIDDEN_CLASSES.has(hc) else ""
+	var prev_unique := unique_skill
+	var us := str(d.get("unique_skill", unique_skill))
+	unique_skill = us if UniqueSkills.is_unique(us) else ""
 	floors_cleared = maxi(int(d.get("floors_cleared", floors_cleared)), 0)
+	sword_prof = clampi(int(d.get("sword_prof", sword_prof)), 0, PROF_CAP)
 	if d.get("recipes_unlocked") is Array:
 		recipes_unlocked = []
 		for r in d["recipes_unlocked"]:
@@ -600,6 +738,8 @@ func apply_patch(d: Dictionary) -> void:
 	fishing_xp = maxi(int(d.get("fishing_xp", fishing_xp)), 0)
 	cooking_level = clampi(int(d.get("cooking_level", cooking_level)), 1, 99)
 	cooking_xp = maxi(int(d.get("cooking_xp", cooking_xp)), 0)
+	farming_level = clampi(int(d.get("farming_level", farming_level)), 1, 99)
+	farming_xp = maxi(int(d.get("farming_xp", farming_xp)), 0)
 	fish_caught = maxi(int(d.get("fish_caught", fish_caught)), 0)
 	home_owned = bool(d.get("home_owned", home_owned))
 	if d.get("home_storage") is Array:
@@ -620,6 +760,10 @@ func apply_patch(d: Dictionary) -> void:
 		title = str(d["title"]).left(32)
 	if d.get("visited") is Array:
 		visited = _parse_visited(d["visited"])
+	if d.get("chests") is Dictionary:
+		chests = _parse_chests(d["chests"])
+	if d.get("duels") is Dictionary:
+		duels = _parse_duels(d["duels"])
 	hp = clampf(float(d.get("hp", hp)), 0.0, max_hp())
 	stats_changed.emit()
 	xp_changed.emit(xp, xp_to_next())
@@ -632,10 +776,14 @@ func apply_patch(d: Dictionary) -> void:
 		leveled_up.emit(level)
 	if hidden_class != "" and hidden_class != prev_class:
 		class_unlocked.emit(hidden_class)
+	if unique_skill != prev_unique:
+		unique_skill_changed.emit(unique_skill)
 	if fishing_level > prev_fish:
 		life_skill_up.emit("fishing", fishing_level)
 	if cooking_level > prev_cook:
 		life_skill_up.emit("cooking", cooking_level)
+	if farming_level > prev_farm:
+		life_skill_up.emit("farming", farming_level)
 	if hp != prev_hp or level != prev_level:
 		health_changed.emit(hp, max_hp())
 
@@ -722,7 +870,13 @@ func from_dict(d: Dictionary) -> void:
 	hidden_class = str(d.get("hidden_class", ""))
 	if not HIDDEN_CLASSES.has(hidden_class):
 		hidden_class = ""
+	unique_skill = str(d.get("unique_skill", ""))
+	if not UniqueSkills.is_unique(unique_skill):
+		unique_skill = ""
+	hidden_stats = d.get("hidden", {}).duplicate(true) if d.get("hidden") is Dictionary else {}
 	floors_cleared = int(d.get("floors_cleared", 0))
+	# Saves from before proficiency existed: credit the levels already earned.
+	sword_prof = clampi(int(d.get("sword_prof", prof_for_level(int(d.get("level", 1))))), 0, PROF_CAP)
 	floor = clampi(int(d.get("floor", 1)), 1, 2)
 	recipes_unlocked = []
 	var raw_rec = d.get("recipes_unlocked", [])
@@ -734,6 +888,8 @@ func from_dict(d: Dictionary) -> void:
 	fishing_xp = maxi(int(d.get("fishing_xp", 0)), 0)
 	cooking_level = clampi(int(d.get("cooking_level", 1)), 1, 99)
 	cooking_xp = maxi(int(d.get("cooking_xp", 0)), 0)
+	farming_level = clampi(int(d.get("farming_level", 1)), 1, 99)
+	farming_xp = maxi(int(d.get("farming_xp", 0)), 0)
 	fish_caught = maxi(int(d.get("fish_caught", 0)), 0)
 	home_owned = bool(d.get("home_owned", false))
 	home_storage = []
@@ -759,4 +915,7 @@ func from_dict(d: Dictionary) -> void:
 	var raw_visited = d.get("visited", [])
 	if raw_visited is Array:
 		visited = _parse_visited(raw_visited)
+	chests = _parse_chests(d.get("chests", {}))
+	duels = _parse_duels(d.get("duels", {}))
+	fallen = d["fallen"].duplicate() if d.get("fallen") is Dictionary else {}
 	hp = float(d.get("hp", max_hp()))

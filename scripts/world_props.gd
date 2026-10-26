@@ -162,9 +162,25 @@ static func fountain(parent: Node3D, pos: Vector3) -> void:
 	if not has("town", "fountain-round-detail"):
 		WorldArt.fountain(parent, pos)
 		return
-	var f := AssetLib.prop(parent, "town", "fountain-round-detail", pos, 0.0, 3.0, "trimesh")
+	var f := AssetLib.prop(parent, "town", "fountain-round-detail", pos, 0.0, 3.0, "trimesh", true, Color.WHITE, false)
 	f.name = "Fountain"
 	if not WorldArt.headless():
+		# Carved pale stone and live water instead of the kit's flat white.
+		var stone := WorldArt.stone_mat(Color("d9d6cf"), Color("b3aea4"), "castle_brick_07", 0.6, {
+			"band_period": 0.45, "brick_length": 0.8, "band_width": 0.06, "band_dark": 0.78, "detail_strength": 0.35,
+			"polar": 1.0, "center": Vector2(pos.x, pos.z), "polar_radius": 2.0})
+		var water := WorldArt.water_mat(Vector2(1, 0.4), 0.18)
+		for mi in f.find_children("*", "MeshInstance3D", true, false):
+			var m3 := mi as MeshInstance3D
+			if m3.mesh == null:
+				continue
+			for si in m3.mesh.get_surface_count():
+				var src := m3.get_active_material(si)
+				var c := Color.WHITE
+				if src is BaseMaterial3D:
+					c = (src as BaseMaterial3D).albedo_color
+				var watery := c.b > c.r + 0.12
+				m3.set_surface_override_material(si, water if watery else stone)
 		var spray := WorldArt._particles(Vector3(0, 0.5, 0), 90, 1.6, Vector3(0.15, 0.1, 0.15), Color(0.85, 0.97, 1.0, 0.8), 0.12, -9.0)
 		spray.process_material.direction = Vector3(0, 1, 0)
 		spray.process_material.spread = 25.0
@@ -973,3 +989,441 @@ static func shore_rocks(parent: Node3D, center: Vector3, radius: float) -> void:
 	if not fallback.is_empty():
 		var mm := WorldArt.multimesh(parent, WorldArt.rock_mesh(), fallback, [], "ShoreRocks")
 		mm.material_override = WorldArt.mat(Color("8d8578"), 0.03)
+
+
+# --- Hall of Iron -------------------------------------------------------------
+
+## The black-iron hall on the plaza's north side (after the Black Iron Palace
+## of the Town of Beginnings): two dark stone wings with gabled roofs, iron
+## buttresses and tall lit window slits, joined by a pointed iron arch over
+## the north road (clear width 2 * `gap`). `center` is the middle of the arch
+## at ground level; the hall faces +Z (the plaza). Original procedural art.
+static func iron_hall(parent: Node3D, center: Vector3, gap := 5.3, wing_w := 4.2, depth := 7.0, height := 9.0) -> void:
+	var wall := WorldArt.stone_mat(Color("3a3c47"), Color("2c2e38"), "castle_brick_07", 0.24, {
+		"band_period": 1.2, "band_width": 0.07, "brick_length": 2.0})
+	var iron := WorldArt.mat(Color("23252e"), 0.03)
+	var trim := WorldArt.stone_mat(Color("51535f"), Color("434551"), "rock_wall_10", 0.3, {"detail_strength": 0.4})
+	var slit := WorldArt.rune_mat(Color("6fb8ff"), 0.9)
+	var rose_glass := WorldArt.rune_mat(Color("1d3a66"), 0.5)
+	for sx in [-1.0, 1.0]:
+		var cx: float = sx * (gap + wing_w * 0.5)
+		var c := center + Vector3(cx, 0, 0)
+		# Wing body on a plinth course.
+		var body := BoxMesh.new()
+		body.size = Vector3(wing_w, height, depth)
+		WorldArt.mesh_node(parent, body, c + Vector3(0, height * 0.5, 0), wall)
+		var plinth := BoxMesh.new()
+		plinth.size = Vector3(wing_w + 0.5, 0.7, depth + 0.5)
+		WorldArt.mesh_node(parent, plinth, c + Vector3(0, 0.35, 0), trim)
+		var cornice := BoxMesh.new()
+		cornice.size = Vector3(wing_w + 0.4, 0.35, depth + 0.4)
+		WorldArt.mesh_node(parent, cornice, c + Vector3(0, height + 0.17, 0), trim)
+		WorldArt.box_collider(parent, Vector3(wing_w + 0.5, height, depth + 0.5), c + Vector3(0, height * 0.5, 0))
+		# Steep gable roof running front to back, with an iron ridge.
+		var roof := PrismMesh.new()
+		roof.size = Vector3(wing_w + 0.6, 4.2, depth + 0.6)
+		WorldArt.mesh_node(parent, roof, c + Vector3(0, height + 0.35 + 2.1, 0), iron)
+		# Buttresses at the front corners, stepping in toward the top.
+		for bx in [-0.5, 0.5]:
+			var bp := c + Vector3(bx * wing_w, 0, depth * 0.5)
+			var b1 := BoxMesh.new()
+			b1.size = Vector3(0.8, height * 0.62, 1.0)
+			WorldArt.mesh_node(parent, b1, bp + Vector3(0, height * 0.31, 0.3), trim)
+			var b2 := BoxMesh.new()
+			b2.size = Vector3(0.6, height * 0.5, 0.6)
+			WorldArt.mesh_node(parent, b2, bp + Vector3(0, height * 0.87, 0.15), trim)
+			var fin := CylinderMesh.new()
+			fin.top_radius = 0.0
+			fin.bottom_radius = 0.34
+			fin.height = 2.2
+			fin.radial_segments = 4
+			fin.rings = 1
+			WorldArt.mesh_node(parent, fin, bp + Vector3(0, height * 1.12 + 1.1, 0.15), iron, Vector3(0, PI / 4, 0))
+		# Two tall window slits on the front face and a round rose window.
+		for wx in [-0.24, 0.24]:
+			var w := BoxMesh.new()
+			w.size = Vector3(0.42, 3.4, 0.08)
+			WorldArt.mesh_node(parent, w, c + Vector3(wx * wing_w, 3.6, depth * 0.5 + 0.02), slit)
+			var hood := PrismMesh.new()
+			hood.size = Vector3(0.7, 0.45, 0.18)
+			WorldArt.mesh_node(parent, hood, c + Vector3(wx * wing_w, 5.55, depth * 0.5 + 0.06), trim)
+		var rose := CylinderMesh.new()
+		rose.top_radius = 0.55
+		rose.bottom_radius = 0.55
+		rose.height = 0.08
+		rose.radial_segments = 16
+		rose.rings = 1
+		WorldArt.mesh_node(parent, rose, c + Vector3(0, 7.2, depth * 0.5 + 0.02), rose_glass, Vector3(PI / 2, 0, 0))
+		WorldArt.rune_ring(parent, c + Vector3(0, 7.2, depth * 0.5 + 0.07), 0.75, Color("6fb8ff"), 0.08).rotation.x = PI / 2
+		# Side slits along the outer flank.
+		for k in 3:
+			var sw := BoxMesh.new()
+			sw.size = Vector3(0.08, 3.0, 0.38)
+			WorldArt.mesh_node(parent, sw, c + Vector3(sx * (wing_w * 0.5 + 0.02), 3.6, depth * (0.3 - 0.3 * k)), slit)
+	# The arch: a heavy lintel across the road with a pointed gable and the
+	# hall's emblem, carried on iron piers set against the wings.
+	var span := gap * 2.0
+	var lintel := BoxMesh.new()
+	lintel.size = Vector3(span + 0.4, 1.2, 1.6)
+	var ly := height - 0.6
+	WorldArt.mesh_node(parent, lintel, center + Vector3(0, ly, depth * 0.5 - 0.8), wall)
+	var band := BoxMesh.new()
+	band.size = Vector3(span + 0.6, 0.3, 1.8)
+	WorldArt.mesh_node(parent, band, center + Vector3(0, ly - 0.75, depth * 0.5 - 0.8), trim)
+	var gable := PrismMesh.new()
+	gable.size = Vector3(span * 0.62, 2.6, 1.4)
+	WorldArt.mesh_node(parent, gable, center + Vector3(0, height + 1.3, depth * 0.5 - 0.8), wall)
+	var gcap := PrismMesh.new()
+	gcap.size = Vector3(span * 0.66, 2.75, 1.0)
+	WorldArt.mesh_node(parent, gcap, center + Vector3(0, height + 1.42, depth * 0.5 - 1.05), iron)
+	WorldArt.rune_ring(parent, center + Vector3(0, height + 0.9, depth * 0.5 - 0.02), 0.8, Color("6fb8ff"), 0.1).rotation.x = PI / 2
+	for sx in [-1.0, 1.0]:
+		var pier := BoxMesh.new()
+		pier.size = Vector3(0.5, ly - 0.9, 0.8)
+		WorldArt.mesh_node(parent, pier, center + Vector3(sx * (gap - 0.05), (ly - 0.9) * 0.5, depth * 0.5 - 0.4), iron)
+
+
+## The Snaptrap Grove (world.GROVE): a ring of tall ferns, bushes and red
+## toadstools round each vine's clearing (the clearing itself stays open so
+## the plant reads and can be fought), fallen logs and stumps between them,
+## and a mossy standing stone at the heart. Deterministic per seed.
+static func grove_dress(parent: Node3D, center: Vector3, spots: Array, seed := 4817) -> void:
+	if not has("nature", "plant_bush"):
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed
+	var sets := {}
+	for k in ["plant_flatTall", "plant_bushLarge", "plant_bushDetailed", "mushroom_redTall", "mushroom_redGroup", "grass_leafsLarge", "mushroom_tanGroup"]:
+		sets[k] = []
+	var near_spot := func(p: Vector3, r: float) -> bool:
+		for s in spots:
+			if Vector2(p.x - s.x, p.z - s.z).length() < r:
+				return true
+		return false
+	for s in spots:
+		var base := rng.randf() * TAU
+		for i in 7:
+			var a := base + TAU * i / 7.0 + rng.randf_range(-0.2, 0.2)
+			var r := rng.randf_range(2.7, 3.6)
+			var p: Vector3 = center + s + Vector3(cos(a) * r, 0, sin(a) * r)
+			if near_spot.call(p - center, 2.5):
+				continue
+			var kind: String = ["plant_flatTall", "plant_bushLarge", "plant_flatTall", "grass_leafsLarge", "plant_bushDetailed", "mushroom_redTall", "grass_leafsLarge"][i]
+			sets[kind].append(WorldArt.xf(p, rng.randf() * TAU, Vector3.ONE * NATURE * rng.randf_range(0.9, 1.4)))
+	# Loose floor cover across the whole grove, never inside a clearing.
+	for i in 70:
+		var a := rng.randf() * TAU
+		var r := sqrt(rng.randf()) * 14.0
+		var off := Vector3(cos(a) * r, 0, sin(a) * r)
+		if near_spot.call(off, 2.4):
+			continue
+		var kind: String = ["grass_leafsLarge", "mushroom_tanGroup", "mushroom_redGroup", "plant_bushDetailed"][i % 4]
+		sets[kind].append(WorldArt.xf(center + off, rng.randf() * TAU, Vector3.ONE * NATURE * rng.randf_range(0.7, 1.1)))
+	for k in sets:
+		if not sets[k].is_empty():
+			AssetLib.multi(parent, "nature", k, sets[k], true, k.begins_with("plant"))
+	# Close-set dark oaks and pines round and between the clearings, so the
+	# grove reads as woods (trunks are solid).
+	var trees := {}
+	var placed: Array = []
+	var pool := ["tree_oak_dark", "tree_default_dark", "tree_detailed_dark", "tree_pineTallA_detailed", "tree_pineRoundC"]
+	for t in 220:
+		if placed.size() >= 26:
+			break
+		var a := rng.randf() * TAU
+		var off := Vector3(cos(a), 0, sin(a)) * rng.randf_range(4.0, 17.0)
+		if near_spot.call(off, 3.9):
+			continue
+		var crowded := false
+		for q in placed:
+			if q.distance_to(off) < 3.4:
+				crowded = true
+				break
+		if crowded:
+			continue
+		placed.append(off)
+		var kind: String = pool[rng.randi() % pool.size()]
+		if not has("nature", kind):
+			kind = "tree_oak"
+		if not trees.has(kind):
+			trees[kind] = []
+		var ts := NATURE * rng.randf_range(1.2, 1.7)
+		trees[kind].append(WorldArt.xf(center + off, rng.randf() * TAU, Vector3(ts, ts * rng.randf_range(1.0, 1.25), ts)))
+		var cs := CylinderShape3D.new()
+		cs.radius = 0.35
+		cs.height = 3.0
+		WorldArt.collider(parent, cs, center + off + Vector3(0, 1.5, 0))
+	for k in trees:
+		AssetLib.multi(parent, "nature", k, trees[k])
+	# Fallen logs and stumps between the clearings (solid).
+	for i in 5:
+		for t in 8:
+			var a := rng.randf() * TAU
+			var off := Vector3(cos(a), 0, sin(a)) * rng.randf_range(4.0, 12.0)
+			if near_spot.call(off, 3.3):
+				continue
+			var piece := "log_large" if i < 2 else ("stump_oldTall" if i == 2 else "stump_old")
+			if has("nature", piece):
+				tinted_prop(parent, "nature", piece, center + off, rng.randf() * TAU, NATURE * rng.randf_range(0.9, 1.2), "box", Color("6e5440"))
+			break
+	# A leaning standing stone, moss-green, at the grove's heart.
+	var heart := Vector3(-1.5, 0, -2.5)
+	if not near_spot.call(heart, 2.6):
+		prop(parent, "nature", "rock_tallC", center + heart, 0.7, NATURE * 0.9)
+
+
+## Market stall keeper (hook from life/stalls.gd): a townsfolk VRM figure
+## behind the counter, in one of four looks by stall index. Built the first
+## time the keeper is shown (stall rented and stocked), so idle stalls cost
+## nothing. False when headless or without the VRM bodies (the stall then
+## uses its primitive stand-in).
+const KEEPER_LOOKS := [
+	{"body": "seed", "outfit_color": "7a4e2e", "skin_color": "e3bc9a", "hair_color": "3a2a20"},
+	{"body": "alicia", "outfit_color": "4f6a3a", "hair_color": "c98a4b"},
+	{"body": "alicia", "outfit_color": "8a3a3a", "hair_color": "2e2a2a", "skin_color": "d9b08a"},
+	{"body": "seed", "outfit_color": "3a4a6a", "hair_color": "d9d9dd"},
+]
+
+static func stall_keeper(parent: Node3D, pos: Vector3, rot: float, index: int) -> bool:
+	if WorldArt.headless() or Net.dedicated or not VRMCharacter.BODIES.has("alicia"):
+		return false
+	var look: Dictionary = KEEPER_LOOKS[index % KEEPER_LOOKS.size()].duplicate()
+	var build := func():
+		if not parent.visible or parent.get_child_count() > 0:
+			return
+		var v := VRMCharacter.new()
+		v.name = "Keeper"
+		# Behind the counter, a step off the awning's centre pole.
+		v.position = pos + Vector3(sin(rot), 0, cos(rot)) * 0.6 + Vector3(cos(rot), 0, -sin(rot)) * 0.75
+		v.rotation.y = rot
+		parent.add_child(v)
+		v.apply(look)
+		if v.instance == null:
+			v.queue_free()
+			return
+		for mi in v.instance.find_children("robo_arm", "MeshInstance3D", true, false):
+			mi.visible = false
+		var disc := CylinderMesh.new()
+		disc.top_radius = 0.42
+		disc.bottom_radius = 0.42
+		disc.height = 0.02
+		var dm := StandardMaterial3D.new()
+		dm.albedo_color = Color(0.05, 0.05, 0.1, 0.35)
+		dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		disc.material = dm
+		var sh := MeshInstance3D.new()
+		sh.mesh = disc
+		sh.position = v.position + Vector3(0, 0.02, 0)
+		sh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(sh)
+	parent.visibility_changed.connect(build)
+	return true
+
+
+## The Guardian's throne at the back of the summit arena (the Floor 1 boss
+## waits on a throne at the far end of its hall and leaps down to fight).
+## A two-step dais, a high pointed back with a rune disc and two great
+## bone horns, armrests, and a red pelt over the seat. Faces +Z (toward
+## the arena entry). Solid.
+static func boss_throne(parent: Node3D, pos: Vector3, rune: Color) -> void:
+	var stone := WorldArt.stone_mat(Color("4a4658"), Color("3a3748"), "castle_brick_07", 0.3, {"detail_strength": 0.45})
+	var dark := WorldArt.stone_mat(Color("2e2b39"), Color("252230"), "rock_wall_10", 0.3, {"detail_strength": 0.4})
+	var bone := WorldArt.mat(Color("e6dcc4"), 0.03)
+	var pelt := WorldArt.mat(Color("7a2a2a"), 0.03)
+	var gold := WorldArt.mat(Color("c9a24a"), 0.03, Color("c9a24a"), 0.15)
+	var bx := func(size: Vector3, at: Vector3, m: Material, rot := Vector3.ZERO) -> MeshInstance3D:
+		var b := BoxMesh.new()
+		b.size = size
+		return WorldArt.mesh_node(parent, b, pos + at, m, rot)
+	# Dais: two steps.
+	bx.call(Vector3(5.0, 0.35, 4.0), Vector3(0, 0.175, 0), stone)
+	bx.call(Vector3(3.8, 0.35, 3.0), Vector3(0, 0.525, -0.3), stone)
+	bx.call(Vector3(3.9, 0.06, 3.1), Vector3(0, 0.73, -0.3), gold)  # gilt edge
+	bx.call(Vector3(3.7, 0.06, 2.9), Vector3(0, 0.75, -0.3), dark)
+	# Seat and back.
+	bx.call(Vector3(2.0, 0.9, 1.6), Vector3(0, 1.2, -0.6), dark)
+	bx.call(Vector3(2.4, 3.6, 0.5), Vector3(0, 2.6, -1.35), stone)
+	var peak := PrismMesh.new()
+	peak.size = Vector3(2.4, 1.2, 0.5)
+	WorldArt.mesh_node(parent, peak, pos + Vector3(0, 5.0, -1.35), stone)
+	WorldArt.rune_ring(parent, pos + Vector3(0, 3.4, -1.08), 0.6, rune, 0.12).rotation.x = PI / 2
+	# Armrests with gilt caps.
+	for sx in [-1.0, 1.0]:
+		bx.call(Vector3(0.45, 0.6, 1.7), Vector3(sx * 1.2, 1.95, -0.55), stone)
+		bx.call(Vector3(0.5, 0.08, 1.75), Vector3(sx * 1.2, 2.28, -0.55), gold)
+		# Great bone horns curving up and out from the top of the back.
+		var horn := Node3D.new()
+		horn.position = pos + Vector3(sx * 1.05, 4.6, -1.35)
+		horn.rotation = Vector3(0, 0, sx * -0.55)
+		parent.add_child(horn)
+		var seg_h := 0.75
+		var r := 0.22
+		var at := Vector3.ZERO
+		var tilt := 0.0
+		for k in 4:
+			var c := CylinderMesh.new()
+			c.top_radius = r * 0.72
+			c.bottom_radius = r
+			c.height = seg_h
+			c.radial_segments = 8
+			var dir := Vector3(sx * sin(tilt), cos(tilt), 0)
+			var mi := WorldArt.mesh_node(horn, c, at + dir * seg_h * 0.5, bone, Vector3(0, 0, -sx * tilt))
+			mi.position = at + dir * seg_h * 0.5
+			at += dir * seg_h
+			r *= 0.72
+			tilt -= 0.38  # curls back inward
+	# A red pelt over the seat, hanging over the front edge.
+	bx.call(Vector3(1.8, 0.08, 1.5), Vector3(0, 1.69, -0.55), pelt)
+	bx.call(Vector3(1.6, 0.7, 0.08), Vector3(0, 1.35, 0.22), pelt, Vector3(0.12, 0, 0))
+	# Collision: dais and the throne body.
+	WorldArt.box_collider(parent, Vector3(5.0, 0.7, 4.0), pos + Vector3(0, 0.35, 0))
+	WorldArt.box_collider(parent, Vector3(2.6, 4.8, 2.2), pos + Vector3(0, 2.4, -0.9))
+
+
+## Dressing for Rook's tavern, The Hollow Hearth (TavernArt builds the hall;
+## this adds the lived-in layer): moonlit windows either side of the door
+## for a cool counterpoint to the firelight, a wagon-wheel chandelier, herb
+## and garlic bundles on the beams, a hearth rug, mantel clutter and the bard
+## on the dais. Visual only, no colliders; room-local like TavernArt.
+static func tavern_dress(t: Node3D, c: Vector3, room: Vector3) -> void:
+	if WorldArt.headless():
+		return
+	var hx := room.x * 0.5
+	var hz := room.z * 0.5
+	var trim := Color("4f3522")
+	# Windows on the front wall: deep frame, four moonlit panes, a sill.
+	var pane := WorldArt.mat(Color(0.22, 0.32, 0.55), 0.0, Color(0.36, 0.5, 0.86), 1.1)
+	for wx in [-3.3, 3.3]:
+		var wp := c + Vector3(wx, 1.95, hz - 0.03)
+		WorldArt.box(t, Vector3(1.3, 1.4, 0.06), wp + Vector3(0, 0, 0.0), Color("2a1d14"), Vector3.ZERO, 0.0)
+		for q in [Vector2(-0.28, 0.3), Vector2(0.28, 0.3), Vector2(-0.28, -0.3), Vector2(0.28, -0.3)]:
+			WorldArt.mesh_node(t, _tv_bm(Vector3(0.5, 0.54, 0.02)), wp + Vector3(q.x, q.y, -0.04), pane)
+		WorldArt.box(t, Vector3(1.4, 0.1, 0.14), wp + Vector3(0, 0.74, -0.05), trim, Vector3.ZERO, 0.0)
+		WorldArt.box(t, Vector3(1.5, 0.08, 0.26), wp + Vector3(0, -0.74, -0.1), trim, Vector3.ZERO, 0.0)
+		WorldArt.box(t, Vector3(0.06, 1.3, 0.05), wp + Vector3(0, 0, -0.06), trim, Vector3.ZERO, 0.0)
+		WorldArt.box(t, Vector3(1.2, 0.06, 0.05), wp + Vector3(0, 0, -0.06), trim, Vector3.ZERO, 0.0)
+		# A small pot of herbs on each sill.
+		WorldArt.cyl(t, 0.09, 0.07, 0.14, wp + Vector3(-0.4, -0.63, -0.14), Color("9a5a3a"), 8)
+		WorldArt.sphere(t, 0.11, wp + Vector3(-0.4, -0.5, -0.14), Color("5a7a3a"), Vector3(1, 0.8, 1))
+		var ml := OmniLight3D.new()
+		ml.light_color = Color(0.55, 0.68, 1.0)
+		ml.light_energy = 0.55
+		ml.omni_range = 3.6
+		ml.shadow_enabled = false
+		ml.position = wp + Vector3(0, -0.2, -0.9)
+		t.add_child(ml)
+	# Wagon-wheel chandelier over the door-side table.
+	var cp := c + Vector3(0.2, room.y - 1.35, 3.1)
+	var rim := TorusMesh.new()
+	rim.inner_radius = 0.62
+	rim.outer_radius = 0.7
+	rim.rings = 20
+	rim.ring_segments = 6
+	WorldArt.mesh_node(t, rim, cp, WorldArt.mat(Color("4a3020"), 0.02))
+	for k in 4:
+		WorldArt.box(t, Vector3(1.3, 0.05, 0.06), cp, Color("4a3020"), Vector3(0, k * PI / 4, 0), 0.0)
+	WorldArt.cyl(t, 0.08, 0.08, 0.12, cp, Color("3a2618"), 8)
+	for k in 4:
+		WorldArt.cyl(t, 0.012, 0.012, 1.3, cp + Vector3(cos(k * PI / 2) * 0.62, 0.65, sin(k * PI / 2) * 0.62), Color("2a2830"), 4)
+	for k in 6:
+		var a := k * TAU / 6.0
+		WorldArt.candle(t, cp + Vector3(cos(a) * 0.66, 0.05, sin(a) * 0.66), 0.16, 0.03)
+	var cl := OmniLight3D.new()
+	cl.light_color = Color("ffcf94")
+	cl.light_energy = 0.9
+	cl.omni_range = 5.5
+	cl.shadow_enabled = false
+	cl.position = cp + Vector3(0, -0.3, 0)
+	t.add_child(cl)
+	# Herb and garlic bundles hung from the beams on the hearth side.
+	var beams := [-hz + 0.9 + 1.85 * 2, -hz + 0.9 + 1.85 * 3]
+	var herb := [Color("6b7d3e"), Color("8a8a4a"), Color("7a5a8a"), Color("5f7a4a")]
+	for bi in beams.size():
+		for k in 5:
+			var hp := c + Vector3(-5.6 + k * 0.62, room.y - 0.32, float(beams[bi]))
+			WorldArt.cyl(t, 0.006, 0.006, 0.22, hp + Vector3(0, -0.06, 0), Color("6a5a40"), 3)
+			if (k + bi) % 3 == 2:
+				for g in 3:
+					WorldArt.sphere(t, 0.06, hp + Vector3((g - 1) * 0.06, -0.24 - (g % 2) * 0.05, 0), Color("ece4d2"), Vector3(1, 1.15, 1))
+			else:
+				WorldArt.cyl(t, 0.02, 0.1, 0.32, hp + Vector3(0, -0.32, 0), herb[(k + bi * 2) % herb.size()], 6)
+	# Hearth rug, mantel jars and candles.
+	var hp2 := c + Tavern.HEARTH
+	WorldArt.box(t, Vector3(1.7, 0.02, 2.6), hp2 + Vector3(1.9, 0.011, 0), Color("6a2a26"), Vector3.ZERO, 0.0)
+	WorldArt.box(t, Vector3(1.4, 0.022, 2.3), hp2 + Vector3(1.9, 0.013, 0), Color("8f3a30"), Vector3.ZERO, 0.0)
+	WorldArt.box(t, Vector3(0.7, 0.024, 1.5), hp2 + Vector3(1.9, 0.015, 0), Color("c49a4a"), Vector3.ZERO, 0.0)
+	var mantel := hp2 + Vector3(0.25, 1.87, 0)
+	for k in 5:
+		var z := -1.5 + k * 0.75
+		if k == 2:
+			continue
+		if k % 2 == 0:
+			WorldArt.candle(t, mantel + Vector3(0, 0, z), 0.2, 0.035)
+		else:
+			WorldArt.cyl(t, 0.07, 0.08, 0.2, mantel + Vector3(0, 0.1, z), [Color("6f8aa0"), Color("a0784a")][k % 2 if k < 2 else 0], 8)
+	# The bard: a climber-looking regular on the dais, lute at her side.
+	if not Net.dedicated and VRMCharacter.BODIES.has("alicia"):
+		var v := VRMCharacter.new()
+		v.name = "Bard"
+		v.position = c + Vector3(-4.95, 0.2, 3.0)
+		v.rotation.y = -PI * 0.38  # faces the room (VRM forward is -Z)
+		t.add_child(v)
+		v.apply({"body": "alicia", "outfit_color": "2f5a8a", "hair_color": "e0b060", "skin_color": "f0d2b8"})
+		if v.instance:
+			for mi in v.instance.find_children("robo_arm", "MeshInstance3D", true, false):
+				mi.visible = false
+
+
+static func _tv_bm(size: Vector3) -> BoxMesh:
+	var bm := BoxMesh.new()
+	bm.size = size
+	return bm
+
+
+## A carved wooden sign hung from an iron bracket over a door. `out` is the
+## wall's outward direction; the board faces it and swings a little.
+static func hanging_sign(parent: Node3D, at: Vector3, out: Vector3, text: String) -> Node3D:
+	var root := Node3D.new()
+	root.name = "HangingSign"
+	root.position = at
+	root.rotation.y = atan2(out.x, out.z)
+	parent.add_child(root)
+	var iron := Color("2a2830")
+	# Bracket: arm out from the wall with a diagonal brace and a scroll end.
+	WorldArt.box(root, Vector3(0.07, 0.07, 1.25), Vector3(0, 0.9, 0.55), iron, Vector3.ZERO, 0.015)
+	WorldArt.box(root, Vector3(0.05, 0.05, 0.9), Vector3(0, 0.62, 0.32), iron, Vector3(0.62, 0, 0), 0.015)
+	WorldArt.box(root, Vector3(0.24, 0.24, 0.05), Vector3(0, 0.9, -0.04), iron, Vector3.ZERO, 0.015)
+	var ring := TorusMesh.new()
+	ring.inner_radius = 0.05
+	ring.outer_radius = 0.075
+	WorldArt.mesh_node(root, ring, Vector3(0, 0.95, 1.18), WorldArt.mat(iron, 0.0), Vector3(0, 0, PI / 2))
+	# The board swings from the arm on two short chains.
+	var pivot := Node3D.new()
+	pivot.position = Vector3(0, 0.86, 0.6)
+	root.add_child(pivot)
+	for sx in [-0.62, 0.62]:
+		WorldArt.box(pivot, Vector3(0.02, 0.26, 0.02), Vector3(sx * 0.55, -0.13, 0), iron, Vector3.ZERO, 0.0)
+	var wood := WorldArt.wood_mat(Color("6e4b2c"), Color("5c3e24"), "weathered_planks", 0.2, 0, {"brick_length": 2.0})
+	WorldArt.mesh_node(pivot, _tv_bm(Vector3(1.9, 0.62, 0.07)), Vector3(0, -0.58, 0), wood)
+	WorldArt.box(pivot, Vector3(2.0, 0.07, 0.09), Vector3(0, -0.26, 0), Color("4f3522"), Vector3.ZERO, 0.0)
+	WorldArt.box(pivot, Vector3(2.0, 0.07, 0.09), Vector3(0, -0.9, 0), Color("4f3522"), Vector3.ZERO, 0.0)
+	for side in [1, -1]:
+		var l := Label3D.new()
+		l.text = text
+		l.font = UITheme.display_font()
+		l.font_size = 72
+		l.pixel_size = 0.0042
+		l.outline_size = 10
+		l.modulate = Color("f0c060")
+		l.outline_modulate = Color(0.16, 0.09, 0.04, 1.0)
+		l.position = Vector3(0, -0.56, side * 0.045)
+		l.rotation.y = 0.0 if side > 0 else PI
+		l.double_sided = false
+		pivot.add_child(l)
+		# A little painted flame under the name: the hearth.
+		WorldArt.sphere(pivot, 0.05, Vector3(0, -0.78, side * 0.04), Color("ff9a3a"), Vector3(0.8, 1.3, 0.2))
+	var tw := pivot.create_tween().set_loops()
+	tw.tween_property(pivot, "rotation:x", 0.05, 1.8).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(pivot, "rotation:x", -0.04, 1.8).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	return root

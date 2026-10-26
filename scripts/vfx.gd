@@ -12,7 +12,7 @@ const MAX_SLASHES := 8      # slash arc quads
 const MAX_FLASHES := 6      # billboard impact flashes
 const MAX_RINGS := 6        # flat ground rings
 const BASIC_COLOR := Color(0.55, 0.9, 1.0)
-## Sword Art colours, by skill index (Horizontal, Vertical Arc, Rage Spike).
+## Sword Art colours, by skill index (Sweeping Edge, Twin Crescent, Falcon Rush).
 const KIND_COLORS := [Color(1.0, 0.58, 0.12), Color(0.4, 0.55, 1.0), Color(1.0, 0.2, 0.28)]
 ## Slash arc mesh: an arc of `SLASH_SWEEP` radians, thick in the middle and
 ## pointed at both ends, vertex alpha fading toward the tips (the Kenney slash
@@ -22,6 +22,9 @@ const SLASH_SEGMENTS := 28
 const PARTICLE_AABB := AABB(Vector3(-8, -8, -8), Vector3(16, 16, 16))
 ## Polygon-shatter death: pale crystal cyan by default (players, most mobs).
 const SHATTER_COLOR := Color(0.62, 0.9, 1.0)
+const PARRY_COLOR := Color(1.0, 0.86, 0.45)
+const STAGGER_COLOR := Color(1.0, 0.86, 0.3)
+const WINDUP_COLOR := Color(0.95, 0.1, 0.08)
 const MAX_SHATTERS := 6     # concurrent shard bursts (MultiMesh pool)
 ## Shards per burst by preset; `big` (bosses) doubles it.
 const SHARDS := {"Low": 36, "Medium": 60, "High": 90, "Ultra": 140}
@@ -420,6 +423,1018 @@ func dash(pos: Vector3, dir: Vector3, color := Color(0.75, 0.9, 1.0, 0.9)) -> vo
 	back = back.normalized() if back.length_squared() > 0.001 else Vector3.BACK
 	_fire(pos + Vector3(0, 0.9, 0), "trace_01", true, color, 0.7, 0.28, 6.0, 11.0, back, 18.0, 0.0, 0.5, 1.1, 0.0, true)
 	puff(pos, 1.2)
+
+
+## Parry: the two blades meet. A hard white-gold flare with a cross glint,
+## a fan of sparks thrown both ways and a quick shock ring. `broke` is the
+## other case (the defender's guard was broken): the flare goes red-orange
+## and a few glass chips fly, as if the guard itself cracked.
+func parry_flash(pos: Vector3, broke := false) -> void:
+	var col := Color(1.0, 0.42, 0.22) if broke else PARRY_COLOR
+	var cam := get_viewport().get_camera_3d()
+	var side := cam.global_transform.basis.x if cam else Vector3.RIGHT
+	for s in [-1.0, 1.0]:
+		var d: Vector3 = (side * s + Vector3.UP * 0.35).normalized()
+		_fire(pos, "spark_04", true, col.lightened(0.3), 0.9, 0.3, 6.0, 12.0, d, 28.0, -14.0, 0.08, 0.2, 0.0, true)
+	flash(pos, col, 0.9)
+	# The cross glint is alpha-blended (not added) so it keeps its shape and
+	# colour against bright daylight ground, where additive light washes out.
+	_glint(pos, col.darkened(0.15), 2.6, 0.3, true)
+	_glint(pos, Color(1, 1, 1), 0.8, 0.18)
+	_shock_ring(pos, col, 1.9 if not broke else 2.4, 0.24)
+	flash_light(pos, col, 6.0)
+	if broke:
+		burst_at(AABB(pos - Vector3(0.25, 0.25, 0.25), Vector3(0.5, 0.5, 0.5)), Color(1.0, 0.55, 0.35), false)
+
+
+## Stagger: the mob reels. A burst at the head, then a halo of small gold
+## stars circling above it for `seconds` (follows the mob; freed after).
+func stagger(enemy: Node3D, seconds: float) -> void:
+	if enemy == null or not is_instance_valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var h := box.size.y if box.size.y > 0.1 else 1.6
+	var r := clampf(maxf(box.size.x, box.size.z) * 0.35, 0.35, 1.6)
+	var top := Vector3(0, h + 0.15, 0)
+	if box.size.y > 0.1:
+		top = enemy.to_local(box.position + Vector3(box.size.x * 0.5, box.size.y + 0.15, box.size.z * 0.5))
+	var pivot := Node3D.new()
+	pivot.name = "StaggerHalo"
+	enemy.add_child(pivot)
+	pivot.position = top
+	var n := 5
+	for i in n:
+		var q := _make_quad(true)
+		var m := q.material_override as StandardMaterial3D
+		m.albedo_texture = AssetLib.vfx_texture("star_06")
+		m.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+		m.albedo_color = STAGGER_COLOR.darkened(0.12)
+		q.visible = true
+		var heart := _make_quad(true)
+		(heart.material_override as StandardMaterial3D).albedo_texture = AssetLib.vfx_texture("star_06")
+		heart.visible = true
+		heart.scale = Vector3.ONE * 0.5
+		q.add_child(heart)
+		q.scale = Vector3.ONE * clampf(r * 0.55, 0.25, 0.7)
+		var a := TAU * i / n
+		q.position = Vector3(cos(a), 0.0, sin(a)) * r
+		pivot.add_child(q)
+	_fire(pivot.global_position, "star_05", true, STAGGER_COLOR, 0.8, 0.6, 1.5, 3.5, Vector3.UP, 70.0, -4.0, 0.1, 0.22, 0.0, false)
+	_shock_ring(pivot.global_position, STAGGER_COLOR.darkened(0.5), r * 3.0, 0.3)
+	var dur := clampf(seconds, 0.3, 3.0)
+	var tw := pivot.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(pivot, "rotation:y", TAU * dur * 0.9, dur)
+	tw.tween_property(pivot, "position:y", top.y + 0.12, dur * 0.5).set_trans(Tween.TRANS_SINE)
+	tw.chain().tween_property(pivot, "scale", Vector3.ZERO, 0.15)
+	tw.chain().tween_callback(pivot.queue_free)
+
+
+## Mob wind-up telegraph: a red glint gathers at the striking side of the
+## mob for the wind-up and pops just before the blow lands, so a player who
+## watches the glint can step out or parry on the pop.
+func windup_glint(enemy: Node3D, seconds: float) -> void:
+	if enemy == null or not is_instance_valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var at := enemy.global_position + Vector3(0, 1.2, 0)
+	if box.size.y > 0.1:
+		var fwd := -enemy.global_transform.basis.z
+		fwd.y = 0.0
+		fwd = fwd.normalized() if fwd.length_squared() > 0.001 else Vector3.FORWARD
+		var c := box.get_center()
+		at = Vector3(c.x, box.position.y + box.size.y * 0.72, c.z) + fwd * maxf(box.size.x, box.size.z) * 0.45
+	var q := _make_quad(true)
+	var m := q.material_override as StandardMaterial3D
+	m.albedo_texture = AssetLib.vfx_texture("star_07")
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	m.albedo_color = Color(WINDUP_COLOR, 0.0)
+	m.render_priority = 2
+	m.no_depth_test = true
+	var core := _make_quad(true)
+	var cm := core.material_override as StandardMaterial3D
+	cm.albedo_texture = AssetLib.vfx_texture("star_07")
+	cm.albedo_color = Color(1.0, 0.85, 0.7, 1.0)
+	cm.no_depth_test = true
+	cm.render_priority = 3
+	core.visible = true
+	core.scale = Vector3.ONE * 0.3
+	q.add_child(core)
+	enemy.add_child(q)
+	q.global_position = at
+	q.visible = true
+	var s := clampf(maxf(box.size.y, 1.0) * 0.6, 0.9, 2.6)
+	q.scale = Vector3.ONE * s * 0.2
+	var dur := maxf(seconds - 0.06, 0.12)
+	var tw := q.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(m, "albedo_color:a", 1.0, dur * 0.35)
+	tw.tween_property(q, "scale", Vector3.ONE * s, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_property(q, "rotation:z", PI * 0.5, dur)
+	tw.chain().tween_callback(func():
+		if is_instance_valid(q):
+			flash(q.global_position, WINDUP_COLOR, s * 0.9))
+	tw.chain().tween_property(q, "scale", Vector3.ONE * s * 1.6, 0.06)
+	tw.parallel().tween_property(m, "albedo_color:a", 0.0, 0.06)
+	tw.chain().tween_callback(q.queue_free)
+
+
+# --- Floor boss (BossBrain hooks) ---------------------------------------------
+
+const DANGER_COLOR := Color(1.0, 0.16, 0.1)
+const ENRAGE_COLOR := Color(1.0, 0.18, 0.08)
+const BAR_BREAK_COLOR := Color(0.7, 0.95, 1.0)
+var _telegraph_shader: Shader
+var _telegraphs := {}  # boss instance id -> Array[MeshInstance3D]
+
+
+## Boss wakes: a red shock ring at its feet, a ring of dust and a glint at
+## its head as it roars.
+func boss_engage(enemy: Node3D) -> void:
+	if not _valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var feet := Vector3(enemy.global_position.x, _ground_y(enemy.global_position), enemy.global_position.z)
+	var w := maxf(box.size.x, box.size.z)
+	ring(feet, DANGER_COLOR, w * 3.2, 0.6)
+	dust_ring(feet, w * 1.2)
+	var head := Vector3(box.get_center().x, box.end.y - box.size.y * 0.15, box.get_center().z)
+	_glint(head, DANGER_COLOR, w * 0.9, 0.5, true)
+	_shock_ring(head, DANGER_COLOR.darkened(0.3), w * 2.2, 0.45)
+	flash_light(head, DANGER_COLOR, 5.0)
+	_flare_braziers(enemy.global_position)
+
+
+## The arena's braziers roar up one after another, from the entry toward
+## the Guardian (Aincrad's boss rooms light their torches down the hall as
+## the raid comes in).
+func _flare_braziers(at: Vector3) -> void:
+	var near: Array = []
+	for b in get_tree().get_nodes_in_group("braziers"):
+		if b is Node3D and (b as Node3D).global_position.distance_to(at) < 30.0:
+			near.append(b)
+	near.sort_custom(func(a, b): return a.global_position.distance_to(at) > b.global_position.distance_to(at))
+	for k in near.size():
+		var b: Node3D = near[k]
+		get_tree().create_timer(0.15 + k * 0.22, false).timeout.connect(func():
+			if not is_instance_valid(b):
+				return
+			var top := b.global_position + Vector3(0, 2.4, 0)
+			_fire(top, "flame_03", true, Color(1.0, 0.55, 0.2), 0.9, 0.5, 5.0, 9.0, Vector3.UP, 18.0, 2.0, 0.5, 1.1, 0.4, false)
+			flash_light(top + Vector3(0, 0.8, 0), Color(1.0, 0.6, 0.25), 4.0)
+			Audio.play("cast", top, 0.08, -6.0, 0.6))
+
+
+## Sweep: a red sector in front of the boss that fills over the wind-up.
+func boss_sweep_warning(enemy: Node3D, reach: float, arc_deg: float, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	var c := enemy.global_position
+	_telegraph(enemy, 1, Vector3(c.x, _ground_y(c), c.z), Vector2.ONE * reach * 2.0, _forward(enemy), secs, deg_to_rad(arc_deg) * 0.5)
+	if arc_deg >= 300.0:
+		# Whirl (the Warlord's last bar): the whole circle, ringed, with the
+		# blade's glint circling the boss through the wind-up.
+		ring(Vector3(c.x, _ground_y(c) + 0.05, c.z), DANGER_COLOR, reach * 2.0, secs)
+		var box := _body_bounds(enemy)
+		var y := box.position.y + box.size.y * 0.5
+		var steps := 6
+		for k in steps:
+			var a := TAU * k / steps
+			var at := c + _forward(enemy).rotated(Vector3.UP, a) * reach * 0.55
+			get_tree().create_timer(secs * k / steps, false).timeout.connect(func():
+				_glint(Vector3(at.x, y, at.z), DANGER_COLOR, 0.9, 0.3, true))
+
+
+func boss_sweep_impact(enemy: Node3D, reach: float, arc_deg: float) -> void:
+	if not _valid(enemy):
+		return
+	var fwd := _forward(enemy)
+	var c := enemy.global_position
+	var g := _ground_y(c)
+	if arc_deg >= 300.0:
+		# Whirl: four slashes round the boss, a dust ring and a shock wave.
+		var y := _body_bounds(enemy).size.y * 0.45
+		for k in 4:
+			slash(c + Vector3(0, y, 0), fwd.rotated(Vector3.UP, TAU * k / 4.0), 2)
+		dust_ring(Vector3(c.x, g, c.z), reach)
+		_shock_ring(Vector3(c.x, g + 0.8, c.z), Color(1.0, 0.6, 0.4), reach * 1.6, 0.35)
+		flash_light(Vector3(c.x, g + 1.2, c.z), Color(1.0, 0.55, 0.35), 5.0)
+		return
+	slash(c + Vector3(0, _body_bounds(enemy).size.y * 0.45, 0), fwd, 2)
+	var half := deg_to_rad(arc_deg) * 0.5
+	for k in 5:
+		var a := lerpf(-half, half, k / 4.0)
+		var d := fwd.rotated(Vector3.UP, a)
+		puff(Vector3(c.x, g, c.z) + d * reach * 0.8, 1.4)
+	flash(Vector3(c.x, g + 1.0, c.z) + fwd * reach * 0.5, Color(1.0, 0.55, 0.35), 2.5)
+
+
+## Charge: a lane from the boss to where it will stop, filling toward the end.
+func boss_charge_warning(enemy: Node3D, from: Vector3, to: Vector3, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	var d := to - from
+	d.y = 0.0
+	var length := maxf(d.length(), 1.0)
+	var half_w := 1.3 + float(enemy.get("size").z if enemy.get("size") is Vector3 else 2.0) * 0.5 + 1.0
+	var mid := from + d * 0.5
+	var t := _telegraph(enemy, 2, Vector3(mid.x, _ground_y(mid), mid.z), Vector2(half_w * 2.0, length), d.normalized() if d.length() > 0.01 else _forward(enemy), secs)
+	# The end of the run gets a target ring.
+	if t:
+		ring(Vector3(to.x, _ground_y(to), to.z), DANGER_COLOR, half_w * 2.4, secs)
+
+
+func boss_charge_impact(enemy: Node3D, pos: Vector3) -> void:
+	var g := Vector3(pos.x, _ground_y(pos), pos.z)
+	dust_ring(g, 3.0)
+	puff(g, 2.5)
+	flash(g + Vector3(0, 1.2, 0), Color(1.0, 0.6, 0.3), 3.0)
+	flash_light(g + Vector3(0, 1.0, 0), Color(1.0, 0.55, 0.3), 5.0)
+
+
+## Slam: a circle around the impact point; the fill reaching the rim is the hit.
+func boss_slam_warning(enemy: Node3D, pos: Vector3, radius: float, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	_telegraph(enemy, 0, Vector3(pos.x, _ground_y(pos), pos.z), Vector2.ONE * radius * 2.0, Vector3.FORWARD, secs)
+
+
+func boss_slam_impact(enemy: Node3D, pos: Vector3, radius: float) -> void:
+	var g := Vector3(pos.x, _ground_y(pos), pos.z)
+	dust_ring(g, radius)
+	ring(g, Color(1.0, 0.8, 0.6), radius * 2.2, 0.45, "circle_03")
+	_fire(g + Vector3(0, 0.3, 0), "dirt_02", false, Color(0.55, 0.45, 0.35, 1.0), 0.9, 0.9, 4.0, 8.0, Vector3.UP, 40.0, -16.0, 0.25, 0.6, radius * 0.4, false)
+	_shock_ring(g + Vector3(0, 0.6, 0), Color(1.0, 0.7, 0.4), radius * 1.4, 0.3)
+	flash_light(g + Vector3(0, 1.0, 0), Color(1.0, 0.6, 0.3), 6.0)
+	var me := get_tree().get_first_node_in_group("player") as Node3D
+	if me and me.has_method("shake") and me.global_position.distance_to(g) < radius * 2.5:
+		me.call("shake", 0.35)
+
+
+## Rockfall: a marked ring on the ground, and a stone from the broken crown
+## above the summit that drops to land exactly when the warning runs out.
+func boss_rockfall_warning(enemy: Node3D, pos: Vector3, radius: float, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	var g := Vector3(pos.x, _ground_y(pos), pos.z)
+	_telegraph(enemy, 0, g, Vector2.ONE * radius * 2.0, Vector3.FORWARD, secs)
+	var rock := MeshInstance3D.new()
+	rock.mesh = WorldArt.boulder_mesh()
+	if _rock_mat == null:
+		_rock_mat = StandardMaterial3D.new()
+		_rock_mat.albedo_color = Color(0.46, 0.43, 0.4)
+		_rock_mat.roughness = 0.95
+	rock.material_override = _rock_mat
+	rock.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	add_child(rock)
+	var sz := radius * 0.55
+	rock.global_transform = Transform3D(Basis.from_euler(Vector3(randf() * TAU, randf() * TAU, 0.0)).scaled(Vector3(sz, sz * 0.8, sz)), g + Vector3(0, 16.0, 0))
+	# Track it with the telegraphs so boss_reset clears it too.
+	var id := enemy.get_instance_id()
+	var list: Array = _telegraphs.get(id, [])
+	list.append(rock)
+	_telegraphs[id] = list
+	var fall := minf(0.55, secs)
+	var tw := rock.create_tween()
+	tw.tween_interval(maxf(secs - fall, 0.0))
+	tw.tween_property(rock, "global_position", g + Vector3(0, sz * 0.35, 0), fall).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(rock, "rotation", rock.rotation + Vector3(2.5, 1.2, 0.0), fall)
+	tw.tween_interval(0.9)
+	tw.tween_property(rock, "global_position", g - Vector3(0, sz, 0), 0.6)
+	tw.tween_callback(rock.queue_free)
+	# A trickle of grit from above as the warning starts.
+	_fire(g + Vector3(0, 9.0, 0), "dirt_02", false, Color(0.5, 0.45, 0.4, 0.8), 0.5, 1.2, 0.5, 2.0, Vector3.DOWN, 15.0, -9.0, 0.08, 0.2, radius * 0.3, false)
+
+
+func boss_rockfall_impact(enemy: Node3D, pos: Vector3, radius: float) -> void:
+	var g := Vector3(pos.x, _ground_y(pos), pos.z)
+	dust_ring(g, radius * 0.8)
+	_fire(g + Vector3(0, 0.3, 0), "dirt_02", false, Color(0.55, 0.47, 0.38, 1.0), 0.7, 0.8, 3.0, 7.0, Vector3.UP, 50.0, -18.0, 0.2, 0.5, radius * 0.35, false)
+	_shock_ring(g + Vector3(0, 0.4, 0), Color(1.0, 0.75, 0.5), radius * 1.2, 0.25)
+	var me := get_tree().get_first_node_in_group("player") as Node3D
+	if me and me.has_method("shake") and me.global_position.distance_to(g) < radius * 3.0:
+		me.call("shake", 0.2)
+
+
+var _rock_mat: StandardMaterial3D
+
+
+## Chest opened: the lid's light spills out as a pillar of motes and a star
+## in the item's rank colour (Crafting ranks; -1 = no gear, warm gold).
+func chest_open(pos: Vector3, rank := -1) -> void:
+	var col := Color(1.0, 0.82, 0.4) if rank < 0 else Crafting.rank_color(clampi(rank, 0, 5))
+	var top := pos + Vector3(0, 0.8, 0)
+	flash(top, col.lightened(0.3), 1.4)
+	_glint(top + Vector3(0, 0.3, 0), col, 1.6 + 0.35 * maxi(rank, 0), 0.9, true)
+	ring(pos + Vector3(0, 0.05, 0), col, 2.6, 0.5)
+	_fire(top, "star_06", false, col, 0.6, 1.4, 1.0, 3.0, Vector3.UP, 18.0, 1.5, 0.08, 0.18, 0.35, false)
+	flash_light(top, col, 3.0 + maxi(rank, 0))
+	if rank >= 2:
+		# Rare and above: a second, slower bloom so a good drop feels special.
+		get_tree().create_timer(0.25).timeout.connect(func():
+			if is_inside_tree():
+				_glint(top + Vector3(0, 0.6, 0), col.lightened(0.25), 2.4, 1.1, true)
+				_shock_ring(top, col, 3.0, 0.4))
+
+
+## Idle twinkle on an unopened chest: a small star glints somewhere on it
+## every second or so. Call with on = false to stop (e.g. while it refills).
+func chest_sparkle(node: Node3D, on := true, color := Color(1.0, 0.88, 0.5)) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var old := node.get_node_or_null("VFXSparkle")
+	if not on:
+		if old:
+			old.queue_free()
+		return
+	if old:
+		return
+	var t := Timer.new()
+	t.name = "VFXSparkle"
+	t.wait_time = 1.1 + randf() * 0.5
+	t.autostart = true
+	node.add_child(t)
+	t.timeout.connect(func():
+		if not is_inside_tree() or not node.is_visible_in_tree():
+			return
+		var off := Vector3(randf_range(-0.45, 0.45), randf_range(0.35, 0.85), randf_range(-0.3, 0.3))
+		_glint(node.global_position + node.global_transform.basis * off, color, 0.35, 0.5, true))
+
+
+## Sword Skill glow: the whole weapon lights up in the skill's hue (as the
+## system takes over the swing), a grown additive shell around every mesh
+## of the weapon that holds, then fades.
+func blade_glow(weapon: Node3D, color: Color, secs := 0.45) -> void:
+	if weapon == null or not is_instance_valid(weapon):
+		return
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	# Mixed, not additive: an additive shell vanishes over a sunlit plaza.
+	m.cull_mode = BaseMaterial3D.CULL_FRONT
+	m.grow = true
+	m.grow_amount = 0.03
+	m.albedo_color = Color(color.lightened(0.25), 0.0)
+	var meshes: Array = weapon.find_children("*", "MeshInstance3D", true, false)
+	if weapon is MeshInstance3D:
+		meshes.append(weapon)
+	for mi in meshes:
+		(mi as MeshInstance3D).material_overlay = m
+	var tw := weapon.create_tween()
+	tw.tween_property(m, "albedo_color:a", 0.8, 0.06)
+	tw.tween_interval(maxf(secs - 0.26, 0.0))
+	tw.tween_property(m, "albedo_color:a", 0.0, 0.2)
+	tw.tween_callback(func():
+		for mi in meshes:
+			if is_instance_valid(mi) and (mi as MeshInstance3D).material_overlay == m:
+				(mi as MeshInstance3D).material_overlay = null)
+
+
+# --- Duels -----------------------------------------------------------------------
+
+const DUEL_COLOR := Color(1.0, 0.42, 0.3)
+var _duel_ring: MeshInstance3D
+
+
+func duel_countdown(n: int) -> void:
+	var l := get_tree().get_first_node_in_group("duel_countdown") as Label
+	UITheme.style_duel_label(l)
+
+
+## Fight begins: a crossed-blades glint between the two duellists and a
+## ring at each one's feet.
+func duel_start(a: Node3D, b: Node3D) -> void:
+	UITheme.style_duel_label(get_tree().get_first_node_in_group("duel_countdown") as Label)
+	for p in [a, b]:
+		if _valid(p):
+			var g: Vector3 = p.global_position
+			ring(Vector3(g.x, _ground_y(g) + 0.05, g.z), DUEL_COLOR, 2.4, 0.5)
+	if _valid(a) and _valid(b):
+		var mid := (a.global_position + b.global_position) * 0.5 + Vector3(0, 1.4, 0)
+		_glint(mid, DUEL_COLOR, 2.2, 0.7, true)
+		_glint(mid, Color(1, 1, 1), 1.0, 0.5, true)
+		flash_light(mid, DUEL_COLOR, 4.0)
+
+
+## PvP telegraph: the attacker's blade catches the light just before the blow
+## lands (the window to parry).
+func duel_incoming(attacker: Node3D, windup: float) -> void:
+	if not _valid(attacker):
+		return
+	var f := _player_forward(attacker)
+	_glint(attacker.global_position + f * 0.7 + Vector3(0, 1.3, 0), WINDUP_COLOR, 0.9, maxf(windup, 0.15) + 0.1, true)
+
+
+func duel_end(winner: Node3D, _loser: Node3D) -> void:
+	UITheme.style_duel_label(get_tree().get_first_node_in_group("duel_countdown") as Label)
+	if _valid(winner):
+		var g := winner.global_position
+		ring(Vector3(g.x, _ground_y(g) + 0.05, g.z), Color(1.0, 0.85, 0.35), 3.0, 0.7)
+		_fire(g + Vector3(0, 1.0, 0), "star_05", true, Color(1.0, 0.85, 0.35), 0.8, 1.0, 1.5, 3.5, Vector3.UP, 60.0, -3.0, 0.1, 0.25, 0.0, false)
+
+
+## The forfeit circle: a low translucent wall on its edge while a duel runs.
+func duel_ring(center: Vector3, radius: float, on: bool) -> void:
+	if _duel_ring != null and is_instance_valid(_duel_ring):
+		_duel_ring.queue_free()
+	_duel_ring = null
+	if not on:
+		return
+	var cm := CylinderMesh.new()
+	cm.top_radius = radius
+	cm.bottom_radius = radius
+	cm.height = 1.6
+	cm.radial_segments = 96
+	cm.cap_top = false
+	cm.cap_bottom = false
+	var m := ShaderMaterial.new()
+	m.shader = _duel_wall_shader()
+	m.set_shader_parameter("color", DUEL_COLOR)
+	_duel_ring = MeshInstance3D.new()
+	_duel_ring.mesh = cm
+	_duel_ring.material_override = m
+	_duel_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_duel_ring)
+	_duel_ring.global_position = Vector3(center.x, _ground_y(center) + 0.8, center.z)
+
+
+var _duel_wall: Shader
+
+
+func _duel_wall_shader() -> Shader:
+	if _duel_wall == null:
+		_duel_wall = Shader.new()
+		_duel_wall.code = """
+shader_type spatial;
+render_mode unshaded, blend_mix, cull_disabled, depth_draw_never, shadows_disabled;
+uniform vec4 color : source_color = vec4(1.0, 0.42, 0.3, 1.0);
+void fragment() {
+	// Fades upward; thin hex-ish ticks around the circumference; slow scroll.
+	float ticks = smoothstep(0.92, 1.0, abs(sin((UV.x * 360.0 + TIME * 4.0) * 3.14159 / 2.0)));
+	ALBEDO = color.rgb;
+	ALPHA = clamp(UV.y * UV.y * 0.32 + ticks * UV.y * 0.25, 0.0, 0.6);
+}
+"""
+	return _duel_wall
+
+
+# --- Hidden class arts ---------------------------------------------------------
+
+const STILL_COLOR := Color(0.62, 0.92, 1.0)   # Stillblade: clear water
+const HEARTH_COLOR := Color(1.0, 0.62, 0.22)  # Hearthwright: banked embers
+
+
+## Layered on top of the normal swing fx whenever a class art is cast.
+func class_art_cast(player: Node3D, cls: String, art_id: String) -> void:
+	if not _valid(player):
+		return
+	var f := _player_forward(player)
+	var o := player.global_position
+	var g := Vector3(o.x, _ground_y(o), o.z)
+	match art_id:
+		"still_water":
+			# A single calm, wide cut with a mirror-still ripple under it.
+			_tinted_slash(o + f * 0.9, f, STILL_COLOR, 1.1, 0.75, 0.0, 0.3)
+			ring(g + Vector3(0, 0.04, 0), STILL_COLOR, 2.2, 0.45)
+			get_tree().create_timer(0.12).timeout.connect(func():
+				if is_inside_tree():
+					ring(g + Vector3(0, 0.04, 0), Color(STILL_COLOR, 0.7), 3.4, 0.6))
+			_glint(o + f * 1.6 + Vector3(0, 1.1, 0), STILL_COLOR, 0.9, 0.35, true)
+			_fire(o + f * 1.4 + Vector3(0, 1.0, 0), "spark_04", true, STILL_COLOR, 0.5, 0.3, 4.0, 8.0, f, 25.0, -6.0, 0.1, 0.25, 0.0, true)
+		"breaking_wave":
+			# Pommel strike: a white-water burst thrown forward.
+			var at := o + f * 1.3 + Vector3(0, 1.0, 0)
+			flash(at, Color(0.85, 0.97, 1.0), 1.3)
+			_shock_ring(at, STILL_COLOR, 2.2, 0.28)
+			_fire(at, "spark_04", true, Color(0.92, 0.98, 1.0), 0.8, 0.35, 5.0, 10.0, f + Vector3(0, 0.35, 0), 32.0, -12.0, 0.12, 0.3, 0.0, true)
+			_fire(at, "star_05", true, STILL_COLOR, 0.5, 0.5, 2.0, 5.0, f + Vector3(0, 0.5, 0), 40.0, -10.0, 0.08, 0.18, 0.0, false)
+		"hearth_flare":
+			# A half-circle of hearth-fire washes over the ground in front.
+			var mi := _telegraph(player, 1, g, Vector2.ONE * 6.0, f, 0.22, PI / 2.0)
+			if mi:
+				(mi.material_override as ShaderMaterial).set_shader_parameter("color", HEARTH_COLOR)
+			_tinted_slash(o + f * 0.9, f, HEARTH_COLOR, 1.2, 0.75, 0.0, 0.34)
+			_fire(g + f * 1.5 + Vector3(0, 0.3, 0), "star_05", true, Color(1.0, 0.7, 0.3, 1.0), 0.6, 0.9, 1.2, 3.0, Vector3.UP, 50.0, -2.0, 0.1, 0.22, 1.4, false)
+			flash_light(o + f * 1.5 + Vector3(0, 1.0, 0), HEARTH_COLOR, 4.0)
+
+
+## Hearth Glow landed: a warm ring, rising embers and a small light that
+## stays with the player for the buff's 10 s and fades out.
+func hearth_glow(player: Node3D, secs := 10.0) -> void:
+	if not _valid(player):
+		return
+	var o := player.global_position
+	ring(Vector3(o.x, _ground_y(o) + 0.04, o.z), HEARTH_COLOR, 2.0, 0.6)
+	_fire(o + Vector3(0, 0.4, 0), "star_05", true, Color(1.0, 0.75, 0.35), 0.6, 1.2, 0.6, 1.8, Vector3.UP, 20.0, -0.5, 0.08, 0.18, 0.5, false)
+	var old := player.get_node_or_null("VFXHearthGlow")
+	if old:
+		old.queue_free()
+	var l := OmniLight3D.new()
+	l.name = "VFXHearthGlow"
+	l.light_color = HEARTH_COLOR
+	l.light_energy = 0.9
+	l.omni_range = 3.2
+	l.shadow_enabled = false
+	l.position = Vector3(0, 1.0, 0)
+	player.add_child(l)
+	var tw := l.create_tween()
+	tw.tween_property(l, "light_energy", 0.6, 0.6)
+	tw.tween_interval(maxf(secs - 2.0, 0.0))
+	tw.tween_property(l, "light_energy", 0.0, 1.4)
+	tw.tween_callback(l.queue_free)
+
+
+## A crystal crushed in the hand (SAO's crystals): it breaks into shards of
+## its colour, then a Healing Crystal wraps the body in rising motes and a
+## soft pillar, and a Teleport Crystal swallows it in a tall column of light
+## (the move itself happens right after, in world.crystal_effect).
+func crystal_burst(pos: Vector3, color: Color, teleport := false) -> void:
+	var hand := pos + Vector3(0, 0.15, 0)
+	burst_at(AABB(hand - Vector3(0.18, 0.18, 0.18), Vector3(0.36, 0.36, 0.36)), color)
+	var feet := pos - Vector3(0, 1.0, 0)
+	ring(feet, color, 2.6 if teleport else 2.0, 0.6)
+	_light_pillar(feet, color, 0.75 if teleport else 0.55, 6.0 if teleport else 2.6, 1.4 if teleport else 0.8, 1.6 if teleport else 1.0)
+	_fire(feet + Vector3(0, 0.2, 0), "star_05", true, color.lightened(0.35), 1.0, 1.1,
+		1.2 if not teleport else 3.5, 2.4 if not teleport else 6.0, Vector3.UP, 12.0, 0.0, 0.05, 0.12, 0.55, false)
+	if teleport:
+		_shock_ring(pos, color.lightened(0.3), 3.2, 0.5)
+		flash(pos, Color(1, 1, 1), 2.6)
+
+
+var _pillar_shader: Shader
+
+
+func _light_pillar(feet: Vector3, color: Color, radius: float, height: float, dur: float, strength := 1.0) -> void:
+	if _pillar_shader == null:
+		_pillar_shader = Shader.new()
+		_pillar_shader.code = """shader_type spatial;
+render_mode unshaded, blend_mix, cull_disabled, depth_draw_never, shadows_disabled;
+uniform vec4 color : source_color = vec4(1.0);
+uniform float fade = 1.0;
+uniform float strength = 1.0;
+void fragment() {
+	// UV.y: 0 at the top, 1 at the base. Bright at the base, gone at the top,
+	// with thin vertical streaks drifting upward and a brighter rim.
+	float up = 1.0 - UV.y;
+	float body = pow(UV.y, 1.6);
+	float streak = 0.55 + 0.45 * sin(UV.x * 62.83 + sin(UV.x * 18.0) * 2.0);
+	float drift = 0.7 + 0.3 * sin(up * 18.0 - TIME * 9.0 + UV.x * 25.0);
+	float rim = pow(1.0 - abs(dot(NORMAL, VIEW)), 2.0);
+	// Mixed, not additive: additive light washes out against a daylit plaza.
+	ALBEDO = mix(color.rgb, vec3(1.0), 0.25 + 0.45 * body);
+	ALPHA = clamp(pow(UV.y, 0.9) * streak * drift * (0.3 + 0.8 * rim) * 0.85 * strength, 0.0, 0.92) * fade;
+}
+"""
+	var cm := CylinderMesh.new()
+	cm.top_radius = radius
+	cm.bottom_radius = radius
+	cm.height = height
+	cm.radial_segments = 24
+	cm.rings = 1
+	cm.cap_top = false
+	cm.cap_bottom = false
+	var mi := MeshInstance3D.new()
+	mi.mesh = cm
+	var m := ShaderMaterial.new()
+	m.shader = _pillar_shader
+	m.set_shader_parameter("color", Color(color, 1.0))
+	m.set_shader_parameter("fade", 0.0)
+	m.set_shader_parameter("strength", strength)
+	mi.material_override = m
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
+	mi.global_position = feet + Vector3(0, height * 0.5, 0)
+	mi.scale = Vector3(0.6, 1.0, 0.6)
+	var tw := mi.create_tween()
+	tw.set_parallel(true)
+	tw.tween_method(func(v: float): m.set_shader_parameter("fade", v), 0.0, 1.0, dur * 0.18)
+	tw.tween_property(mi, "scale", Vector3(1.15, 1.0, 1.15), dur).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.chain().tween_method(func(v: float): m.set_shader_parameter("fade", v), 1.0, 0.0, dur * 0.7)
+	tw.chain().tween_callback(mi.queue_free)
+
+
+## Switch (SAO party tactic): one player's parry opened the mob and another
+## cut in. Two crossing streaks over the mob, a shock ring and "SWITCH"
+## rising off it, in the party's cool white-teal.
+const SWITCH_COLOR := Color(0.55, 1.0, 0.9)
+
+
+func switch_flash(enemy: Node3D, _from: int, _to: int) -> void:
+	if not _valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var c := box.get_center()
+	var f := _forward(enemy)
+	var o := c - f * 0.2 - Vector3(0, 1.1, 0)  # _tinted_slash lifts by 1.1
+	_tinted_slash(o, f, SWITCH_COLOR, 1.1, 0.75, 0.9, 0.32)
+	_tinted_slash(o, f, SWITCH_COLOR.lightened(0.3), 1.1, 0.75, -0.9, 0.32)
+	_shock_ring(c, SWITCH_COLOR, 2.6 + box.size.y * 0.4, 0.45)
+	_glint(c + Vector3(0, box.size.y * 0.25, 0), SWITCH_COLOR, 1.4, 0.4, true)
+	flash_light(c, SWITCH_COLOR, 5.0)
+	var l := Label3D.new()
+	l.text = "SWITCH"
+	l.font = UITheme.ui_bold()
+	l.font_size = 64
+	l.outline_size = 12
+	l.outline_modulate = Color(0.02, 0.12, 0.14, 0.9)
+	l.modulate = Color(SWITCH_COLOR.lightened(0.4), 1.0)
+	l.pixel_size = 0.006
+	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	l.no_depth_test = true
+	l.render_priority = 10
+	add_child(l)
+	l.global_position = Vector3(c.x, box.end.y + 1.2, c.z)
+	l.scale = Vector3.ONE * 0.6
+	var tw := l.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(l, "scale", Vector3.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(l, "global_position:y", l.global_position.y + 0.9, 1.1).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(l, "modulate:a", 0.0, 0.45).set_delay(0.65)
+	tw.tween_property(l, "outline_modulate:a", 0.0, 0.45).set_delay(0.65)
+	tw.chain().tween_callback(l.queue_free)
+
+
+## Crossing into a settlement's Inner Area (or back out): the screen edges
+## glow cool cyan (in) or amber (out) and a thin scan line sweeps down once,
+## like the system re-tagging the area. Screen-space; the toast is the HUD's.
+var _area_shader: Shader
+
+
+func inner_area_notice(inside: bool) -> void:
+	if _area_shader == null:
+		_area_shader = Shader.new()
+		_area_shader.code = """shader_type canvas_item;
+uniform vec4 tint : source_color = vec4(0.55, 0.9, 1.0, 1.0);
+uniform float fade = 1.0;
+uniform float scan = 0.0;
+void fragment() {
+	vec2 p = UV * 2.0 - 1.0;
+	float edge = smoothstep(0.55, 1.05, max(abs(p.x) * 0.92, abs(p.y)));
+	float line = exp(-pow((UV.y - scan) * 90.0, 2.0)) * 0.55 + exp(-pow((UV.y - scan) * 14.0, 2.0)) * 0.12;
+	COLOR = vec4(tint.rgb, clamp(edge * 0.32 + line, 0.0, 1.0) * fade);
+}
+"""
+	var layer := CanvasLayer.new()
+	layer.layer = 4
+	add_child(layer)
+	var r := ColorRect.new()
+	r.set_anchors_preset(Control.PRESET_FULL_RECT)
+	r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var m := ShaderMaterial.new()
+	m.shader = _area_shader
+	m.set_shader_parameter("tint", Color(0.55, 0.9, 1.0) if inside else Color(1.0, 0.7, 0.4))
+	m.set_shader_parameter("fade", 1.0)
+	m.set_shader_parameter("scan", -0.1)
+	r.material = m
+	layer.add_child(r)
+	var tw := layer.create_tween()
+	tw.tween_method(func(v: float): m.set_shader_parameter("scan", v), -0.1, 1.1, 0.7).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_method(func(v: float): m.set_shader_parameter("fade", v), 1.0, 0.0, 0.5)
+	tw.tween_callback(layer.queue_free)
+
+
+## Field mobs (Aincrad's first floor behaviours, gameplay's enemy.gd).
+const RUSH_COLOR := Color(1.0, 0.5, 0.2)
+const HOWL_COLOR := Color(0.7, 0.8, 1.0)
+const LURE_COLOR := Color(1.0, 0.78, 0.3)
+
+
+## A boar paws the ground before its charge: dust kicked up at its feet, a
+## warning glint, and an orange lane to where the charge will end.
+func mob_rush_warning(enemy: Node3D, to: Vector3, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	var from := enemy.global_position
+	var d := to - from
+	d.y = 0.0
+	var length := maxf(d.length(), 1.0)
+	var w := 1.4
+	var mid := from + d * 0.5
+	var t := _telegraph(enemy, 2, Vector3(mid.x, _ground_y(mid), mid.z), Vector2(w, length), d.normalized() if d.length() > 0.01 else _forward(enemy), secs)
+	if t and t.material_override is ShaderMaterial:
+		(t.material_override as ShaderMaterial).set_shader_parameter("color", RUSH_COLOR)
+	var feet := Vector3(from.x, _ground_y(from), from.z)
+	for k in 3:
+		get_tree().create_timer(secs * 0.25 * k, false).timeout.connect(func():
+			if _valid(enemy):
+				puff(enemy.global_position - _forward(enemy) * 0.4, 0.8))
+	var box := _body_bounds(enemy)
+	_glint(Vector3(box.get_center().x, box.end.y + 0.2, box.get_center().z), RUSH_COLOR, 0.9, secs, true)
+	ring(feet, RUSH_COLOR, 1.6, 0.4)
+
+
+## A wolf howls (or a vine's scent spreads) and packmates answer: a ring
+## rolls out over the ground and a pale shock ring leaves the caller's head;
+## every answering mob gets a small glint.
+func mob_pack_call(enemy: Node3D, answered: int) -> void:
+	if not _valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var head := Vector3(box.get_center().x, box.end.y, box.get_center().z)
+	var col := LURE_COLOR if str(enemy.get("pack")) == "vine" else HOWL_COLOR
+	_shock_ring(head, col, 2.2, 0.5)
+	get_tree().create_timer(0.15, false).timeout.connect(func(): _shock_ring(head, col, 3.4, 0.6))
+	ring(Vector3(head.x, _ground_y(head), head.z), col, 10.0 + 2.0 * answered, 0.9)
+	var pk := str(enemy.get("pack"))
+	if pk == "":
+		return
+	for e in get_tree().get_nodes_in_group("enemies"):
+		if e != enemy and e is Node3D and str(e.get("pack")) == pk and _valid(e) \
+				and (e as Node3D).global_position.distance_to(enemy.global_position) < 22.0:
+			var eb := _body_bounds(e)
+			_glint(Vector3(eb.get_center().x, eb.end.y + 0.3, eb.get_center().z), col, 0.7, 0.6, true)
+
+
+## A Snaptrap's swollen fruit bursts: a cloud of amber scent spores, pulp
+## spray and a wide ring showing how far the scent carries.
+func mob_lure_burst(enemy: Node3D) -> void:
+	if not _valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var top := Vector3(box.get_center().x, box.end.y - 0.2, box.get_center().z)
+	burst_at(AABB(top - Vector3(0.25, 0.25, 0.25), Vector3(0.5, 0.5, 0.5)), LURE_COLOR)
+	_fire(top, "smoke_03", false, Color(LURE_COLOR, 0.55), 1.0, 1.6, 0.8, 2.2, Vector3.UP, 80.0, -0.3, 0.6, 1.4, 0.4, false)
+	_fire(top, "star_05", true, LURE_COLOR.lightened(0.3), 0.8, 1.2, 1.5, 3.5, Vector3.UP, 70.0, -1.5, 0.08, 0.18, 0.0, false)
+	ring(Vector3(top.x, _ground_y(top), top.z), LURE_COLOR, 22.0, 1.2)
+
+
+## Last bar: the lord throws down axe and buckler and draws the curved
+## longblade (MobDress.draw_blade) in a flash of steel light.
+func boss_weapon_swap(enemy: Node3D, _data: Dictionary) -> void:
+	if not _valid(enemy):
+		return
+	var tip := MobDress.draw_blade(enemy)
+	var box := _body_bounds(enemy)
+	var at: Vector3 = tip.global_position if tip else box.get_center()
+	_glint(at, Color(0.85, 0.92, 1.0), 2.4, 0.7, true)
+	flash(box.get_center(), Color(1.0, 0.9, 0.7), 3.0)
+	flash_light(box.get_center(), Color(1.0, 0.75, 0.4), 8.0)
+	_tinted_slash(box.get_center() - Vector3(0, 1.1, 0) + Vector3(0, box.size.y * 0.1, 0), _forward(enemy), Color(1.0, 0.8, 0.45), 2.4, 0.2, 0.0, 0.45)
+	_shock_ring(box.get_center(), ENRAGE_COLOR, box.size.y * 1.6, 0.6)
+
+
+## A leap slam: the body arcs from `from` to the landing spot over the
+## wind-up (the enemy itself snaps there on impact), shadowed by the ring.
+func boss_leap(enemy: Node3D, from: Vector3, to: Vector3, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	var m: Node3D = enemy.get("_mesh")
+	if m == null:
+		return
+	var base := m.position
+	var off := m.global_position - enemy.global_position
+	var hgt := clampf(from.distance_to(to) * 0.5, 3.0, 8.0)
+	var crouch := secs * 0.3
+	puff(from, 2.0)
+	var tw := m.create_tween()
+	tw.tween_interval(crouch)
+	tw.tween_method(func(t: float):
+		if is_instance_valid(m):
+			var p := from.lerp(to, t)
+			p.y += sin(t * PI) * hgt
+			m.global_position = p + off, 0.0, 1.0, secs - crouch).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	get_tree().create_timer(secs + 0.12, false).timeout.connect(func():
+		if is_instance_valid(m):
+			m.position = base)
+
+
+## The Guardian's opening leap off its throne (telegraph "descend"): a roar
+## that rolls out as a shock ring, dust and grit shaken off the dais, a red
+## flash in the eyes' place, and a heavier landing (dust, shake).
+func boss_descend(enemy: Node3D, from: Vector3, to: Vector3, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var head := Vector3(box.get_center().x, box.end.y - box.size.y * 0.12, box.get_center().z)
+	Audio.play("boss_roar", head, 0.04, 2.0, 0.85)
+	_shock_ring(head, DANGER_COLOR.darkened(0.2), box.size.x * 3.0, 0.5)
+	_glint(head, DANGER_COLOR, 0.9, 0.45, true)
+	flash_light(head, DANGER_COLOR, 4.0)
+	var dais := Vector3(from.x, _ground_y(from), from.z)
+	dust_ring(dais, 2.6)
+	_fire(dais + Vector3(0, 0.6, 0), "dirt_02", false, Color(0.5, 0.45, 0.42, 1.0), 0.9, 0.8, 3.0, 5.0, Vector3.UP, 50.0, -12.0, 0.2, 0.45, 1.6, false)
+	var me := get_tree().get_first_node_in_group("player") as Node3D
+	if me and me.has_method("shake"):
+		me.call("shake", 0.2)
+	get_tree().create_timer(secs, false).timeout.connect(func():
+		var g := Vector3(to.x, _ground_y(to), to.z)
+		dust_ring(g, 5.0)
+		puff(g, 3.0)
+		if me and is_instance_valid(me) and me.has_method("shake"):
+			me.call("shake", 0.45))
+
+
+## A blade turned by plate (armoured halberdiers before they are staggered):
+## white-gold sparks off the armour and a short bright flash.
+func mob_plated_hit(enemy: Node3D, from_dir: Vector3) -> void:
+	if not _valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var d := from_dir
+	d.y = 0.0
+	d = d.normalized() if d.length_squared() > 0.001 else _forward(enemy)
+	var at := box.get_center() + Vector3(0, box.size.y * 0.1, 0) - d * box.size.z * 0.4
+	_fire(at, "spark_04", true, Color(1.0, 0.92, 0.6), 0.9, 0.25, 4.0, 8.0, (-d + Vector3.UP * 0.6).normalized(), 50.0, -9.0, 0.05, 0.12, 0.0, true)
+	_glint(at, Color(1.0, 0.95, 0.8), 0.8, 0.25, true)
+	Audio.play("block", at, 0.1, -4.0, 1.3)
+
+
+func _player_forward(player: Node3D) -> Vector3:
+	var m = player.get("model")
+	return _forward(m) if m is Node3D else _forward(player)
+
+
+## A slash arc in any colour (the pooled slashes are coloured by kind).
+func _tinted_slash(origin: Vector3, forward: Vector3, col: Color, size: float, pitch: float, roll: float, dur: float) -> void:
+	var mi := _make_slash()
+	add_child(mi)
+	var mat := mi.material_override as StandardMaterial3D
+	mat.albedo_color = Color(col, 1.0)
+	var f := Vector3(forward.x, 0.0, forward.z)
+	f = f.normalized() if f.length_squared() > 0.001 else Vector3.FORWARD
+	mi.visible = true
+	mi.global_position = origin + Vector3(0, 1.1, 0)
+	mi.look_at(mi.global_position - f, Vector3.UP)
+	mi.rotate_object_local(Vector3.RIGHT, -pitch)
+	mi.rotate_object_local(Vector3.FORWARD, roll)
+	mi.scale = Vector3.ONE * size * 0.6
+	var tw := mi.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(mi, "scale", Vector3.ONE * size * 1.2, dur).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(mat, "albedo_color:a", 0.0, dur * 0.7).set_delay(dur * 0.3)
+	tw.chain().tween_callback(mi.queue_free)
+
+
+## An HP bar emptied: a ring of glass shards bursts off the boss with a cold
+## flash, like the bar itself breaking.
+func boss_bar_break(enemy: Node3D, bar_left: int, bars: int) -> void:
+	if not _valid(enemy):
+		return
+	var box := _body_bounds(enemy)
+	var shrink := box.grow(-minf(box.size.x, box.size.z) * 0.2)
+	burst_at(shrink if shrink.size.x > 0.1 else box, BAR_BREAK_COLOR, true)
+	# Flash on the camera side of the body so it is never hidden inside it.
+	var chest := box.get_center() + Vector3(0, box.size.y * 0.1, 0)
+	var cam := get_viewport().get_camera_3d()
+	if cam:
+		chest += (cam.global_position - chest).normalized() * maxf(box.size.x, box.size.z) * 0.6
+	_shock_ring(chest, BAR_BREAK_COLOR, maxf(box.size.x, box.size.z) * 2.6, 0.4)
+	_glint(chest, Color(1, 1, 1), maxf(box.size.y, 1.0) * 1.1, 0.35)
+	flash_light(chest, BAR_BREAK_COLOR, 6.0)
+	if bars > 0 and bar_left == 1:
+		boss_enrage(enemy, 0.0)
+
+
+## Enrage (last bar): the body flares red for `secs`, then keeps a faint red
+## rim until the boss resets or dies. Red embers rise off it while it roars.
+func boss_enrage(enemy: Node3D, secs: float) -> void:
+	if not _valid(enemy):
+		return
+	var mat := _enrage_mat(enemy)
+	var tw := enemy.create_tween()
+	if secs > 0.0:
+		var pulses := maxi(int(secs / 0.45), 1)
+		for i in pulses:
+			tw.tween_property(mat, "shader_parameter/amount", 0.75, 0.12)
+			tw.tween_property(mat, "shader_parameter/amount", 0.3, 0.3)
+		var box := _body_bounds(enemy)
+		_fire(box.get_center(), "flame_04", true, ENRAGE_COLOR, 0.8, minf(secs, 2.0), 1.0, 3.0, Vector3.UP, 35.0, 3.0, 0.3, 0.7, maxf(box.size.x, box.size.z) * 0.4, false)
+		flash_light(box.get_center(), ENRAGE_COLOR, 6.0)
+	tw.tween_property(mat, "shader_parameter/amount", 0.14, 0.4)
+
+
+func boss_reset(enemy: Node3D) -> void:
+	if enemy == null:
+		return
+	var id := enemy.get_instance_id()
+	for t in _telegraphs.get(id, []):
+		if is_instance_valid(t):
+			t.queue_free()
+	_telegraphs.erase(id)
+	if is_instance_valid(enemy) and enemy.has_meta("vfx_enrage"):
+		for mi in enemy.find_children("*", "MeshInstance3D", true, false):
+			if (mi as MeshInstance3D).material_overlay == enemy.get_meta("vfx_enrage"):
+				(mi as MeshInstance3D).material_overlay = null
+		enemy.remove_meta("vfx_enrage")
+
+
+func _enrage_mat(enemy: Node3D) -> ShaderMaterial:
+	if enemy.has_meta("vfx_enrage"):
+		return enemy.get_meta("vfx_enrage")
+	var m := ShaderMaterial.new()
+	m.shader = _glow_shader if _glow_shader else load("res://shaders/shatter_glow.gdshader")
+	m.set_shader_parameter("glow_color", ENRAGE_COLOR)
+	m.set_shader_parameter("amount", 0.0)
+	enemy.set_meta("vfx_enrage", m)
+	var rig = enemy.get("_rig")
+	var root: Node = rig if rig is Node3D and is_instance_valid(rig) else enemy
+	for mi in root.find_children("*", "MeshInstance3D", true, false):
+		if (mi as MeshInstance3D).material_overlay == null:
+			(mi as MeshInstance3D).material_overlay = m
+	return m
+
+
+func _telegraph(owner: Node3D, shape: int, center: Vector3, size: Vector2, forward: Vector3, secs: float, arc := 1.3) -> MeshInstance3D:
+	if _telegraph_shader == null:
+		_telegraph_shader = load("res://shaders/telegraph.gdshader")
+	var mi := MeshInstance3D.new()
+	var pm := PlaneMesh.new()
+	pm.size = size
+	mi.mesh = pm
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var m := ShaderMaterial.new()
+	m.shader = _telegraph_shader
+	m.set_shader_parameter("shape", shape)
+	m.set_shader_parameter("arc", arc)
+	m.set_shader_parameter("progress", 0.0)
+	m.set_shader_parameter("fade", 0.0)
+	m.set_shader_parameter("color", DANGER_COLOR)
+	m.set_shader_parameter("rim_px", clampf(0.35 / maxf(minf(size.x, size.y) * 0.5, 0.5), 0.015, 0.12))
+	m.render_priority = 1
+	mi.material_override = m
+	add_child(mi)
+	var f := Vector3(forward.x, 0.0, forward.z)
+	if f.length_squared() < 0.0001:
+		f = Vector3.FORWARD
+	mi.global_transform = Transform3D(Basis.looking_at(f.normalized(), Vector3.UP), center + Vector3(0, 0.07, 0))
+	var id := owner.get_instance_id()
+	var list: Array = _telegraphs.get(id, [])
+	list = list.filter(func(n): return is_instance_valid(n))
+	list.append(mi)
+	_telegraphs[id] = list
+	var tw := mi.create_tween()
+	tw.tween_property(m, "shader_parameter/fade", 1.0, 0.1)
+	tw.parallel().tween_property(m, "shader_parameter/progress", 1.0, maxf(secs, 0.1))
+	tw.tween_property(m, "shader_parameter/fade", 0.0, 0.22)
+	tw.tween_callback(mi.queue_free)
+	return mi
+
+
+func _valid(n: Node3D) -> bool:
+	return n != null and is_instance_valid(n) and n.is_inside_tree()
+
+
+func _forward(n: Node3D) -> Vector3:
+	var f := -n.global_transform.basis.z
+	f.y = 0.0
+	return f.normalized() if f.length_squared() > 0.0001 else Vector3.FORWARD
+
+
+## Height of the ground under `p` (ray down onto the world layer), so decals
+## sit on the floor whatever the boss's origin is.
+func _ground_y(p: Vector3) -> float:
+	var w := get_world_3d()
+	if w == null:
+		return p.y
+	var q := PhysicsRayQueryParameters3D.create(p + Vector3(0, 3.0, 0), p - Vector3(0, 12.0, 0), 1)
+	var hit := w.direct_space_state.intersect_ray(q)
+	return float(hit["position"].y) if hit else p.y
+
+
+## Bounds of a mob's body only (its rig), so name plates and labels
+## floating above it don't count.
+func _body_bounds(enemy: Node3D) -> AABB:
+	var rig = enemy.get("_rig")
+	if rig is Node3D and is_instance_valid(rig):
+		return visual_bounds(rig)
+	return visual_bounds(enemy)
+
+
+## Four-point cross glint (two crossed streaks), billboarded.
+func _glint(pos: Vector3, color: Color, size: float, dur: float, mix := false) -> void:
+	var q := _make_quad(true)
+	var m := q.material_override as StandardMaterial3D
+	if mix:
+		m.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	m.albedo_texture = AssetLib.vfx_texture("star_07")
+	m.albedo_color = Color(color if mix else color.lightened(0.4), 1.0)
+	add_child(q)
+	q.global_position = pos
+	q.visible = true
+	q.scale = Vector3.ONE * size * 0.7
+	q.rotation.z = randf() * 0.5
+	var tw := q.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(q, "scale", Vector3.ONE * size, dur * 0.4).set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
+	tw.tween_property(m, "albedo_color:a", 0.0, dur * 0.6).set_delay(dur * 0.4)
+	tw.chain().tween_callback(q.queue_free)
+
+
+## Camera-facing shock ring (unlike ring(), which lies on the ground).
+func _shock_ring(pos: Vector3, color: Color, size: float, dur: float) -> void:
+	var q := _make_quad(true)
+	var m := q.material_override as StandardMaterial3D
+	m.albedo_texture = AssetLib.vfx_texture("circle_02")
+	m.albedo_color = Color(color, 1.0)
+	add_child(q)
+	q.global_position = pos
+	q.visible = true
+	q.scale = Vector3.ONE * size * 0.2
+	var tw := q.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(q, "scale", Vector3.ONE * size, dur).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(m, "albedo_color:a", 0.0, dur * 0.7).set_delay(dur * 0.3)
+	tw.chain().tween_callback(q.queue_free)
 
 
 ## Death dissolve: `rig` is lifted out of the (now hidden) mob into this node

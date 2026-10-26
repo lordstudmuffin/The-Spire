@@ -16,6 +16,7 @@ const SORTS := ["Rank", "Newest", "Type"]
 
 var _name_l: Label
 var _class_l: Label
+var _prof_line: UITheme.ProfLine
 var _level_l: Label
 var _cells := {}  # key -> value Label
 var _attr_rows := {}  # stat -> {"val": Label, "bar": ProgressBar, "btn": Button}
@@ -120,6 +121,9 @@ func _build_left() -> void:
 		_cells[pair[0]] = val
 		_cells[pair[0] + "_sub"] = sub
 	v.add_child(cells)
+	# Weapon proficiency: notches at each Sword Art's unlock.
+	_prof_line = UITheme.ProfLine.new()
+	v.add_child(_prof_line)
 
 	v.add_child(UITheme.spacer(2))
 	var ah := HBoxContainer.new()
@@ -262,8 +266,11 @@ func _build_centre() -> void:
 	wrap.add_child(_empty_l)
 
 	v.add_child(UITheme.rule())
-	var mh := HBoxContainer.new()
-	mh.add_theme_constant_override("separation", 10)
+	# Flow rows: they wrap to the grid's width instead of widening the
+	# screen past the viewport as materials and provisions grow.
+	var mh := HFlowContainer.new()
+	mh.add_theme_constant_override("h_separation", 10)
+	mh.add_theme_constant_override("v_separation", 8)
 	var mk := UITheme.kicker("Materials")
 	mk.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	mh.add_child(mk)
@@ -308,8 +315,9 @@ func _build_provisions(v: VBoxContainer) -> void:
 	ph.add_child(pk)
 	ph.add_child(UITheme.subtle("Use food for a timed buff", 12))
 	v.add_child(ph)
-	var strip := HBoxContainer.new()
-	strip.add_theme_constant_override("separation", 8)
+	var strip := HFlowContainer.new()
+	strip.add_theme_constant_override("h_separation", 8)
+	strip.add_theme_constant_override("v_separation", 8)
 	v.add_child(strip)
 	for id in GameState.MATERIAL_NAMES:
 		if not LifeData.is_life_item(id):
@@ -324,7 +332,7 @@ func _build_provisions(v: VBoxContainer) -> void:
 		cell.add_theme_stylebox_override("panel", sb)
 		var ch := HBoxContainer.new()
 		ch.add_theme_constant_override("separation", 6)
-		var kind := "fish" if LifeData.is_fish(id) else ("food" if LifeData.is_food(id) else ("rod" if LifeData.TOOLS.has(id) else "herb"))
+		var kind := "fish" if LifeData.is_fish(id) else ("food" if LifeData.is_food(id) else ("rod" if LifeData.TOOLS.has(id) else ("shard" if LifeData.is_crystal(id) else "herb")))
 		ch.add_child(UIGlyph.make(kind, c, 30, 0.6))
 		var cv := VBoxContainer.new()
 		cv.add_theme_constant_override("separation", -2)
@@ -335,10 +343,16 @@ func _build_provisions(v: VBoxContainer) -> void:
 		ch.add_child(cv)
 		var btn: Button = null
 		if LifeData.is_food(id):
-			btn = UITheme.make_button("Use", "chip")
+			btn = UITheme.mini_button("Use")
 			btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			btn.tooltip_text = LifeData.buff_text(LifeData.RECIPES[id]["buff"])
 			btn.pressed.connect(func(): use_food(id))
+			ch.add_child(btn)
+		elif LifeData.is_crystal(id):
+			btn = UITheme.mini_button("Use")
+			btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			btn.tooltip_text = LifeData.item_desc(id)
+			btn.pressed.connect(func(): use_crystal(id))
 			ch.add_child(btn)
 		cell.add_child(ch)
 		cell.tooltip_text = LifeData.item_desc(id)
@@ -356,6 +370,25 @@ func use_food(id: String) -> bool:
 		return false
 	Audio.play("eat")
 	food_used.emit(id)
+	refresh()
+	return true
+
+
+## Crushes a crystal from the pack. Offline the world plays the effect at
+## once; online it waits for the server's answer (world._on_net_action).
+func use_crystal(id: String) -> bool:
+	var err := LifeData.use_crystal(id)
+	if err == "pending":
+		return true
+	if err != "":
+		Audio.play("ui_error")
+		var hud := get_tree().get_first_node_in_group("hud")
+		if hud and hud.has_method("toast"):
+			hud.toast(err, "", "", UITheme.ROSE)
+		return false
+	var w := get_tree().current_scene
+	if w and w.has_method("crystal_effect"):
+		w.crystal_effect(id)
 	refresh()
 	return true
 
@@ -473,6 +506,13 @@ func _build_right() -> void:
 	cmp.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cmp.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(cmp)
+	# Durability: small caps line over a wear gauge (not in the big stat).
+	var dur_l := UITheme.label("", 11, UITheme.MUTED, true)
+	dur_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(dur_l)
+	var dur_g := UITheme.WearGauge.new(1.0, 200.0)
+	dur_g.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	v.add_child(dur_g)
 	v.add_child(UITheme.spacer(4))
 	var by := UITheme.subtle("", 12)
 	by.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -493,7 +533,7 @@ func _build_right() -> void:
 	hint2.add_child(UITheme.action_cap("back"))
 	hint2.add_child(UITheme.subtle("Close", 12))
 	v.add_child(hint2)
-	_detail = {"glyph": g, "name": nm, "rank": rk, "rank_pill": rk_pill, "kind": kd, "stat": stat, "cmp": cmp, "by": by, "hint": ht}
+	_detail = {"glyph": g, "name": nm, "rank": rk, "rank_pill": rk_pill, "kind": kd, "stat": stat, "cmp": cmp, "by": by, "hint": ht, "dur": dur_l, "dur_g": dur_g}
 
 
 # --- Behaviour ----------------------------------------------------------------
@@ -574,7 +614,12 @@ func _sorted_items() -> Array:
 
 
 func _stat_text(item: Dictionary) -> String:
-	return ("ATK %d" % int(item.get("atk", 0))) if item.get("kind") == "weapon" else ("DEF %d" % int(item.get("def", 0)))
+	var s := ("ATK %d" % int(item.get("atk", 0))) if item.get("kind") == "weapon" else ("DEF %d" % int(item.get("def", 0)))
+	if Durability.is_broken(item):
+		return s + "  ·  BROKEN"
+	if Durability.fraction(item) < Durability.LOW:
+		return s + "  ·  worn"
+	return s
 
 
 ## Fill every widget from GameState. Safe to call often; only text and
@@ -582,6 +627,10 @@ func _stat_text(item: Dictionary) -> String:
 func refresh() -> void:
 	_name_l.text = str(GameState.character.get("name", "")).to_upper()
 	_class_l.text = GameState.class_title().to_upper()
+	var marks: Array = []
+	for sk in Player.SKILLS:
+		marks.append(int(sk.get("prof", 0)))
+	_prof_line.set_value(GameState.sword_prof, GameState.PROF_CAP, marks)
 	_level_l.text = str(GameState.level)
 	_cells["hp"].text = str(int(GameState.max_hp()))
 	_cells["hp_sub"].text = "%d now" % ceili(GameState.hp)
@@ -651,7 +700,26 @@ func refresh() -> void:
 		(b.get_meta("stat") as Label).text = _stat_text(item)
 		(b.get_meta("by") as Label).text = "by %s" % str(item.get("crafted_by", "?"))
 		(b.get_meta("eq") as Control).visible = worn
-		b.tooltip_text = "%s\n%s  ·  %s\nCrafted by %s" % [item.get("name", ""), Crafting.RANKS[rank], _stat_text(item), item.get("crafted_by", "?")]
+		# Wear: a thin gauge along the card foot, and a crack once broken.
+		var broken := Durability.is_broken(item)
+		var wf := Durability.fraction(item)
+		if not b.has_meta("wear"):
+			var g := UITheme.WearGauge.new(1.0, 10.0)
+			g.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+			g.offset_left = 10
+			g.offset_right = -10
+			g.offset_top = -9
+			g.offset_bottom = -4
+			b.add_child(g)
+			b.set_meta("wear", g)
+			var ck := UITheme.CrackOverlay.new(i * 7919 + 13)
+			b.add_child(ck)
+			b.set_meta("crack", ck)
+		var wg: UITheme.WearGauge = b.get_meta("wear")
+		wg.visible = wf < 0.999
+		wg.set_frac(wf)
+		(b.get_meta("crack") as Control).visible = broken
+		b.tooltip_text = "%s\n%s  ·  %s\nCrafted by %s%s" % [item.get("name", ""), Crafting.RANKS[rank], _stat_text(item), item.get("crafted_by", "?"), _work_suffix(item)]
 	for m in _mats:
 		_mats[m].text = str(GameState.materials.get(m, 0))
 	var any_prov := false
@@ -682,6 +750,8 @@ func _show_detail(idx: int) -> void:
 		_detail["rank_pill"].visible = false
 		_detail["kind"].text = "—"
 		_detail["stat"].text = ""
+		_detail["dur"].visible = false
+		(_detail["dur_g"] as Control).visible = false
 		_detail["cmp"].text = "Forge gear at Haldor's anvil, or loot it from the Labyrinth."
 		_detail["by"].text = ""
 		_detail["glyph"].set_glyph("sword", Color(UITheme.MUTED.r, UITheme.MUTED.g, UITheme.MUTED.b, 0.4))
@@ -694,13 +764,19 @@ func _show_detail(idx: int) -> void:
 	_detail["glyph"].set_glyph("sword" if item.get("kind") == "weapon" else "shield", c)
 	_detail["name"].text = str(item.get("name", "")).to_upper()
 	_detail["name"].add_theme_color_override("font_color", c)
-	_detail["rank"].text = Crafting.RANKS[rank].to_upper()
+	_detail["rank"].text = "RATING: %s" % Crafting.RANKS[rank].to_upper()
 	_detail["rank_pill"].visible = true
 	var rs: StyleBoxFlat = _detail["rank_pill"].get_theme_stylebox("panel")
 	rs.bg_color = c
 	rs.border_color = c
 	_detail["kind"].text = str(item.get("kind", "")).to_upper()
-	_detail["stat"].text = _stat_text(item)
+	_detail["stat"].text = ("ATK %d" % int(item.get("atk", 0))) if item.get("kind") == "weapon" else ("DEF %d" % int(item.get("def", 0)))
+	var dt := Durability.text(item)
+	_detail["dur"].text = dt.to_upper()
+	_detail["dur"].add_theme_color_override("font_color", UITheme.ROSE if Durability.is_broken(item) else UITheme.MUTED)
+	_detail["dur"].visible = dt != ""
+	(_detail["dur_g"] as UITheme.WearGauge).visible = dt != ""
+	(_detail["dur_g"] as UITheme.WearGauge).set_frac(Durability.fraction(item))
 	var worn: Variant = GameState.equipped.get(item.get("kind"))
 	var mine := int(item.get("atk", 0)) + int(item.get("def", 0))
 	if is_equipped(item):
@@ -717,7 +793,14 @@ func _show_detail(idx: int) -> void:
 		_detail["cmp"].text = "Slot is empty"
 		_detail["cmp"].add_theme_color_override("font_color", UITheme.MUTED)
 		_detail["hint"].text = "Equip"
-	_detail["by"].text = "Crafted by %s" % str(item.get("crafted_by", "?"))
+	_detail["by"].text = "Crafted by %s" % str(item.get("crafted_by", "?")) + _work_suffix(item)
+
+
+## "  ·  Fine work" for forged pieces (Forging quality), "" for older items.
+static func _work_suffix(item: Dictionary) -> String:
+	if not item.has("quality"):
+		return ""
+	return "  ·  %s work" % Forging.quality_word(float(item["quality"]) / 100.0)
 
 
 ## Put keyboard focus on the first card (or the slot) when the screen opens.

@@ -31,8 +31,21 @@ const DEFAULTS := {
 	"skill_1": {"kb": [KEY_1], "pad": [JOY_BUTTON_RIGHT_SHOULDER]},
 	"skill_2": {"kb": [KEY_2], "pad": [JOY_BUTTON_LEFT_SHOULDER]},
 	"skill_3": {"kb": [KEY_3], "pad": [[JOY_AXIS_TRIGGER_RIGHT, 1]]},
+	# Unique Sword Arts (only usable by a unique skill holder). On a gamepad
+	# they are LT (target) held + RB / LB / RT, handled in Player.
+	"skill_4": {"kb": [KEY_4], "pad": []},
+	# Tap as a strike lands to parry; hold to guard.
+	"parry": {"kb": [KEY_F, ["mouse", MOUSE_BUTTON_RIGHT]], "pad": [JOY_BUTTON_RIGHT_STICK]},
+	"skill_5": {"kb": [KEY_5], "pad": []},
+	"skill_6": {"kb": [KEY_6], "pad": []},
+	# Hidden-class arts (HiddenClasses): R / C, or on a pad hold Target (LT)
+	# and press Attack (X) / Dash (B). See docs/HIDDEN_CLASSES.md.
+	"class_1": {"kb": [KEY_R], "pad": []},
+	"class_2": {"kb": [KEY_C], "pad": []},
 	"target": {"kb": [["mouse", MOUSE_BUTTON_MIDDLE]], "pad": [[JOY_AXIS_TRIGGER_LEFT, 1]]},
 	"interact": {"kb": [KEY_E], "pad": [JOY_BUTTON_Y]},
+	# Pad: hold Target (LT) and press Interact (Y) instead (player.gd).
+	"quick_heal": {"kb": [KEY_H], "pad": []},
 	"stats_menu": {"kb": [KEY_TAB], "pad": [JOY_BUTTON_BACK]},
 	"quick_save": {"kb": [KEY_F5], "pad": []},
 	"pause": {"kb": [KEY_ESCAPE], "pad": [JOY_BUTTON_START]},
@@ -50,7 +63,7 @@ const DEFAULTS := {
 const REMAPPABLE := [
 	["move_forward", "Move forward"], ["move_back", "Move back"], ["move_left", "Move left"], ["move_right", "Move right"],
 	["jump", "Jump"], ["sprint", "Sprint"], ["dash", "Dash"], ["attack", "Attack"],
-	["skill_1", "Sword Art 1"], ["skill_2", "Sword Art 2"], ["skill_3", "Sword Art 3"], ["target", "Target enemy"],
+	["skill_1", "Sword Art 1"], ["skill_2", "Sword Art 2"], ["skill_3", "Sword Art 3"], ["parry", "Parry / guard"], ["skill_4", "Unique Art 1"], ["skill_5", "Unique Art 2"], ["skill_6", "Unique Art 3"], ["class_1", "Class Art 1"], ["class_2", "Class Art 2"], ["target", "Target enemy"], ["quick_heal", "Healing Crystal"],
 	["interact", "Interact"], ["inventory", "Inventory"], ["quest_log", "Quest log"], ["map", "Map"],
 	["nearby", "Party & nearby"], ["stats_menu", "Character"], ["chat", "Chat"], ["pause", "Pause / back"],
 	["quick_save", "Quick save"], ["map_zoom_in", "Minimap zoom in"], ["map_zoom_out", "Minimap zoom out"],

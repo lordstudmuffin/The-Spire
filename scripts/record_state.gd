@@ -13,11 +13,11 @@ extends RefCounted
 
 ## Gather quests whose progress mirrors what you carry (world._track_ore_quest).
 const GATHER_QUESTS := [["ore_delivery", "iron_ore"], ["shrine_rite", "wisp_essence"], ["wolf_pelts", "wolf_pelt"],
-	["field_herbs", "wild_herb"], ["tavern_stew", "boar_stew"]]
+	["field_herbs", "wild_herb"], ["tavern_stew", "boar_stew"], ["lantern_below", "spirit_shard"], ["old_watch_whispers", "wolf_pelt"], ["grove_bloom", "snaptrap_bloom"]]
 const FIELDS := ["character", "level", "xp", "stat_points", "stats", "money", "hp", "quests", "materials", "inventory", "equipped",
 	"smithing_level", "smithing_xp", "items_crafted", "hidden_class", "floors_cleared", "recipes_unlocked",
-	"fishing_level", "fishing_xp", "cooking_level", "cooking_xp", "fish_caught", "home_owned", "home_storage",
-	"home_furniture", "decor_owned", "buffs", "title", "visited"]
+	"fishing_level", "fishing_xp", "cooking_level", "cooking_xp", "farming_level", "farming_xp", "fish_caught", "home_owned", "home_storage",
+	"home_furniture", "decor_owned", "buffs", "title", "visited", "chests", "unique_skill", "hidden", "sword_prof", "fallen"]
 
 var rec: Dictionary
 ## Set by callers that want to know what happened (level-ups, class unlocks).
@@ -52,6 +52,7 @@ func xp_to_next() -> int:
 
 
 func add_xp(amount: int) -> void:
+	amount = Permadeath.xp_gain(self, amount)
 	var before: int = int(rec["level"])
 	Net.level_record(rec, amount)
 	if int(rec["level"]) != before:
@@ -73,6 +74,12 @@ func spend_point(stat: String) -> bool:
 
 func class_title() -> String:
 	return str(rec.get("hidden_class", "")) if str(rec.get("hidden_class", "")) != "" else str(rec["character"].get("origin", ""))
+
+
+## A hidden-class deed on the record (LifeData.cook / land_fish, Farms
+## harvest). Combat deeds come through Net.srv_note_hidden instead.
+func note_hidden(event: String) -> void:
+	HiddenClasses.note(self, event)
 
 
 func unlock_hidden_class(cls: String) -> void:
@@ -109,6 +116,62 @@ func add_item(item: Dictionary) -> void:
 	rec["inventory"].append(item)
 
 
+# --- Realm world DB (docs/REALM_DB.md) ---------------------------------------------
+
+## Holder key of this record in the realm registry (account token + name).
+func holder() -> String:
+	return Net.RealmDBScript.holder_of_record(rec)
+
+
+## The realm DB (null only on a remote client, where no RecordState exists).
+func realm():
+	return Net.get_realm()
+
+
+func find_item(id: String) -> Dictionary:
+	var i := _find_item(rec["inventory"], id)
+	return rec["inventory"][i] if i >= 0 else {}
+
+
+## True for a limited item bound to its holder (cannot be traded or dropped).
+func item_bound(id: String) -> bool:
+	var it := find_item(id)
+	if it.is_empty():
+		return false
+	var rdb = realm()
+	return bool(it.get("bound", false)) or (rdb != null and rdb.is_bound(it))
+
+
+## Removes an item from the inventory (unequipping it first). False when absent.
+func remove_item(id: String) -> bool:
+	var i := _find_item(rec["inventory"], id)
+	if i < 0:
+		return false
+	for slot in rec["equipped"]:
+		if rec["equipped"][slot] != null and str(rec["equipped"][slot].get("id", "")) == id:
+			rec["equipped"][slot] = null
+	rec["inventory"].remove_at(i)
+	_sync_weapon()
+	rec["hp"] = minf(float(rec["hp"]), max_hp())
+	return true
+
+
+## Grants a limited item: claims a slot of `limited_id` (cap holders realm-wide),
+## mints its serial and adds the item. Returns the claim result ({"ok", "last",
+## "error", ...}); the item carries serial / limited_id / bound on success.
+func grant_limited_item(limited_id: String, cap: int, item: Dictionary, bound := true) -> Dictionary:
+	var rdb = realm()
+	if rdb == null:
+		return {"ok": false, "error": "No realm."}
+	var res: Dictionary = rdb.claim(limited_id, cap, holder(), "item")
+	if not res.get("ok", false):
+		return res
+	if rdb.bind_serial(limited_id, holder(), item, bound) == "":
+		return {"ok": false, "error": "The realm could not mint the item."}
+	add_item(item)
+	return res
+
+
 func _find_item(list: Array, id: String) -> int:
 	for i in list.size():
 		if str(list[i].get("id", "")) == id:
@@ -136,17 +199,17 @@ func unequip(kind: String) -> bool:
 
 func _sync_weapon() -> void:
 	var w = rec["equipped"].get("weapon")
-	rec["weapon_atk"] = float(w["atk"]) if w is Dictionary else 0.0
+	rec["weapon_atk"] = float(w["atk"]) if w is Dictionary and not Durability.is_broken(w) else 0.0
 
 
 func weapon_attack() -> float:
 	var w = rec["equipped"].get("weapon")
-	return float(w["atk"]) if w is Dictionary else 0.0
+	return float(w["atk"]) if w is Dictionary and not Durability.is_broken(w) else 0.0
 
 
 func armor_defense() -> float:
 	var a = rec["equipped"].get("armor")
-	return float(a["def"]) if a is Dictionary else 0.0
+	return float(a["def"]) if a is Dictionary and not Durability.is_broken(a) else 0.0
 
 
 func smithing_xp_to_next() -> int:

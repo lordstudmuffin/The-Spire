@@ -211,6 +211,55 @@ static func cyl(parent: Node, top: float, bottom: float, h: float, pos: Vector3,
 	return mesh_node(parent, cm, pos, mat(c), rot)
 
 
+## Nature-kit rocks ship salmon clay with a lime cap; shift them to the
+## floor's grey stone with a deeper moss so they sit in the meadow.
+static func _stone_tint(m: Mesh) -> void:
+	if m == null or m.has_meta("stone_tinted"):
+		return
+	m.set_meta("stone_tinted", true)
+	for i in m.get_surface_count():
+		var sm := m.surface_get_material(i) as StandardMaterial3D
+		if sm == null:
+			continue
+		var c := sm.albedo_color
+		if c.g > c.r:   # the moss cap
+			sm.albedo_color = Color(0.36, 0.56, 0.27)
+		else:
+			sm.albedo_color = Color(0.68, 0.66, 0.64).lerp(c, 0.12)
+
+
+static var _rocks := {}
+
+
+## Rough faceted boulder of radius ~0.5 (unit sphere jittered per vertex,
+## flat normals), cached per seed. Callers scale and pick the material.
+static func boulder_mesh(seed := 7) -> Mesh:
+	if _rocks.has(seed):
+		return _rocks[seed]
+	var sm := SphereMesh.new()
+	sm.radial_segments = 7
+	sm.rings = 4
+	var arr := sm.get_mesh_arrays()
+	var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed
+	var bumps := {}
+	for i in verts.size():
+		var key := verts[i].snapped(Vector3.ONE * 0.01)
+		if not bumps.has(key):
+			bumps[key] = rng.randf_range(0.75, 1.15)
+		verts[i] *= bumps[key]
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_smooth_group(-1)
+	for i in (arr[Mesh.ARRAY_INDEX] as PackedInt32Array):
+		st.add_vertex(verts[i])
+	st.generate_normals()
+	var m: Mesh = st.commit()
+	_rocks[seed] = m
+	return m
+
+
 static func sphere(parent: Node, r: float, pos: Vector3, c: Color, scl := Vector3.ONE) -> MeshInstance3D:
 	var sm := SphereMesh.new()
 	sm.radius = r
@@ -466,6 +515,7 @@ static func bind_ground_detail(gm: ShaderMaterial, sets: Array = []) -> void:
 		bound += 1
 	if bound > 0:
 		gm.set_shader_parameter("detail_strength", 0.6)
+		gm.set_shader_parameter("detail_tint", 0.08)
 
 
 static func rock_mesh() -> ArrayMesh:
@@ -518,22 +568,49 @@ static func grass_mesh() -> ArrayMesh:
 static func flower_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	# Stem (thin tri) + head (two crossed quads).
+	# Stem (thin tri) + a five-petal head: a scalloped disc tilted toward the
+	# viewer's usual side, double-sided, with a darker eye in the middle.
 	var stem := [Vector3(-0.02, 0, 0), Vector3(0.02, 0, 0), Vector3(0, 0.5, 0)]
 	for k in 3:
 		st.set_color(Color(0.45, 0.75, 0.35))
 		st.set_normal(Vector3.UP)
 		st.add_vertex(stem[k])
-	for q in 2:
-		var a := PI * 0.5 * q
-		var u := Vector3(cos(a), 0, sin(a)) * 0.16
-		var c := Vector3(0, 0.55, 0)
-		var pts := [c - u - Vector3(0, 0.1, 0), c + u - Vector3(0, 0.1, 0), c + u + Vector3(0, 0.14, 0), c - u + Vector3(0, 0.14, 0)]
-		for t in [[0, 1, 2], [0, 2, 3], [0, 2, 1], [0, 3, 2]]:
-			for k in t:
-				st.set_color(Color.WHITE)
-				st.set_normal(Vector3.UP)
-				st.add_vertex(pts[k])
+	var c := Vector3(0, 0.52, 0)
+	var tilt := Basis(Vector3.RIGHT, 0.45)
+	var n := tilt * Vector3.UP
+	var petals := 5
+	var seg := 30
+	var ring: Array[Vector3] = []
+	for i in seg:
+		var a := TAU * i / seg
+		# Scalloped radius: five rounded lobes with notches between them.
+		var lobe := absf(sin(a * petals * 0.5))
+		var r := 0.05 + 0.13 * pow(lobe, 0.6)
+		ring.append(c + tilt * Vector3(cos(a) * r, 0, sin(a) * r))
+	var eye := c + n * 0.012
+	for i in seg:
+		var a := ring[i]
+		var b := ring[(i + 1) % seg]
+		for tri in [[eye, a, b], [eye, b, a]]:
+			for k in 3:
+				var v: Vector3 = tri[k]
+				var d := v.distance_to(c)
+				# Petals pale at the tips, deeper toward the eye.
+				st.set_color(Color(1, 1, 1).lerp(Color(0.82, 0.78, 0.75), clampf(1.0 - d / 0.18, 0.0, 1.0) * 0.5))
+				st.set_normal(n if tri[1] == a else -n)
+				st.add_vertex(v)
+	# Eye: small raised disc in warm yellow.
+	var eye_r := 0.035
+	for i in 8:
+		var a0 := TAU * i / 8.0
+		var a1 := TAU * (i + 1) / 8.0
+		var p0 := c + n * 0.02 + tilt * Vector3(cos(a0) * eye_r, 0, sin(a0) * eye_r)
+		var p1 := c + n * 0.02 + tilt * Vector3(cos(a1) * eye_r, 0, sin(a1) * eye_r)
+		for tri in [[c + n * 0.03, p0, p1], [c + n * 0.03, p1, p0]]:
+			for k in 3:
+				st.set_color(Color(1.0, 0.78, 0.25))
+				st.set_normal(n)
+				st.add_vertex(tri[k])
 	return st.commit()
 
 
@@ -702,7 +779,9 @@ static func build_vegetation(parent: Node3D, rng: RandomNumberGenerator, radius:
 		rm.material_override = foliage_mat(Color.WHITE, 0.0, 0.03)
 	for k in pack_rocks:
 		if not pack_rocks[k].is_empty():
-			AssetLib.multi(parent, "nature", k, pack_rocks[k])
+			var pm := AssetLib.multi(parent, "nature", k, pack_rocks[k])
+			if pm:
+				_stone_tint(pm.multimesh.mesh)
 
 	if headless():
 		return
@@ -749,7 +828,7 @@ static func build_vegetation(parent: Node3D, rng: RandomNumberGenerator, radius:
 	var fmm := multimesh(parent, flower_mesh(), fx, fc, "Flowers")
 	fmm.material_override = foliage_mat(Color.WHITE, 0.8)
 	fmm.material_override.set_shader_parameter("emission_color", Color.WHITE)
-	fmm.material_override.set_shader_parameter("emission_strength", 0.15)
+	fmm.material_override.set_shader_parameter("emission_strength", 0.05)
 	fmm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
@@ -1365,15 +1444,34 @@ static func tower(parent: Node3D, pos: Vector3) -> void:
 	rm.material_override = trim
 	var lm := multimesh(n, ring, rings, [], "TowerLedges")
 	lm.material_override = ledge_mat
-	# Crown: a ring of spikes and a floating crystal above the summit arena.
-	var spikes := CylinderMesh.new()
-	spikes.top_radius = 0.0
-	spikes.bottom_radius = 0.8
-	spikes.height = 6.0
-	spikes.radial_segments = 6
+	# Crown: a ring of stone spikes above the summit arena, broken in places
+	# (Gravelmaw's rockfall comes from it), leaning a little outward.
+	var spike := CylinderMesh.new()
+	spike.top_radius = 0.0
+	spike.bottom_radius = 0.8
+	spike.height = 6.0
+	spike.radial_segments = 6
+	var stump := CylinderMesh.new()
+	stump.top_radius = 0.42
+	stump.bottom_radius = 0.8
+	stump.height = 3.0
+	stump.radial_segments = 6
+	var crng := RandomNumberGenerator.new()
+	crng.seed = 1201
+	var crown_mat := ruin_mat("trim")
 	for k in 12:
 		var a := TAU * k / 12.0
-		mesh_node(n, spikes, Vector3(cos(a) * 18.5, 222 + 3.0, sin(a) * 18.5), mat(Color("6b5a86"), 0.03))
+		var out := Vector3(cos(a), 0, sin(a))
+		var broken := k % 3 == 1
+		var hs := crng.randf_range(0.7, 1.15)
+		var hgt := (3.0 if broken else 6.0) * hs
+		var base := out * 18.5 + Vector3(0, 222, 0)
+		var basis := Basis(Vector3(-sin(a), 0, cos(a)), 0.12).scaled(Vector3(1, hs, 1))
+		var sp := mesh_node(n, stump if broken else spike, base + Vector3(0, hgt * 0.5, 0) + out * hgt * 0.06, crown_mat)
+		sp.basis = basis
+		if broken:
+			# The snapped tip lies on the parapet beside its stump.
+			mesh_node(n, boulder_mesh(40 + k), base + Vector3(0, 0.45, 0) - out * 1.4 + Vector3(-sin(a), 0, cos(a)) * 0.9, crown_mat, Vector3(0, a, 0), Vector3(1.3, 0.9, 1.1))
 	# Buttresses at the foot: tall stone fins with a stepped shoulder.
 	for k in 6:
 		var a := TAU * k / 6.0 + PI / 6
@@ -1623,9 +1721,14 @@ static func platform_dress(parent: Node3D, base: Vector3, radius: float, rune: C
 		var p := Vector3(cos(a) * r, 0.0, sin(a) * r)
 		if absf(p.x) < 3.0 and absf(absf(p.z) - 9.0) < 3.0:
 			continue  # Keep the teleport pads clear.
-		var s := rng.randf_range(0.45, 1.2)
-		moss_xs.append(xf(p, a, Vector3(s, 0.07, s * rng.randf_range(0.5, 1.0))))
-		moss_cs.append(Color("3e7a35").lerp(Color("79b85a"), rng.randf()))
+		# A clump of a few low lumps sunk into the joints, not one flat disc.
+		var s := rng.randf_range(0.3, 0.7)
+		var base_c := Color("2f5a2a").lerp(Color("587f3e"), rng.randf())
+		for j in 3:
+			var o := Vector3(rng.randf_range(-0.6, 0.6), -0.02, rng.randf_range(-0.6, 0.6)) * s * 1.6
+			var sj := s * rng.randf_range(0.55, 1.0)
+			moss_xs.append(xf(p + o, rng.randf() * TAU, Vector3(sj, rng.randf_range(0.06, 0.12), sj * rng.randf_range(0.6, 1.0))))
+			moss_cs.append(base_c.lerp(Color("6f8f45"), rng.randf() * 0.35))
 	var im := multimesh(n, ivy, ivy_xs + moss_xs, ivy_cs + moss_cs, "IvyMoss")
 	im.material_override = foliage_mat(Color.WHITE, 0.25)
 	im.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -1696,6 +1799,7 @@ static func broken_column(parent: Node3D, pos: Vector3, height: float, rune: Col
 static func brazier(parent: Node3D, pos: Vector3, with_light := true) -> Node3D:
 	var n := Node3D.new()
 	n.position = pos
+	n.add_to_group("braziers")  # VFX.boss_engage flares them in turn
 	parent.add_child(n)
 	mesh_node(n, BoxMesh.new(), Vector3(0, 0.3, 0), ruin_mat("ledge"), Vector3.ZERO, Vector3(1.4, 0.6, 1.4))
 	cyl(n, 0.22, 0.3, 0.9, Vector3(0, 1.05, 0), Color("3a3440"), 8)
@@ -2160,7 +2264,10 @@ static func build_environment(parent: Node3D) -> void:
 	e.background_mode = Environment.BG_SKY
 	e.sky = sky
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	e.ambient_light_sky_contribution = 0.7
+	# Mostly a fixed warm-neutral fill, only a little sky: on Forward+ the
+	# full sky radiance (blue above, lavender below) tinted the meadow mint.
+	e.ambient_light_color = Color(0.78, 0.8, 0.72)
+	e.ambient_light_sky_contribution = 0.3
 	e.ambient_light_energy = 0.45
 	e.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
@@ -2189,31 +2296,39 @@ static func build_environment(parent: Node3D) -> void:
 		e.sdfgi_cascades = 4
 		e.sdfgi_min_cell_size = 0.3
 		e.sdfgi_use_occlusion = true
-		e.sdfgi_bounce_feedback = 0.4
-		e.sdfgi_energy = 1.0
+		# GI kept gentle: full-strength sky bounce greys out the meadow and
+		# kills the saturated cel look (compare Low vs High shots).
+		e.sdfgi_bounce_feedback = 0.3
+		e.sdfgi_energy = 0.6
 		e.ssao_enabled = true
 		e.ssao_radius = 1.5
 		e.ssao_intensity = 1.6
 		e.ssao_power = 1.6
 		e.ssil_enabled = true
 		e.ssil_radius = 4.0
-		e.ssil_intensity = 0.9
+		e.ssil_intensity = 0.6
 		e.ssr_enabled = true
 		e.ssr_max_steps = 96
 		e.ssr_fade_in = 0.2
 		e.ssr_fade_out = 2.0
 		e.volumetric_fog_enabled = true
-		e.volumetric_fog_density = 0.012
+		# Thin: a clear, bright anime sky with light shafts, not a grey haze.
+		e.volumetric_fog_density = 0.0045
 		e.volumetric_fog_albedo = Color("fff1e0")
 		e.volumetric_fog_emission = Color("3a3020")
 		e.volumetric_fog_emission_energy = 0.08
 		e.volumetric_fog_anisotropy = 0.7
 		e.volumetric_fog_length = 160.0
 		e.volumetric_fog_detail_spread = 2.2
-		e.volumetric_fog_ambient_inject = 0.3
+		e.volumetric_fog_ambient_inject = 0.12
 		e.volumetric_fog_sky_affect = 0.0
 		e.glow_intensity = 0.45
-		e.glow_bloom = 0.08
+		e.glow_bloom = 0.0
+		e.adjustment_saturation = 1.18
+		# Filmic flattens the painted mid-tones toward grey-mint; a linear
+		# curve keeps the saturated cel palette the art is painted in.
+		e.tonemap_mode = Environment.TONE_MAPPER_LINEAR
+		e.tonemap_exposure = 0.86
 		# Runtime quality upgrades that would only cost or error elsewhere.
 		var vp := parent.get_viewport()
 		if vp:

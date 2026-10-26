@@ -55,6 +55,19 @@ func _init() -> void:
 		_hex[i] = Vector2(cos(i * TAU / 6.0), sin(i * TAU / 6.0))
 
 
+func _ready() -> void:
+	# Full map: holographic backdrop (shaders/map_holo.gdshader) under the canvas.
+	if full:
+		var holo := ColorRect.new()
+		holo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		holo.set_anchors_preset(Control.PRESET_FULL_RECT)
+		var m := ShaderMaterial.new()
+		m.shader = load("res://shaders/map_holo.gdshader")
+		holo.material = m
+		add_child(holo)
+		move_child(holo, 0)
+
+
 func zoom(factor: float) -> void:
 	view_radius = clampf(view_radius * factor, 22.0, 120.0)
 
@@ -96,7 +109,7 @@ func _radius() -> float:
 func _draw() -> void:
 	var c := size * 0.5
 	var r := _radius()
-	draw_circle(c, r, Color(UITheme.NAVY.r, UITheme.NAVY.g, UITheme.NAVY.b, 0.82 if not full else 0.96))
+	draw_circle(c, r, Color(UITheme.NAVY.r, UITheme.NAVY.g, UITheme.NAVY.b, 0.82 if not full else 1.0))
 
 
 func _update_xf() -> void:
@@ -117,7 +130,7 @@ func _draw_canvas() -> void:
 	var px := 1.0 / _scale  # one screen pixel in world units
 	# Island and the void around it.
 	var ir := MapData.island_radius()
-	ci.draw_circle(Vector2.ZERO, ir, ISLAND_FILL)
+	ci.draw_circle(Vector2.ZERO, ir, Color(0.2, 0.62, 0.5, 0.22) if full else ISLAND_FILL)
 	ci.draw_arc(Vector2.ZERO, ir, 0.0, TAU, 96, Color(ISLAND_EDGE.r, ISLAND_EDGE.g, ISLAND_EDGE.b, 0.55), 2.0 * px, true)
 	# Faint range rings so distance reads at a glance (compact) / grid (full).
 	if full:
@@ -149,8 +162,8 @@ func _draw_canvas() -> void:
 				_hexagon(ci, p, 3.0 * px, UITheme.NAVY)
 			"gate":
 				ci.draw_arc(p, lr, 0.0, TAU, 24, col, 1.5 * px, true)
-			"smith":
-				ci.draw_circle(p, 2.0 * px, col)
+			"smith", "market", "farm", "board":
+				_poi_icon(ci, p, 4.6 * px * (2.0 if full else 1.0), l["kind"], col)
 	# Ore veins (visible = mineable).
 	for v in _veins:
 		if is_instance_valid(v) and v.visible:
@@ -160,7 +173,8 @@ func _draw_canvas() -> void:
 	for n in _npcs:
 		if not is_instance_valid(n):
 			continue
-		var gp: Vector3 = n.global_position
+		# NPCs who work indoors (the tavern, the forge) show at their building.
+		var gp: Vector3 = n.get_meta("map_pos", n.global_position)
 		var np := Vector2(gp.x, gp.z)
 		var is_tracked: bool = tracked_giver != "" and "npc_name" in n and n.npc_name == tracked_giver
 		if is_tracked:
@@ -199,7 +213,7 @@ func _draw_canvas() -> void:
 		_arrow(ci, sp, -yaw, 10.0, UITheme.GOLD)
 		# Labels.
 		for l in MapData.landmarks():
-			if l["kind"] in ["gate", "smith"]:
+			if l["kind"] in ["gate", "smith", "board"]:
 				continue
 			var lp := _xf * (l["pos"] as Vector2)
 			var col := MapData.kind_color(l["kind"])
@@ -279,3 +293,37 @@ func _diamond(ci: CanvasItem, at: Vector2, s: float, col: Color) -> void:
 ## Distance (m) from the player to a landmark, for legends.
 func distance_to(p: Vector2) -> float:
 	return player_pos.distance_to(p)
+
+
+## Point-of-interest badge: a dark disc with a coloured rim and a small line
+## glyph (anvil, stall awning, sprout, pinned notice). Drawn in map space.
+func _poi_icon(ci: CanvasItem, c: Vector2, r: float, kind: String, col: Color) -> void:
+	ci.draw_circle(c, r * 1.12, Color(0, 0, 0, 0.35))
+	ci.draw_circle(c, r, Color(UITheme.NAVY.r, UITheme.NAVY.g, UITheme.NAVY.b, 0.92))
+	ci.draw_arc(c, r, 0.0, TAU, 20, col, r * 0.16, true)
+	var s := r * 0.55
+	var w := maxf(r * 0.14, 0.01)
+	match kind:
+		"smith":  # anvil
+			ci.draw_colored_polygon(PackedVector2Array([c + Vector2(-s, -s * 0.35), c + Vector2(s, -s * 0.35), c + Vector2(s * 0.45, s * 0.1), c + Vector2(-s * 0.55, s * 0.1)]), col)
+			ci.draw_rect(Rect2(c + Vector2(-s * 0.2, s * 0.1), Vector2(s * 0.4, s * 0.45)), col)
+			ci.draw_rect(Rect2(c + Vector2(-s * 0.6, s * 0.55), Vector2(s * 1.2, s * 0.22)), col)
+		"market":  # stall awning with scalloped edge
+			ci.draw_colored_polygon(PackedVector2Array([c + Vector2(-s * 0.7, -s * 0.75), c + Vector2(s * 0.7, -s * 0.75), c + Vector2(s, -s * 0.1), c + Vector2(-s, -s * 0.1)]), col)
+			for k in 3:
+				ci.draw_circle(c + Vector2(-s * 0.66 + k * s * 0.66, -s * 0.1), s * 0.33, col)
+			ci.draw_line(c + Vector2(-s * 0.8, 0), c + Vector2(-s * 0.8, s * 0.85), col, w, true)
+			ci.draw_line(c + Vector2(s * 0.8, 0), c + Vector2(s * 0.8, s * 0.85), col, w, true)
+			ci.draw_line(c + Vector2(-s * 0.9, s * 0.5), c + Vector2(s * 0.9, s * 0.5), col, w, true)
+		"farm":  # sprout
+			ci.draw_line(c + Vector2(0, s * 0.85), c + Vector2(0, -s * 0.2), col, w * 1.2, true)
+			ci.draw_colored_polygon(PackedVector2Array([c + Vector2(0, -s * 0.15), c + Vector2(-s * 0.55, -s * 0.75), c + Vector2(-s * 0.95, -s * 0.2), c + Vector2(-s * 0.4, s * 0.05)]), col)
+			ci.draw_colored_polygon(PackedVector2Array([c + Vector2(0, s * 0.1), c + Vector2(s * 0.5, -s * 0.45), c + Vector2(s * 0.95, s * 0.0), c + Vector2(s * 0.4, s * 0.3)]), col)
+		"board":  # pinned notice
+			ci.draw_rect(Rect2(c + Vector2(-s * 0.7, -s * 0.6), Vector2(s * 1.4, s * 1.3)), col, false, w)
+			for k in 3:
+				var y := -s * 0.25 + k * s * 0.3
+				ci.draw_line(c + Vector2(-s * 0.4, y), c + Vector2(s * 0.4, y), col, w * 0.8, true)
+			ci.draw_circle(c + Vector2(0, -s * 0.6), s * 0.2, Color(1.0, 0.45, 0.45))
+		_:
+			ci.draw_circle(c, s * 0.4, col)

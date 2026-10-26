@@ -40,10 +40,50 @@ const RECIPES := {
 	"koi_sashimi": {"name": "Koi Sashimi", "cost": {"moonscale_koi": 1}, "xp": 60, "level": 3,
 		"buff": {"regen": 3.0, "atk": 0.12, "speed": 0.12, "dur": 180.0}, "color": "ffd27a",
 		"desc": "Moonscale Koi, sliced thin. Every blessing at once."},
+	# Field crops (P8 farm plots, scripts/life/farms.gd).
+	"turnip_soup": {"name": "Turnip Soup", "cost": {"turnip": 2, "wild_herb": 1}, "xp": 14, "level": 1,
+		"buff": {"regen": 2.5, "atk": 0.0, "speed": 0.0, "dur": 120.0}, "color": "e9d8c4",
+		"desc": "Hollowbrook turnips simmered soft with a herb. Warms you through and mends slowly."},
+	"harvest_bread": {"name": "Harvest Bread", "cost": {"sunwheat": 3}, "xp": 18, "level": 1,
+		"buff": {"regen": 1.0, "atk": 0.0, "speed": 0.08, "dur": 150.0}, "color": "e8b860",
+		"desc": "A round loaf of sunwheat baked in the coals. Light on the feet (+8% speed)."},
+	"melon_tart": {"name": "Honeymelon Tart", "cost": {"honeymelon": 1, "sunwheat": 2}, "xp": 28, "level": 2,
+		"buff": {"regen": 1.5, "atk": 0.08, "speed": 0.06, "dur": 160.0}, "color": "f2a65a",
+		"desc": "Sweet melon in a sunwheat crust. A little of everything (+8% attack, +6% speed)."},
+}
+## Farm crops (P8): the one table for seeds, growth and yields. Times are
+## real seconds: `grow` = watered time until ripe (growth pauses while the
+## soil is dry), `dry` = how long one watering keeps the soil wet, `wither`
+## = seconds without water before an unripe crop dies. Seeds are bought at
+## the field's seed cart; crops and seeds stack in GameState.materials.
+const CROPS := {
+	"turnip": {"name": "Turnip", "seed": "turnip_seeds", "seed_name": "Turnip Seeds", "seed_price": 6,
+		"grow": 900.0, "dry": 600.0, "wither": 3 * 3600.0, "yield": [2, 3], "color": "e9d8c4",
+		"desc": "A fat white root from the Hollowbrook fields. Soup, mostly.",
+		"seed_desc": "A pouch of turnip seed. Ripens in about 15 minutes of wet soil."},
+	"sunwheat": {"name": "Sunwheat", "seed": "sunwheat_seeds", "seed_name": "Sunwheat Seeds", "seed_price": 10,
+		"grow": 1800.0, "dry": 900.0, "wither": 4 * 3600.0, "yield": [3, 4], "color": "e8c25a",
+		"desc": "Golden grain that loves the floor's long afternoons. Bakes into bread.",
+		"seed_desc": "Sunwheat seed. Ripens in about 30 minutes of wet soil."},
+	"honeymelon": {"name": "Honeymelon", "seed": "honeymelon_seeds", "seed_name": "Honeymelon Seeds", "seed_price": 18,
+		"grow": 3600.0, "dry": 1200.0, "wither": 6 * 3600.0, "yield": [1, 2], "color": "f2a65a",
+		"desc": "A heavy, sweet melon. Worth the wait, and the tarts.",
+		"seed_desc": "Honeymelon seed. Ripens in about an hour of wet soil."},
 }
 ## Food ids are the recipe ids (they stack in GameState.materials).
-const GATHER := {"wild_herb": {"name": "Wild Herb", "color": "8fd36a", "desc": "Grows in clumps on the open grass. Cooks love it."}}
+const GATHER := {"wild_herb": {"name": "Wild Herb", "color": "8fd36a", "desc": "Grows in clumps on the open grass. Cooks love it."},
+	"snaptrap_bloom": {"name": "Snaptrap Bloom", "color": "ff8fb4", "desc": "The pink crown of a flowering Snaptrap. Herbalist Hesper wants its sap for Haldor's steel."}}
 const TOOLS := {"willow_rod": {"name": "Willow Rod", "color": "a9815a", "desc": "A limber willow pole, line and bone hook. Cast it at any fishing spot."}}
+
+## Crystals: one-use, instant effects, bought from Trader Pell and found in
+## the Labyrinth. A Healing Crystal restores full HP at once; a Teleport
+## Crystal sends you back to Hollowbrook's plaza (the floor's arrival point).
+const CRYSTALS := {
+	"heal_crystal": {"name": "Healing Crystal", "color": "ff6f9a", "price": 150,
+		"desc": "A rose-pink crystal. Crush it to restore your HP in full, instantly. Works in combat."},
+	"teleport_crystal": {"name": "Teleport Crystal", "color": "5fc8ff", "price": 90,
+		"desc": "A sky-blue crystal. Crush it to be carried back to Hollowbrook's plaza at once."},
+}
 
 const HOME_PRICE := 300
 const ROD_PRICE := 40
@@ -53,7 +93,7 @@ const DECOR := {
 	"bookshelf": {"name": "Bookshelf", "col": 120, "desc": "Three shelves of climbers' journals."},
 	"plant": {"name": "Potted Fern", "col": 45, "desc": "Something green from the fields."},
 	"lantern": {"name": "Brass Lantern", "col": 80, "desc": "Warm light for the long nights."},
-	"trophy": {"name": "Gravelmaw Trophy", "col": 250, "requires_clear": 1, "desc": "A shard of the Floor 1 Guardian on a plinth. Only sold to those who felled it."},
+	"trophy": {"name": "Warlord's Trophy", "col": 250, "requires_clear": 1, "desc": "A shard of the Floor 1 Guardian on a plinth. Only sold to those who felled it."},
 }
 const REST_BUFF := {"name": "Well Rested", "regen": 1.5, "atk": 0.05, "speed": 0.05, "dur": 240.0, "color": "4cc9f0"}
 
@@ -69,20 +109,41 @@ static func is_food(id: String) -> bool:
 ## True for anything the inventory screen shows under Provisions instead of
 ## the smithing materials strip (fish, herbs, food, the rod).
 static func is_life_item(id: String) -> bool:
-	return FISH.has(id) or RECIPES.has(id) or GATHER.has(id) or TOOLS.has(id)
+	return FISH.has(id) or RECIPES.has(id) or GATHER.has(id) or TOOLS.has(id) or CROPS.has(id) or CRYSTALS.has(id) or seed_crop(id) != ""
+
+
+## A crystal's price for this character (Permadeath: Healing Crystals x2).
+static func crystal_price(id: String, gs = GameState) -> int:
+	return Permadeath.crystal_price(gs, id, int(CRYSTALS[id]["price"]))
+
+
+static func is_crystal(id: String) -> bool:
+	return CRYSTALS.has(id)
+
+
+## The crop a seed id grows ("" when `id` is no seed).
+static func seed_crop(id: String) -> String:
+	for c in CROPS:
+		if CROPS[c]["seed"] == id:
+			return c
+	return ""
 
 
 static func item_color(id: String) -> Color:
-	for t in [FISH, RECIPES, GATHER, TOOLS]:
+	for t in [FISH, RECIPES, GATHER, TOOLS, CROPS, CRYSTALS]:
 		if t.has(id):
 			return Color(t[id]["color"])
+	if seed_crop(id) != "":
+		return Color("b89a6a")
 	return Color("f0c060")
 
 
 static func item_desc(id: String) -> String:
-	for t in [FISH, RECIPES, GATHER, TOOLS]:
+	for t in [FISH, RECIPES, GATHER, TOOLS, CROPS, CRYSTALS]:
 		if t.has(id):
 			return t[id]["desc"]
+	if seed_crop(id) != "":
+		return CROPS[seed_crop(id)]["seed_desc"]
 	return ""
 
 
@@ -147,6 +208,8 @@ static func land_fish(fish_id: String, gs = GameState) -> Dictionary:
 		return {"error": "No such fish."}
 	gs.add_material(fish_id, 1)
 	gs.fish_caught += 1
+	if gs.has_method("note_hidden"):
+		gs.note_hidden("fish")
 	gs.advance_quest("pond_catch")
 	if fish_id == "mire_eel":
 		gs.advance_quest("mere_catch")
@@ -197,6 +260,8 @@ static func cook(id: String, gs = GameState) -> Dictionary:
 	gs.spend_materials(r["cost"])
 	gs.add_material(id, 1)
 	var up := gs.add_life_xp("cooking", int(r["xp"]))
+	if gs.has_method("note_hidden"):
+		gs.note_hidden("cook:" + id)  # Hearthwright deed (HiddenClasses)
 	return {"name": r["name"], "skill_up": up, "id": id}
 
 
@@ -210,11 +275,35 @@ static func eat(id: String, gs = GameState) -> bool:
 		return Net.request_action("eat", {"id": id})
 	gs.spend_materials({id: 1})
 	var r: Dictionary = RECIPES[id]
-	var b: Dictionary = r["buff"].duplicate()
+	# A Hearthwright's food lasts longer and works harder (HiddenClasses).
+	var b: Dictionary = HiddenClasses.food_buff(str(gs.hidden_class), r["buff"])
 	b["name"] = r["name"]
 	b["color"] = r["color"]
 	gs.add_buff(id, float(b["dur"]), b)
 	return true
+
+
+## Crushes one crystal. Returns "" on success or the reason; "pending" when
+## an online client handed it to the server. The heal happens here (on the
+## record when the server runs it); moving the player for a Teleport
+## Crystal is the caller's job (world.crystal_effect), since the arrival
+## point is a safe destination the server's movement check accepts.
+static func use_crystal(id: String, gs = GameState) -> String:
+	if not CRYSTALS.has(id) or int(gs.materials.get(id, 0)) <= 0:
+		return "You have no %s." % (CRYSTALS[id]["name"] if CRYSTALS.has(id) else "such crystal")
+	if id == "heal_crystal" and float(gs.hp) >= gs.max_hp() - 0.5:
+		return "Your HP is already full."
+	var pd := Permadeath.crystal_block(gs, id)
+	if pd != "":
+		return pd
+	if gs == GameState and Net.remote_client():
+		Net.request_action("crystal", {"id": id})
+		return "pending"
+	gs.spend_materials({id: 1})
+	Permadeath.note_crystal(gs, id)
+	if id == "heal_crystal":
+		gs.heal_full()
+	return ""
 
 
 # --- Home --------------------------------------------------------------------
@@ -233,6 +322,8 @@ static func buy(id: String, gs = GameState) -> String:
 	var price := 0
 	if id == "willow_rod":
 		price = ROD_PRICE
+	elif CRYSTALS.has(id):
+		price = crystal_price(id, gs)
 	elif DECOR.has(id):
 		if not decor_available(id, gs):
 			return "The trader will not part with that until you have cleared Floor %d." % int(DECOR[id]["requires_clear"])
@@ -242,8 +333,8 @@ static func buy(id: String, gs = GameState) -> String:
 	if gs.money < price:
 		return "Not enough Col (%d needed)." % price
 	gs.add_money(-price)
-	if id == "willow_rod":
-		gs.add_material("willow_rod", 1)
+	if id == "willow_rod" or CRYSTALS.has(id):
+		gs.add_material(id, 1)
 	else:
 		gs.add_decor(id, 1)
 	return ""

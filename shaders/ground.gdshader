@@ -83,6 +83,10 @@ void fragment() {
 	vec3 g = mix(grass_a.rgb, grass_b.rgb, smoothstep(0.32, 0.68, n));
 	g = mix(g, g * 1.10, speck * 0.6);
 	g = mix(g, g * 0.92, step(0.72, n2) * 0.5);
+	// Broad meadow patches: sun-dried gold and deep lush green, on the same
+	// pattern as the grass blades (grass.gdshader) so tufts match the soil.
+	float pa = sin(p.x * 0.11 + sin(p.y * 0.07) * 2.0) * sin(p.y * 0.12 + sin(p.x * 0.06) * 1.7);
+	g *= mix(vec3(1.0), pa > 0.0 ? vec3(1.12, 1.04, 0.70) : vec3(0.80, 0.90, 0.82), smoothstep(0.1, 0.7, abs(pa)) * 0.6);
 
 	// Roads (segments) -> sand with a noisy edge.
 	float road = seg(p, vec2(0.0, -7.0), vec2(0.0, -57.0));
@@ -101,19 +105,50 @@ void fragment() {
 	float pond_m = 1.0 - smoothstep(8.5 + en * 0.5, 10.5 + en * 0.5, pond);
 	float rim = smoothstep(84.0 + en * 2.0, 88.5, length(p));
 	float tower = 1.0 - smoothstep(13.0, 16.0 + en, length(p - vec2(0.0, -70.0)));
+	// Inside the town wall (r 36 round the plaza) the roads are stone-paved,
+	// as in Aincrad's first town; they turn to sand at the gates.
+	float townroad = sand_m * (1.0 - smoothstep(34.0, 36.5, dplaza));
 
 	// Cobbles: a soft per-stone shade and the plaza's concentric ring; the
 	// stone pattern itself comes from the cobblestone detail map.
-	vec2 cp = p * 2.4;
-	cp.x += step(0.5, fract(cp.y * 0.5)) * 0.5;
-	vec2 ci = floor(cp);
-	vec2 cf = fract(cp) - 0.5;
-	float cob = smoothstep(0.5, 0.4, length(cf * vec2(1.0, 1.3)));
-	float cshade = 0.86 + 0.14 * hash12(ci);
+	// Voronoi set stones: F2 - F1 gives the mortar joint between rounded,
+	// irregular cobbles (only evaluated where the plaza or tower apron is).
+	float cob = 1.0;
+	float cshade = 1.0;
+	if (plaza_m > 0.001 || tower > 0.001 || townroad > 0.001) {
+		vec2 cp = p * 2.2;
+		vec2 ci = floor(cp);
+		vec2 cf = fract(cp);
+		float f1 = 8.0;
+		float f2 = 8.0;
+		vec2 id = vec2(0.0);
+		for (int j = -1; j <= 1; j++) {
+			for (int i = -1; i <= 1; i++) {
+				vec2 g2 = vec2(float(i), float(j));
+				vec2 o = vec2(hash12(ci + g2), hash12(ci + g2 + 19.19)) * 0.8 + 0.1;
+				float dd = length(g2 + o - cf);
+				if (dd < f1) {
+					f2 = f1;
+					f1 = dd;
+					id = ci + g2;
+				} else if (dd < f2) {
+					f2 = dd;
+				}
+			}
+		}
+		float joint = f2 - f1;
+		cob = smoothstep(0.04, 0.16, joint);
+		// Domed stones: lighter toward each stone's middle.
+		cob *= 0.88 + 0.12 * smoothstep(0.6, 0.0, f1);
+		// Per-stone tone: value and a slight warm/cool shift, so the plaza
+		// reads as laid stones rather than one pale sheet.
+		cshade = 0.74 + 0.26 * hash12(id);
+	}
 	float ring = smoothstep(0.1, 0.0, abs(fract(dplaza * 0.2) - 0.5) - 0.42);
-	vec3 stone_base = stone.rgb * 0.9;
-	float cob_amt = mix(1.0, 0.25, detail_strength);
-	vec3 cob_col = mix(stone_base * 0.78, stone_base * cshade, mix(1.0, cob, cob_amt));
+	vec3 stone_base = stone.rgb * 0.82;
+	float cob_amt = 1.0;
+	vec3 cob_col = mix(stone_base * 0.6, stone_base * cshade, mix(1.0, cob, cob_amt));
+	vec3 road_cob = cob_col;
 	cob_col = mix(cob_col, vec3(0.78, 0.68, 0.55), ring * 0.45);
 	cob_col = mix(cob_col, cob_col * 0.93, step(0.6, n2) * 0.5);
 
@@ -123,6 +158,7 @@ void fragment() {
 	col = mix(col, sand.rgb * 0.85, pond_m);
 	col = mix(col, mix(dirt.rgb, stone.rgb, 0.5) * (0.85 + 0.3 * n2), rim);
 	col = mix(col, stone.rgb * (0.8 + 0.2 * cob), tower);
+	col = mix(col, road_cob, townroad);
 	col = mix(col, cob_col, plaza_m);
 
 	// Detail layer: zone weights pick grass / gravel / cobble maps, their
@@ -130,7 +166,7 @@ void fragment() {
 	// Uniform branch: with detail_strength 0 (no maps bound, or the Low preset
 	// via RenderProfile) none of the six texture fetches are issued.
 	if (detail_strength > 0.0005) {
-		float w_cob = max(plaza_m, tower);
+		float w_cob = max(max(plaza_m, tower), townroad);
 		float w_path = max(max(sand_m, max(hb, tv)), max(pond_m, rim)) * (1.0 - w_cob);
 		float w_grass = clamp(1.0 - w_path - w_cob, 0.0, 1.0);
 		vec3 gd = texture(grass_tex, p * grass_tiling).rgb;
@@ -139,16 +175,19 @@ void fragment() {
 		vec3 detail = gd * w_grass + pd * w_path + cd * w_cob;
 		float dmean = grass_mean * w_grass + path_mean * w_path + cobble_mean * w_cob;
 		vec3 d_rel = detail / max(dmean, 0.05);          // ~1.0 on average
-		float rel = clamp(lum(d_rel), 0.45, 1.8);        // luminance variation
+		float rel = clamp(lum(d_rel), 0.6, 1.3);         // luminance variation (kept narrow: painted, not photographic)
 		vec3 d_hue = d_rel / max(lum(d_rel), 0.05);      // hue only
-		col *= mix(vec3(1.0), vec3(rel), detail_strength) * mix(vec3(1.0), d_hue, detail_tint * detail_strength);
+		// On the plaza the painted stone pattern leads: the photo cobbles are a
+		// different size and turn the joints to mush at full strength.
+		float ds = detail_strength * (1.0 - 0.75 * w_cob);
+		col *= mix(vec3(1.0), vec3(rel), ds) * mix(vec3(1.0), d_hue, detail_tint * ds);
 
 		// The disc is flat, so the tangent frame is world XZ: perturb the normal
 		// here instead of relying on mesh tangents (u = +x, v = +z, GL convention).
 		vec3 nm = texture(grass_nor, p * grass_tiling).rgb * w_grass
 			+ texture(path_nor, p * path_tiling).rgb * w_path
 			+ texture(cobble_nor, p * cobble_tiling).rgb * w_cob;
-		float depth = normal_strength * detail_strength * mix(0.6, 1.3, w_cob);
+		float depth = normal_strength * detail_strength * mix(0.6, 0.3, w_cob);
 		vec3 n_w = normalize(vec3((nm.r * 2.0 - 1.0) * depth, 1.0, (nm.g * 2.0 - 1.0) * depth));
 		NORMAL = normalize((VIEW_MATRIX * vec4(n_w, 0.0)).xyz);
 	}
