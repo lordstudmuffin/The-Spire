@@ -732,6 +732,9 @@ func _bot_think(delta: float) -> Vector2:
 		for e in get_tree().get_nodes_in_group("enemies"):
 			if not e.visible or int(_bot_avoid.get(e.get_instance_id(), 0)) > now:
 				continue
+			# Stay on this level (summit vs. ground): never chase off a ledge.
+			if absf(e.global_position.y - global_position.y) > 20.0:
+				continue
 			var dist: float = e.global_position.distance_to(global_position)
 			if mate != null:
 				dist += 0.8 * e.global_position.distance_to(mate.global_position)

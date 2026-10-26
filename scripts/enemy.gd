@@ -166,7 +166,12 @@ func _update_label() -> void:
 	_label.text = "%s  Lv%d\n%d / %d" % [display_name, mob_level, ceil(hp), max_hp]
 	if _plate:
 		_plate.set_info(display_name, mob_level, mob_level - GameState.level, is_boss)
-		_plate.set_hp(hp / maxf(1.0, max_hp))
+		var brain := get_node_or_null("BossBrain")
+		if brain and brain.has_method("bar_count") and brain.bar_count() > 1:
+			_plate.set_hp(brain.bar_fraction())
+			_plate.set_bars(brain.bar_count(), brain.current_bar())
+		else:
+			_plate.set_hp(hp / maxf(1.0, max_hp))
 	_shown_hp = hp
 
 

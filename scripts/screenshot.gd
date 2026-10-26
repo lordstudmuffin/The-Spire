@@ -242,11 +242,11 @@ func _ready() -> void:
 	if demo != "" and which == "world" and "player" in scene and scene.player:
 		var pl: Node3D = scene.player
 		var fwd: Vector3 = -pl.model.global_transform.basis.z
-		var bpos: Vector3 = pl.global_position + fwd * 1.7
-		var boss := demo == "slam"
+		var boss := demo == "slam" or demo.begins_with("boss_")
+		var bpos: Vector3 = pl.global_position + fwd * (7.0 if demo.begins_with("boss_") else 1.7)
 		scene._spawn_mob({"name": "Floor Guardian: Gravelmaw" if boss else "Field Boar", "level": 1, "hp": 999999, "dmg": 6,
 			"boss": boss, "size": [2.2, 2.6, 2.0] if boss else [0.9, 0.8, 1.3], "respawns": false,
-			"pos": [bpos.x, bpos.y + 0.3, bpos.z]})
+			"pos": [bpos.x, bpos.y + 0.3, bpos.z], "brain": "gravelmaw" if demo == "boss_plate" else ""})
 		await get_tree().process_frame
 		for e in get_tree().get_nodes_in_group("enemies"):
 			if e.global_position.distance_to(bpos) < 1.0:
@@ -261,8 +261,10 @@ func _ready() -> void:
 			var right: Vector3 = pl.model.global_transform.basis.x
 			var cam := Camera3D.new()
 			cam.position = pl.global_position + right * 2.6 - fwd * 1.8 + Vector3(0, 1.9, 0)
+			if demo.begins_with("boss_"):
+				cam.position = pl.global_position + right * 5.0 - fwd * 5.0 + Vector3(0, 7.5, 0)
 			scene.add_child(cam)
-			cam.look_at(pl.global_position + fwd * 0.8 + Vector3(0, 1.0, 0))
+			cam.look_at(pl.global_position + fwd * (5.0 if demo.begins_with("boss_") else 0.8) + Vector3(0, 1.0, 0))
 			cam.current = true
 		print("DBG combat-demo ", demo, " boar=", demo_boar != null)
 	for i in 40:
@@ -295,6 +297,26 @@ func _ready() -> void:
 					if qfx:
 						var at: Vector3 = pl.global_position + Vector3(0, 1.2, 0) - pl.model.global_transform.basis.z * 0.7
 						qfx.parry_flash(at, demo == "guard_break")
+				"boss_sweep", "boss_slam", "boss_charge", "boss_enrage", "boss_bar", "boss_engage", "boss_plate":
+					var bfx := VFX.get_for(pl)
+					if demo_boar and bfx:
+						var bp: Vector3 = demo_boar.global_position
+						match demo:
+							"boss_sweep":
+								bfx.boss_sweep_warning(demo_boar, 6.0, 150.0, 1.2)
+							"boss_slam":
+								bfx.boss_slam_warning(demo_boar, bp, 5.0, 1.2)
+							"boss_charge":
+								bfx.boss_charge_warning(demo_boar, bp, bp - demo_boar.global_transform.basis.z * 14.0, 1.2)
+							"boss_enrage":
+								bfx.boss_enrage(demo_boar, 1.8)
+							"boss_bar":
+								bfx.boss_bar_break(demo_boar, 2, 4)
+							"boss_engage":
+								bfx.boss_engage(demo_boar)
+							"boss_plate":
+								demo_boar.hp = demo_boar.max_hp * 0.62
+								demo_boar._update_label()
 				"stagger":
 					if demo_boar:
 						demo_boar.net_staggered(2.0)
@@ -311,7 +333,7 @@ func _ready() -> void:
 					var fx := VFX.get_for(pl)
 					if fx:
 						fx.dash(pl.global_position, -pl.model.global_transform.basis.z)
-			Engine.time_scale = 0.3 if demo in ["death", "slam", "shatter_player", "stagger"] else (0.12 if demo == "shatter" else 0.08)
+			Engine.time_scale = 0.3 if demo in ["death", "slam", "shatter_player", "stagger"] or (demo.begins_with("boss_") and demo != "boss_bar") else (0.12 if demo in ["shatter", "boss_bar"] else 0.08)
 		# HUD states that decay in real time are set three frames before the shot.
 		if open_ui == "fishing" and i == 36 and "player" in scene and scene.player:
 			scene._fishing.start(0)
@@ -319,6 +341,13 @@ func _ready() -> void:
 			scene._fishing._drop_bobber()
 			scene._fishing._bite()
 			Engine.time_scale = 0.05
+		# --pad: draw gamepad prompts. --unique: hold Twin Fang (unique slots).
+		if i == 30 and "--unique" in args:
+			GameState.unique_skill = UniqueSkills.TWIN_FANG
+			GameState.unique_skill_changed.emit(GameState.unique_skill)
+		if i == 31 and "--pad" in args:
+			InputSetup.device = "gamepad"
+			InputSetup.input_device_changed.emit("gamepad")
 		# --open death | realm: the death grey-out / a realm announcement banner.
 		if open_ui == "death" and i == 30 and "hud" in scene and scene.hud:
 			scene.hud.show_death(8.0, "the Town of First Light")

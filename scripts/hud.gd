@@ -405,8 +405,9 @@ func _build_quest_tracker(root: Control) -> void:
 func _build_boss_bar(root: Control) -> void:
 	_boss_card = PanelContainer.new()
 	_boss_card.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_boss_card.offset_left = -300
-	_boss_card.offset_right = 300
+	# 520 wide: clears the player status gauge at the top left.
+	_boss_card.offset_left = -260
+	_boss_card.offset_right = 260
 	_boss_card.offset_top = 22
 	_boss_card.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	var sb := UITheme.box(Color(UITheme.NAVY.r, UITheme.NAVY.g, UITheme.NAVY.b, 0.78), Color(UITheme.ROSE.r, UITheme.ROSE.g, UITheme.ROSE.b, 0.6), 12, 1, 12)
@@ -630,23 +631,29 @@ func _build_skill_bar(root: Control) -> void:
 
 ## Bottom-right key hints: the screens and their keys.
 func _build_hints(root: Control) -> void:
-	var h := HBoxContainer.new()
-	h.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	h.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	h.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	h.offset_right = -24
-	h.offset_bottom = -28
-	h.add_theme_constant_override("separation", 8)
-	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	h.modulate.a = 0.85
-	root.add_child(h)
+	# A right-aligned column in the bottom-right corner: stays clear of the
+	# skill bar however wide it grows (unique arts, long pad prompts).
+	var col := VBoxContainer.new()
+	col.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	col.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	col.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	col.offset_right = -24
+	col.offset_bottom = -24
+	col.add_theme_constant_override("separation", 5)
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.modulate.a = 0.85
+	root.add_child(col)
 	for pair in KEY_HINTS:
-		h.add_child(UITheme.action_cap(pair[0]))
-		var l := UITheme.label(pair[1], 12, UITheme.MUTED, true)
-		l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
+		var h := HBoxContainer.new()
+		h.alignment = BoxContainer.ALIGNMENT_END
+		h.add_theme_constant_override("separation", 8)
+		h.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		col.add_child(h)
+		var l := UITheme.label(pair[1], 12, Color(0.92, 0.94, 1.0), true)
+		l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.75))
 		l.add_theme_constant_override("outline_size", 4)
 		h.add_child(l)
-		h.add_child(UITheme.spacer(4))
+		h.add_child(UITheme.action_cap(pair[0]))
 
 
 ## Hint actions (InputMap names; the caps follow the device and remaps).

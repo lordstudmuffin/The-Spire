@@ -108,6 +108,7 @@ func _ready() -> void:
 		add_child(t)
 	_bot_mode = "--bot" in args
 	_cheat_mode = "--cheat" in args
+	_summit_mode = "--summit" in args
 	GameState.inventory_changed.connect(_track_ore_quest)
 	if Net.remote_client():
 		Net.action_applied.connect(_on_net_action)
@@ -128,6 +129,13 @@ func _ready() -> void:
 		if multiplayer.is_server():
 			multiplayer.peer_connected.connect(_on_peer_joined)
 			multiplayer.peer_disconnected.connect(_on_peer_left)
+			# The Guardian wakes when the server sees a player on the summit
+			# (a client's request_boss can beat its teleported position here).
+			var st := Timer.new()
+			st.wait_time = 1.0
+			st.autostart = true
+			st.timeout.connect(_srv_summit_check)
+			add_child(st)
 			# One server = one floor: tell every connecting peer which floor
 			# this is during the auth handshake, before its world is built
 			# (the main menu waits for this before loading the world).
@@ -148,6 +156,10 @@ func _ready() -> void:
 
 
 var _bot_mode := false
+## Soak hook (--bot --summit): skip chores, take the pad to the summit and
+## fight the Guardian; re-enter after each death.
+var _summit_mode := false
+var _summit_next := 6.0
 var _cheat_mode := false
 
 
@@ -457,6 +469,18 @@ func request_boss() -> void:
 	if where.distance_to(ARENA_POS) > ARENA_RADIUS + 6.0:
 		return
 	_spawn_boss()
+
+
+## Server, every second: spawn the Guardian once an accepted player position
+## is on the summit and the floor is not cleared yet.
+func _srv_summit_check() -> void:
+	if _boss != null or _floor_cleared_on_server or GameState.floor != 1:
+		return
+	for sp in _players.get_children():
+		var where: Vector3 = sp.srv_position() if sp.has_method("srv_position") else sp.global_position
+		if where.distance_to(ARENA_POS) <= ARENA_RADIUS + 6.0:
+			_spawn_boss()
+			return
 
 
 func _mine(vein: Node3D) -> void:
@@ -1136,6 +1160,15 @@ func _physics_process(delta: float) -> void:
 	if not _bot_mode or player == null or not Net.remote_client():
 		return
 	_chore_t += delta
+	if _summit_mode:
+		if _chore_t >= _summit_next:
+			_summit_next = _chore_t + 10.0
+			var far := player.global_position.distance_to(ARENA_POS) > ARENA_RADIUS + 4.0
+			if far and not player.is_dying():
+				player.bot = true
+				print("[bot] heading to the summit")
+				_enter_summit()
+		return
 	if _cheat_mode:
 		if not _probes_sent and _chore_t > 1.5:
 			_probes_sent = true
