@@ -76,6 +76,10 @@ var unique_skill := ""
 ## Hidden stats that unique skills watch (never shown, never sent to clients).
 var hidden_stats := {}
 var floors_cleared := 0
+## One-Handed Sword proficiency, 0..PROF_CAP: rises by one per landed swing
+## and unlocks the later Sword Arts (Player.SKILLS "prof").
+var sword_prof := 0
+const PROF_CAP := 1000
 ## Which floor of the Spire this character is on (1-based). Offline it is
 ## saved with the character; online it follows the server (one server = one
 ## floor). A dedicated server reads it from `--floor N`.
@@ -146,6 +150,7 @@ func reset() -> void:
 	unique_skill = ""
 	hidden_stats = {}
 	floors_cleared = 0
+	sword_prof = 0
 	floor = 1
 	recipes_unlocked = []
 	fishing_level = 1
@@ -200,6 +205,22 @@ func unlock_hidden_class(cls: String) -> void:
 	stats_changed.emit()
 	heal_full()
 	class_unlocked.emit(cls)
+
+
+## Proficiency credited to a character that predates the stat.
+static func prof_for_level(lv: int) -> int:
+	return clampi((lv - 1) * 60, 0, PROF_CAP)
+
+
+## One landed swing: +n proficiency. Returns the name of a Sword Art this
+## just unlocked, or "".
+func add_sword_prof(n := 1) -> String:
+	var before := sword_prof
+	sword_prof = mini(sword_prof + n, PROF_CAP)
+	for sk in Player.SKILLS:
+		if before < int(sk["prof"]) and sword_prof >= int(sk["prof"]):
+			return str(sk["name"])
+	return ""
 
 
 ## Where the player arrives (and respawns) on the current floor.
@@ -595,6 +616,7 @@ func to_dict() -> Dictionary:
 		"unique_skill": unique_skill,
 		"hidden": hidden_stats,
 		"floors_cleared": floors_cleared,
+		"sword_prof": sword_prof,
 		"floor": floor,
 		"recipes_unlocked": recipes_unlocked,
 		"fishing_level": fishing_level,
@@ -668,6 +690,7 @@ func apply_patch(d: Dictionary) -> void:
 	var us := str(d.get("unique_skill", unique_skill))
 	unique_skill = us if UniqueSkills.is_unique(us) else ""
 	floors_cleared = maxi(int(d.get("floors_cleared", floors_cleared)), 0)
+	sword_prof = clampi(int(d.get("sword_prof", sword_prof)), 0, PROF_CAP)
 	if d.get("recipes_unlocked") is Array:
 		recipes_unlocked = []
 		for r in d["recipes_unlocked"]:
@@ -814,6 +837,8 @@ func from_dict(d: Dictionary) -> void:
 		unique_skill = ""
 	hidden_stats = d.get("hidden", {}).duplicate(true) if d.get("hidden") is Dictionary else {}
 	floors_cleared = int(d.get("floors_cleared", 0))
+	# Saves from before proficiency existed: credit the levels already earned.
+	sword_prof = clampi(int(d.get("sword_prof", prof_for_level(int(d.get("level", 1))))), 0, PROF_CAP)
 	floor = clampi(int(d.get("floor", 1)), 1, 2)
 	recipes_unlocked = []
 	var raw_rec = d.get("recipes_unlocked", [])

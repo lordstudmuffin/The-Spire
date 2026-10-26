@@ -563,6 +563,8 @@ func net_hit(kind: int, from_dir: Vector3, swing: int = 0) -> void:
 		var cooldown := Player.ATTACK_COOLDOWN
 		var class_art := {}
 		if kind >= 0 and kind < Player.SKILLS.size():
+			if not Player.art_unlocked(kind, Net.srv_sword_prof(sender)):
+				return  # the record has not learned this Sword Art yet
 			mult = Player.SKILLS[kind]["mult"]
 			cooldown = Player.SKILLS[kind]["cooldown"]
 		elif HiddenClasses.is_art_kind(kind):
@@ -594,6 +596,8 @@ func net_hit(kind: int, from_dir: Vector3, swing: int = 0) -> void:
 			if now - int(last[0]) < int(cooldown * 900.0):
 				return
 			_swing_times[key] = [now, swing]
+			if kind < Player.SKILLS.size():
+				Net.srv_add_prof(sender)  # once per swing, basic attacks and Sword Arts
 		if int(_hit_by.get(sender, -1)) == swing and swing != 0:
 			return  # This swing already landed on this mob.
 		_hit_by[sender] = swing

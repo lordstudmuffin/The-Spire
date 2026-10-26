@@ -87,6 +87,7 @@ Built and smoke-green (smoke ~420 checks, realm_test 88, 2-bot soak 0 errors, or
   - Switch (enemy.gd): within 2 s of a parry stagger, a party mate's first hit deals x1.3 and extends the stagger (hook switch_flash).
   - Crafting.RANKS tops out at "Myth", and item details read "RATING: X".
   - Crystals (LifeData.CRYSTALS): Healing (full HP) and Teleport (to the floor's arrival point, a safe destination). Server action "crystal". Sold by Trader Pell, found in Labyrinth chests. H, or LT+Y on a pad, is a quick Healing Crystal. VFX hook crystal_burst(pos, color, teleport).
+  - Weapon proficiency: GameState.sword_prof / record "sword_prof", 0..1000, +1 per landed swing (the server counts once per swing in Enemy.net_hit). Player.SKILLS "prof" gates the arts at 0 / 40 / 120, and the server refuses unlearned arts. Older records and saves are credited (level-1)*60. Player.art_unlocked(i, prof).
   - Monument of Climbers (scripts/monument.gd): the realm's characters by level. The server scans user://server_db once, merges the live records and pushes net_names every 20 s and to new peers. Art is any Node3D in group "monument" with set_names(entries); E within 4 m reads the top 10.
 - Farming skill: GameState/record farming_level/xp; harvest gives xp (Farms.crop_xp), bonus crop chance 4%/level (cap 50%), +1% seed return per level.
 

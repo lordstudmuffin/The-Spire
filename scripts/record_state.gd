@@ -17,7 +17,7 @@ const GATHER_QUESTS := [["ore_delivery", "iron_ore"], ["shrine_rite", "wisp_esse
 const FIELDS := ["character", "level", "xp", "stat_points", "stats", "money", "hp", "quests", "materials", "inventory", "equipped",
 	"smithing_level", "smithing_xp", "items_crafted", "hidden_class", "floors_cleared", "recipes_unlocked",
 	"fishing_level", "fishing_xp", "cooking_level", "cooking_xp", "farming_level", "farming_xp", "fish_caught", "home_owned", "home_storage",
-	"home_furniture", "decor_owned", "buffs", "title", "visited", "chests", "unique_skill", "hidden"]
+	"home_furniture", "decor_owned", "buffs", "title", "visited", "chests", "unique_skill", "hidden", "sword_prof"]
 
 var rec: Dictionary
 ## Set by callers that want to know what happened (level-ups, class unlocks).

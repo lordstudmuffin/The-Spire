@@ -22,9 +22,10 @@ const TARGET_RANGE := 16.0
 ## Sword Arts: preset moves with a cooldown and a short recovery ("post-motion").
 ## Damage is a multiplier of normal attack damage; arc is the hit cone in radians.
 const SKILLS := [
-	{"name": "Sweeping Edge", "mult": 1.6, "range": 2.6, "arc": PI, "cooldown": 4.0, "recovery": 0.5, "lunge": 0.0},
-	{"name": "Twin Crescent", "mult": 2.6, "range": 2.4, "arc": 0.9, "cooldown": 8.0, "recovery": 0.8, "lunge": 0.0},
-	{"name": "Falcon Rush", "mult": 2.0, "range": 2.4, "arc": 1.2, "cooldown": 10.0, "recovery": 0.6, "lunge": 14.0},
+	# "prof": One-Handed Sword proficiency needed (GameState.sword_prof).
+	{"name": "Sweeping Edge", "mult": 1.6, "range": 2.6, "arc": PI, "cooldown": 4.0, "recovery": 0.5, "lunge": 0.0, "prof": 0},
+	{"name": "Twin Crescent", "mult": 2.6, "range": 2.4, "arc": 0.9, "cooldown": 8.0, "recovery": 0.8, "lunge": 0.0, "prof": 40},
+	{"name": "Falcon Rush", "mult": 2.0, "range": 2.4, "arc": 1.2, "cooldown": 10.0, "recovery": 0.6, "lunge": 14.0, "prof": 120},
 ]
 
 signal skill_used(index: int, cooldown: float)
@@ -511,6 +512,8 @@ func _physics_process(delta: float) -> void:
 				if chord and i < unique_cd.size():
 					if unique_cd[i] == 0.0:
 						use_unique(i)
+				elif not art_unlocked(i, GameState.sword_prof):
+					_art_locked_toast(i)
 				elif skill_cd[i] == 0.0:
 					_use_skill(i)
 		if GameState.unique_skill != "":
@@ -861,6 +864,13 @@ func _hit_cone(damage: float, range_: float, arc: float, kind := -1) -> int:
 			else:
 				e.net_hit.rpc_id(1, kind, to.normalized(), _swing_serial)
 			hits += 1
+	if hits > 0 and is_local:
+		var learned := GameState.add_sword_prof(1)
+		if learned != "":
+			var hud := get_tree().get_first_node_in_group("hud")
+			Audio.play("quest_complete")
+			if hud and hud.has_method("toast"):
+				hud.toast("New Sword Art: %s" % learned, "One-Handed Sword proficiency %d" % GameState.sword_prof, "Skill", UITheme.CYAN)
 	# Duel opponent (scripts/duels.gd): the same cone, judged by the server
 	# with the same kind / cooldown / range rules, then telegraphed so the
 	# other player can parry. Nobody else is ever hit by a player.
@@ -1122,6 +1132,17 @@ func use_class_art(i: int) -> bool:
 			if fx2 and fx2.has_method("hearth_glow"):
 				fx2.call("hearth_glow", self))
 	return true
+
+
+static func art_unlocked(i: int, prof: int) -> bool:
+	return i >= 0 and i < SKILLS.size() and prof >= int(SKILLS[i].get("prof", 0))
+
+
+func _art_locked_toast(i: int) -> void:
+	Audio.play("ui_error")
+	var hud := get_tree().get_first_node_in_group("hud")
+	if hud and hud.has_method("toast"):
+		hud.toast("%s is not learned yet" % SKILLS[i]["name"], "One-Handed Sword proficiency %d / %d" % [GameState.sword_prof, int(SKILLS[i]["prof"])], "Skill", UITheme.MUTED)
 
 
 func _use_skill(i: int) -> void:

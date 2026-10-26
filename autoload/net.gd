@@ -366,12 +366,14 @@ static func record_defaults() -> Dictionary:
 		"weapon_atk": 0.0, "recipes_unlocked": [], "fishing_level": 1, "fishing_xp": 0, "cooking_level": 1, "cooking_xp": 0, "farming_level": 1, "farming_xp": 0,
 		"fish_caught": 0, "home_owned": false, "home_storage": [], "home_furniture": ["", "", "", "", "", ""],
 		"decor_owned": {}, "buffs": {}, "hp": 100.0, "title": "", "visited": [], "chests": {},
-		"unique_skill": "", "hidden": {}, "duels": {"won": 0, "lost": 0},
+		"unique_skill": "", "hidden": {}, "duels": {"won": 0, "lost": 0}, "sword_prof": 0,
 	}
 
 
 static func fill_record_defaults(rec: Dictionary) -> void:
 	var d := record_defaults()
+	if not rec.has("sword_prof"):
+		rec["sword_prof"] = GameState.prof_for_level(int(rec.get("level", 1)))
 	for k in d:
 		if not rec.has(k) or typeof(rec[k]) != typeof(d[k]):
 			rec[k] = d[k]
@@ -1857,6 +1859,17 @@ func _srv_action(peer: int, kind: String, payload: Dictionary) -> Dictionary:
 	save_record(rec)
 	_srv_reply(peer, kind, res)
 	return res
+
+
+## Server: one landed swing for `peer` (Enemy.net_hit, once per swing).
+func srv_add_prof(peer: int) -> void:
+	if srv_records.has(peer):
+		var rec: Dictionary = srv_records[peer]
+		rec["sword_prof"] = mini(int(rec.get("sword_prof", 0)) + 1, GameState.PROF_CAP)
+
+
+func srv_sword_prof(peer: int) -> int:
+	return int(srv_records[peer].get("sword_prof", 0)) if srv_records.has(peer) else 0
 
 
 ## Server: per-peer cooldown on a world object ("vein:3"). True when the

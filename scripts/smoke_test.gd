@@ -590,6 +590,19 @@ func _ready() -> void:
 	var p: Player = world.player
 	p._use_skill(2)
 	_check(p.skill_cd[2] > 0.0, "sword art goes on cooldown")
+	# Weapon proficiency: the later Sword Arts unlock with use.
+	var prof0 := GameState.sword_prof
+	GameState.sword_prof = 0
+	_check(Player.art_unlocked(0, 0) and not Player.art_unlocked(1, 0) and not Player.art_unlocked(2, 119) and Player.art_unlocked(2, 120), "Sword Arts unlock at proficiency 0 / 40 / 120")
+	GameState.sword_prof = 39
+	_check(GameState.add_sword_prof(1) == "Twin Crescent" and GameState.add_sword_prof(1) == "" and GameState.sword_prof == 41, "the 40th landed swing teaches Twin Crescent")
+	GameState.sword_prof = GameState.PROF_CAP
+	GameState.add_sword_prof(5)
+	_check(GameState.sword_prof == GameState.PROF_CAP, "proficiency caps at %d" % GameState.PROF_CAP)
+	var old_rec := {"name": "Old", "level": 5}
+	Net.fill_record_defaults(old_rec)
+	_check(int(old_rec["sword_prof"]) == GameState.prof_for_level(5) and GameState.prof_for_level(5) >= 120 and int(Net.record_defaults()["sword_prof"]) == 0, "records from before proficiency are credited by level (new ones start at 0)")
+	GameState.sword_prof = prof0
 
 	# Server-side validators against this world, on a fake record (what an
 	# online client's requests run through: world.srv_action).
