@@ -719,6 +719,35 @@ func chest_sparkle(node: Node3D, on := true, color := Color(1.0, 0.88, 0.5)) -> 
 		_glint(node.global_position + node.global_transform.basis * off, color, 0.35, 0.5, true))
 
 
+## Sword Skill glow: the whole weapon lights up in the skill's hue (as the
+## system takes over the swing), a grown additive shell around every mesh
+## of the weapon that holds, then fades.
+func blade_glow(weapon: Node3D, color: Color, secs := 0.45) -> void:
+	if weapon == null or not is_instance_valid(weapon):
+		return
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	# Mixed, not additive: an additive shell vanishes over a sunlit plaza.
+	m.cull_mode = BaseMaterial3D.CULL_FRONT
+	m.grow = true
+	m.grow_amount = 0.03
+	m.albedo_color = Color(color.lightened(0.25), 0.0)
+	var meshes: Array = weapon.find_children("*", "MeshInstance3D", true, false)
+	if weapon is MeshInstance3D:
+		meshes.append(weapon)
+	for mi in meshes:
+		(mi as MeshInstance3D).material_overlay = m
+	var tw := weapon.create_tween()
+	tw.tween_property(m, "albedo_color:a", 0.8, 0.06)
+	tw.tween_interval(maxf(secs - 0.26, 0.0))
+	tw.tween_property(m, "albedo_color:a", 0.0, 0.2)
+	tw.tween_callback(func():
+		for mi in meshes:
+			if is_instance_valid(mi) and (mi as MeshInstance3D).material_overlay == m:
+				(mi as MeshInstance3D).material_overlay = null)
+
+
 # --- Hidden class arts ---------------------------------------------------------
 
 const STILL_COLOR := Color(0.62, 0.92, 1.0)   # Stillblade: clear water
