@@ -2036,6 +2036,10 @@ static var _kaykit_libs := {}      # pack dir + skeleton path -> AnimationLibrar
 
 func _model_spec() -> Dictionary:
 	var spec: Dictionary = MODELS.get(_rig_kind(), {}).duplicate()
+	if display_name.begins_with("Greytusk"):
+		# The named elite boar: grey with age, dressed by MobDress.
+		spec["tint"] = "7abcbc"  # cancels the Pig texture's pink to an old grey
+		spec["dress"] = "greytusk"
 	for k in model:
 		spec[k] = model[k]
 	return spec

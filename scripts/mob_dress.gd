@@ -35,6 +35,9 @@ static func apply(inst: Node3D, kind: String) -> void:
 		break
 	if sk == null:
 		return
+	if kind == "greytusk":
+		_greytusk(inst, sk)
+		return
 	var head_box := AABB()
 	for mi in sk.find_children("*", "MeshInstance3D", true, false):
 		var n := String(mi.name).to_lower()
@@ -205,6 +208,73 @@ static func draw_blade(root: Node) -> Node3D:
 	tip.position = p
 	blade.add_child(tip)
 	return tip
+
+
+## Greytusk, the Old Boar (a named field elite on the boar's Pig model): long
+## curving tusks, a shaggy grey mane down the spine, old pale scars on the
+## flanks, a notched ear and one clouded eye. Parts are authored in a frame
+## with Y up, -Z toward the snout and lengths in body lengths (L), then
+## moved into the bone they ride on.
+static func _greytusk(inst: Node3D, sk: Skeleton3D) -> void:
+	var sk_xf := AssetLib._relative_xf(inst, sk)
+	var at := func(bone: String) -> Transform3D:
+		var b := sk.find_bone(bone)
+		return sk_xf * sk.get_bone_global_rest(b) if b >= 0 else sk_xf
+	if sk.find_bone("Head") < 0 or sk.find_bone("Hips") < 0:
+		return
+	var head: Transform3D = at.call("Head")
+	var head_end: Transform3D = at.call("Head_end")
+	var hips: Transform3D = at.call("Hips")
+	var shoulders: Transform3D = at.call("Shoulders")
+	var fwd := head_end.origin - hips.origin
+	fwd.y = 0.0
+	var L := maxf(fwd.length(), 0.001)
+	fwd = fwd / L
+	var right := fwd.cross(Vector3.UP).normalized()
+	var basis := Basis(right, Vector3.UP, -fwd)
+	var bone_frame := func(bone: String, origin: Vector3) -> Node3D:
+		# Holder under the bone, whose local frame is (basis, origin) in
+		# model space.
+		var att := _attach(sk, bone, "Greytusk" + bone)
+		var bone_model: Transform3D = at.call(bone)
+		return _holder(att, bone_model.affine_inverse() * Transform3D(basis, origin))
+	var bone := _mat(BONE.darkened(0.05))
+	var mane := _mat(Color("8c8a86"))
+	var mane_dark := _mat(Color("5e5b57"))
+	var scar := _mat(Color("d9c2b0"))
+	var milk := _mat(Color("cfd6dc"), Color("cfd6dc"), 0.25)
+	# Tusks: three tapering segments each, sweeping out, up and back.
+	var hf: Node3D = bone_frame.call("Head", head_end.origin)
+	for side: float in [-1.0, 1.0]:
+		var p := Vector3(side * 0.05 * L, -0.02 * L, 0.02 * L)
+		var d := Vector3(side * 0.35, 0.25, -1.0).normalized()
+		var r := 0.03 * L
+		for k in 3:
+			var seg := 0.08 * L
+			var mid := p + d * seg * 0.5
+			var mi := _part(hf, _cy(r * 0.7, r, seg), bone, mid)
+			mi.basis = Basis(Quaternion(Vector3.UP, d))
+			p += d * seg
+			r *= 0.7
+			d = (d + Vector3(side * 0.15, 0.55, 0.35)).normalized()
+	# A clouded right eye and a notched left ear.
+	_part(hf, _sph(0.022 * L), milk, Vector3(0.075 * L, 0.06 * L, 0.11 * L))
+	# Mane: grey tufts from the neck to the hips, longest at the shoulders.
+	var bf: Node3D = bone_frame.call("Body", shoulders.origin)
+	var top := 0.25 * L
+	for i in 9:
+		var t := i / 8.0
+		var z := lerpf(-0.14, 0.55, t) * L
+		var hgt := lerpf(0.16, 0.06, t) * L
+		var tilt := lerpf(0.5, 1.1, t)
+		_part(bf, _cy(0.0, 0.05 * L * (1.0 - t * 0.4), hgt), mane if i % 2 == 0 else mane_dark,
+			Vector3(0, top - t * 0.02 * L + hgt * 0.3, z), Vector3(tilt, 0, 0))
+		for side: float in [-1.0, 1.0]:
+			_part(bf, _cy(0.0, 0.035 * L, hgt * 0.8), mane_dark, Vector3(side * 0.05 * L, top - 0.02 * L, z + 0.02 * L), Vector3(tilt, 0, side * -0.5))
+	# Scars: three pale slashes on each flank.
+	for side: float in [-1.0, 1.0]:
+		for k in 3:
+			_part(bf, _bx(0.008 * L, 0.012 * L, 0.08 * L), scar, Vector3(side * 0.215 * L, 0.06 * L - k * 0.04 * L, 0.12 * L + k * 0.06 * L), Vector3(1.0, 0, 0))
 
 
 static func _mat(c: Color, emission := Color.BLACK, strength := 0.0) -> ShaderMaterial:

@@ -2078,6 +2078,11 @@ func show_battle_result(data: Dictionary) -> void:
 	BattleResult.show_in(_root, data)
 
 
+## The Last Attack bonus window (World._show_last_attack).
+func show_last_attack(data: Dictionary) -> void:
+	LastAttackBanner.show_in(_root, data)
+
+
 func toast(text: String, sub := "", kicker := "", accent: Color = UITheme.GOLD) -> void:
 	_toast.text = text
 	_toast.add_theme_color_override("font_color", accent)
