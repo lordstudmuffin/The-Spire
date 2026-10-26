@@ -173,7 +173,8 @@ func _draw_canvas() -> void:
 	for n in _npcs:
 		if not is_instance_valid(n):
 			continue
-		var gp: Vector3 = n.global_position
+		# NPCs who work indoors (the tavern, the forge) show at their building.
+		var gp: Vector3 = n.get_meta("map_pos", n.global_position)
 		var np := Vector2(gp.x, gp.z)
 		var is_tracked: bool = tracked_giver != "" and "npc_name" in n and n.npc_name == tracked_giver
 		if is_tracked:

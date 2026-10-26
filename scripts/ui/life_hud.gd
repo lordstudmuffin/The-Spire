@@ -30,6 +30,8 @@ var _guild_panel: PanelContainer
 var _guild
 var _tavern_panel: PanelContainer
 var _tavern: TavernScreen
+var _smithy_panel: PanelContainer
+var _smithy: SmithyScreen
 var _tick := 0.0
 
 
@@ -69,6 +71,9 @@ func _build() -> void:
 	_tavern_panel = _hud._modal(_root, 0)
 	_tavern = TavernScreen.build()
 	_hud._modal_box(_tavern_panel).add_child(_tavern)
+	_smithy_panel = _hud._modal(_root, 0)
+	_smithy = SmithyScreen.build()
+	_hud._modal_box(_smithy_panel).add_child(_smithy)
 	_guild_panel = _hud._modal(_root, 0)
 	_guild = GuildScreenScript.build()
 	_hud._modal_box(_guild_panel).add_child(_guild)
@@ -156,7 +161,7 @@ func _process(delta: float) -> void:
 func any_open() -> bool:
 	return _cook_panel.visible or _shop_panel.visible or _store_panel.visible or (_stall_panel != null and _stall_panel.visible) \
 		or (_farm_panel != null and _farm_panel.visible) or (_guild_panel != null and _guild_panel.visible) \
-		or (_tavern_panel != null and _tavern_panel.visible)
+		or (_tavern_panel != null and _tavern_panel.visible) or (_smithy_panel != null and _smithy_panel.visible)
 
 
 func cooking_open() -> bool:
@@ -175,6 +180,8 @@ func hide_all() -> void:
 		_guild_panel.hide()
 	if _tavern_panel:
 		_tavern_panel.hide()
+	if _smithy_panel:
+		_smithy_panel.hide()
 
 
 func _open(panel: PanelContainer) -> void:
@@ -260,6 +267,16 @@ func open_tavern(tavern: Node, tab := "counter"):
 	_open(_tavern_panel)
 	_tavern.open(tavern, tab)
 	return _tavern
+
+
+func open_smithy(smithy: Node):
+	_open(_smithy_panel)
+	_smithy.open(smithy)
+	return _smithy
+
+
+func smithy_open() -> bool:
+	return _smithy_panel != null and _smithy_panel.visible
 
 
 func tavern_open() -> bool:

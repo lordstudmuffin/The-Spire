@@ -39,6 +39,10 @@ var _herbs: HerbField
 var _home: PlayerHome
 ## The Hollow Hearth, Rook's tavern in Hollowbrook (scripts/life/tavern.gd); null off Floor 1.
 var _tavern: Tavern
+## Hollowbrook Forge, Smith Kesra's workshop and commissions (scripts/life/smithy.gd).
+var _smithy: Smithy
+## NPCs whose anvil opens the forge panel (and passes the server's anvil check).
+const SMITHS := ["Smith Haldor", "Smith Orla", "Smith Kesra"]
 ## Hollowbrook market stalls (P7, scripts/life/stalls.gd); null off Floor 1.
 var _stalls: Node3D = null
 ## Hollowbrook farm field and the guild notice board (P8, scripts/life/farms.gd,
@@ -432,6 +436,8 @@ func _on_interact() -> void:
 			_guilds.open(hud)
 		elif near[0].has("tavern"):
 			_tavern.open(hud, str(near[0]["tavern"]))
+		elif near[0].has("smithy"):
+			_smithy.open(hud)
 		elif near[0].has("chest"):
 			_lab.interact(int(near[0]["chest"]), hud)
 		elif near[0].has("beacon"):
@@ -609,6 +615,10 @@ func _life_interactable() -> Array:
 		var fp: Dictionary = _farms.nearest(p)
 		if not fp.is_empty():
 			return [fp, fp["label"]]
+	if _smithy:
+		var sm: Dictionary = _smithy.nearest(p)
+		if not sm.is_empty():
+			return [sm, sm["label"]]
 	if _tavern:
 		var tv: Dictionary = _tavern.nearest(p)
 		if not tv.is_empty():
@@ -778,8 +788,8 @@ func _default_talk(npc: NPC, gs) -> String:
 ## Online client: what a talk does on this machine besides the line the
 ## server will send (open the anvil or the stall).
 func _talk_local_side_effects(npc: NPC) -> void:
-	if npc.npc_name in ["Smith Haldor", "Smith Orla"]:
-		_open_craft()
+	if npc.npc_name in SMITHS:
+		_open_craft("%s's anvil" % npc.npc_name.trim_prefix("Smith "))
 	elif npc.npc_name == "Trader Pell":
 		_open_shop()
 
@@ -993,11 +1003,11 @@ func srv_action(peer: int, rs, kind: String, payload: Dictionary, pos: Vector3) 
 				return {"error": "You need a fire to cook."}
 			return LifeData.cook(str(payload.get("id", "")), rs)
 		"craft":
-			if _srv_npc_near(pos, ["Smith Haldor", "Smith Orla"]) == null:
+			if _srv_npc_near(pos, SMITHS) == null:
 				return {"error": "You need an anvil (talk to a smith)."}
 			return Crafting.craft(str(payload.get("recipe", "")), rs)
 		"forge_start":
-			if _srv_npc_near(pos, ["Smith Haldor", "Smith Orla"]) == null:
+			if _srv_npc_near(pos, SMITHS) == null:
 				return {"error": "You need an anvil (talk to a smith)."}
 			var fr := str(payload.get("recipe", ""))
 			if not Forging.uses_minigame(fr):
@@ -1010,7 +1020,7 @@ func srv_action(peer: int, rs, kind: String, payload: Dictionary, pos: Vector3) 
 				return st
 			# The last strike lands the piece: re-check at the anvil, then
 			# forge at the quality the server graded.
-			if _srv_npc_near(pos, ["Smith Haldor", "Smith Orla"]) == null:
+			if _srv_npc_near(pos, SMITHS) == null:
 				return {"error": "You walked away from the anvil; the piece is spoiled."}
 			var made := Crafting.craft(str(st["recipe"]), rs, float(st["quality"]))
 			if not made.has("error"):
@@ -1018,7 +1028,7 @@ func srv_action(peer: int, rs, kind: String, payload: Dictionary, pos: Vector3) 
 				made["grades"] = st["grades"]
 			return made
 		"repair":
-			if _srv_npc_near(pos, ["Smith Haldor", "Smith Orla"]) == null:
+			if _srv_npc_near(pos, SMITHS) == null:
 				return {"error": "You need an anvil (talk to a smith)."}
 			var slot := str(payload.get("slot", ""))
 			var rerr := Durability.repair(rs, slot)
@@ -1083,6 +1093,10 @@ func srv_action(peer: int, rs, kind: String, payload: Dictionary, pos: Vector3) 
 			if not rs.visit("waystone_%d" % i):
 				return {"error": "That stone is already awake."}
 			return {"i": i, "lit": GameState.visited_count(rs.visited, "waystone_")}
+		"smithy":
+			if _smithy == null:
+				return {"error": "There is no village forge on this floor."}
+			return _smithy.srv(peer, rs, payload, pos)
 		"tavern":
 			if _tavern == null:
 				return {"error": "There is no tavern on this floor."}
@@ -1182,6 +1196,10 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 	if kind == "tavern":
 		if _tavern:
 			_tavern.on_net(kind, res)
+		return
+	if kind == "smithy":
+		if _smithy:
+			_smithy.on_net(kind, res)
 		return
 	if kind in ["farm", "farm_signs"]:
 		if _farms:
@@ -1629,6 +1647,16 @@ func _spawn_hollowbrook_chain() -> void:
 	if _tavern:
 		rook.position = _tavern.interior + Tavern.ROOK_SPOT  # behind his bar
 		rook.rotation.y = PI
+		rook.set_meta("map_pos", _tavern.door_pos)
+	if _smithy:
+		var kesra := NPC.new()
+		kesra.npc_name = "Smith Kesra"
+		kesra.appearance = {"hair_color": "c4262e", "outfit_color": "4a3a32", "hair_style": 3, "eye_color": "d9a441", "height": 1.0}
+		kesra.position = _smithy.interior + Smithy.KESRA_SPOT
+		kesra.rotation.y = PI * 0.8
+		kesra.set_meta("map_pos", _smithy.door_pos)
+		_set_talk(kesra, _kesra_talk)
+		add_child(kesra)
 	rook.quest_id = "tavern_stew"
 	_set_talk(rook, _rook_talk)
 	add_child(rook)
@@ -1992,7 +2020,8 @@ func _smith_talk(gs = GameState) -> String:
 	return "Bring ore and hides, pay the forge fee, and I'll let you work the anvil."
 
 
-func _open_craft() -> void:
+func _open_craft(anvil := "Haldor's anvil") -> void:
+	hud.anvil_name = anvil
 	if not hud.toggle_craft():
 		hud.toggle_craft()
 	player.input_enabled = false
@@ -2699,6 +2728,8 @@ func _build_hollowbrook() -> void:
 			WorldArt.house(self, pos, 5.0, 4.5, 3.4, face, [1, 3, 0, 1, 2][i])
 		if kinds[i] == "tavern":
 			_build_tavern(pos, face, WorldProps.footprint("tavern", colors[i], WorldProps.HOUSE * 0.9))
+		elif kinds[i] == "blacksmith":
+			_build_smithy(pos, face, WorldProps.footprint("blacksmith", colors[i], WorldProps.HOUSE * 0.9))
 	# Well in the middle.
 	if WorldProps.ready():
 		WorldProps.house(self, HOLLOWBROOK, "well", "red", 0.6, 4.2)
@@ -2746,6 +2777,20 @@ func _build_tavern(pos: Vector3, face: float, footprint: Vector2) -> void:
 	_pads.append({"pos": _tavern.door_pos, "label": "Enter the Hollow Hearth", "dest": _tavern.spawn_inside, "toast": "The Hollow Hearth"})
 	_pads.append({"pos": _tavern.exit_pos, "label": "Leave the tavern", "dest": _tavern.door_out + Vector3(0, 1, 0), "toast": "Hollowbrook"})
 	_campfires.append({"pos": _tavern.interior + Tavern.HEARTH + Vector3(1.4, 0, 0), "range": 2.2, "label": "Cook at the tavern hearth", "where": "The Hollow Hearth"})
+
+
+func _build_smithy(pos: Vector3, face: float, footprint: Vector2) -> void:
+	_smithy = Smithy.build(self, pos, face, footprint)
+	_pads.append({"pos": _smithy.door_pos, "label": "Enter Hollowbrook Forge", "dest": _smithy.spawn_inside, "toast": "Hollowbrook Forge"})
+	_pads.append({"pos": _smithy.exit_pos, "label": "Leave the forge", "dest": _smithy.door_out + Vector3(0, 1, 0), "toast": "Hollowbrook"})
+
+
+func _kesra_talk(gs = GameState) -> String:
+	if gs == GameState:
+		_open_craft("Kesra's anvil")
+	if gs.quest_done("ore_delivery"):
+		return "Wren's ore lit this forge, and you carried it. The anvil is yours whenever you need it. The village pins its commissions on the board by the door."
+	return "Cold iron and no ore wagons. I can still lend you the anvil; the village pins its commissions on the board by the door. Wren could use your help with ore."
 
 
 func _elder_talk(gs = GameState) -> String:
@@ -3175,7 +3220,7 @@ func _spawn_npcs_floor2(village: Dictionary) -> void:
 
 func _orla_talk(gs = GameState) -> String:
 	if gs == GameState:
-		_open_craft()
+		_open_craft("Orla's anvil")
 	if gs.recipe_unlocked("shrine_rite"):
 		return "Ilsa taught you the rite? Then I can temper plate in the Mere's water. Bring hides, ore and essence."
 	return "Stag horn takes an edge like nothing else; bring me some with ore and I'll forge a Mirewood Blade. Plate work I only do for those the shrine has blessed."

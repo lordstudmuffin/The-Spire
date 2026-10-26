@@ -1,10 +1,11 @@
 class_name Tavern
 extends Node3D
 ## The Hollow Hearth: Innkeeper Rook's tavern in Hollowbrook (Floor 1). The
-## KayKit tavern house on the village ring gets a door; its interior is built
-## under the island, straight below the house (so the map and quest markers
-## still point at Hollowbrook), and the door and the exit mat are pads the
-## server knows. Rook works the bar inside.
+## KayKit tavern house on the village ring gets a door; like the cottage, its
+## interior is built inside the island's rock (INTERIOR, near the axis where
+## the rock is thick: right under a ring house the underside cone cuts into
+## the room), and the door and the exit mat are pads the server knows. Rook
+## works the bar inside; his minimap dot stays at the house (meta map_pos).
 ##
 ## What it is for (Kyle's life-sim list: places players use and keep alive):
 ## - The counter: hot meals and drinks for Col. A meal is the "tavern_meal"
@@ -24,7 +25,8 @@ extends Node3D
 ## by the caller. Orders and their slots are a pure function of the shift
 ## index, so the client draws them from the server's view.
 
-const DEPTH := -20.0          # interior floor, below the house
+## Hall centre (floor level), clear of the cottage at PlayerHome.INTERIOR.
+const INTERIOR := Vector3(0, -22, 24)
 const ROOM := Vector3(14.0, 4.8, 11.0)
 const COUNTER := Vector3(0, 0, -2.6)   # where you stand to order
 const ROOK_SPOT := Vector3(0, 0, -4.35)
@@ -182,11 +184,11 @@ static func view(rdb, holder: String, t: float) -> Dictionary:
 
 ## Order claims of earlier shifts are history: let them go so the realm
 ## file stays small.
-static func _forget_old_shifts(rdb, shift: int) -> void:
-	var cur := "kitchen:%d:" % shift
+static func _forget_old_shifts(rdb, shift: int, prefix := "kitchen") -> void:
+	var cur := "%s:%d:" % [prefix, shift]
 	for id in rdb.data["claims"].keys():
 		var sid := str(id)
-		if sid.begins_with("kitchen:") and not sid.begins_with(cur):
+		if sid.begins_with(prefix + ":") and not sid.begins_with(cur):
 			for h in rdb.holders(sid):
 				rdb.release(sid, str(h))
 			rdb.data["claims"].erase(sid)
@@ -216,7 +218,7 @@ static func build(w: Node3D, pos: Vector3, face: float, footprint: Vector2) -> T
 	t.process_priority = 100  # after DayNight, like the cottage
 	w.add_child(t)
 	t.house_pos = pos
-	t.interior = pos + Vector3(0, DEPTH, 0)
+	t.interior = INTERIOR
 	var fwd := Vector3(sin(face), 0, cos(face))
 	t.door_pos = pos + fwd * (footprint.y * 0.5 + 1.2)
 	t.door_out = pos + fwd * (footprint.y * 0.5 + 2.6)

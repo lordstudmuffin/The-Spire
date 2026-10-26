@@ -44,7 +44,7 @@ const MAX_INVENTORY := 60
 const LEVEL_CAP := 100
 ## Per-kind minimum interval between two accepted action requests of a peer.
 const RATE_ACTION_MS := {"craft": 400, "cook": 400, "eat": 250, "crystal": 500, "repair": 400, "buy": 400, "buy_home": 1000, "mine": 700, "herb": 400,
-	"cast": 1500, "land": 800, "forge_start": 400, "forge_strike": 150, "tavern": 300, "talk": 400, "store": 150, "place": 300, "rest": 2000, "spend_point": 100, "equip": 150,
+	"cast": 1500, "land": 800, "forge_start": 400, "forge_strike": 150, "tavern": 300, "smithy": 300, "talk": 400, "store": 150, "place": 300, "rest": 2000, "spend_point": 100, "equip": 150,
 	"unequip": 150, "enter_labyrinth": 1000, "duel": 400}
 const RATE_ACTION_DEFAULT_MS := 250
 ## Slack added to every server-side range check (sync lag, srv_position lag).

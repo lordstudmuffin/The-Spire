@@ -44,6 +44,8 @@ var _pause_panel: PanelContainer
 var _prompt: Label
 var _prompt_card: PanelContainer
 var _craft_panel: PanelContainer
+## Whose anvil the forge panel is (world._open_craft).
+var anvil_name := "Haldor's anvil"
 var _skill_bar: HBoxContainer
 var _skill_buttons: Array = []
 var _skill_slots: Array = []  # [{"sweep": RadialSweep, "cd": Label, "name": Label, "card": PanelContainer}]
@@ -1509,7 +1511,7 @@ func _section(parent: Node, title: String, right_text := "") -> void:
 func _build_craft() -> void:
 	for c in _craft_box.get_children():
 		c.queue_free()
-	_section(_craft_box, "Haldor's anvil", "Esc to close")
+	_section(_craft_box, anvil_name, "Esc to close")
 	var title := UITheme.heading("Forge", 28)
 	_craft_box.add_child(title)
 	_craft_box.add_child(UITheme.rule())
@@ -1643,7 +1645,7 @@ func forge_begin(res: Dictionary) -> void:
 		return
 	for c in _craft_box.get_children():
 		c.queue_free()
-	_section(_craft_box, "Haldor's anvil", "Esc to abandon")
+	_section(_craft_box, anvil_name, "Esc to abandon")
 	_forge = ForgeWidget.make()
 	_craft_box.add_child(_forge)
 	var tip := UITheme.subtle("Strike while the spark is over the glow; dead centre is a Perfect strike. Better work rolls higher ranks and stats.", 12)

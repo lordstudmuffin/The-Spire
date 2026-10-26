@@ -453,7 +453,7 @@ func _ready() -> void:
 	await get_tree().process_frame
 	_check(world.player != null and world.hud != null, "world spawns player and hud")
 	_check(get_tree().get_nodes_in_group("enemies").size() >= 22, "mobs spawned (%d)" % get_tree().get_nodes_in_group("enemies").size())
-	_check(get_tree().get_nodes_in_group("npcs").size() == 13, "13 NPCs spawned (incl. Old Tam, Trader Pell, the Hollowbrook chain and the limited-quest givers)")
+	_check(get_tree().get_nodes_in_group("npcs").size() == 14, "14 NPCs spawned (incl. Old Tam, Trader Pell, Smith Kesra, the Hollowbrook chain and the limited-quest givers)")
 	_check(get_tree().get_nodes_in_group("ore_veins").size() == 10, "10 ore veins")
 
 	# Smith: with 5 crafts done and no trial yet, first talk should offer the trial.
@@ -613,7 +613,7 @@ func _ready() -> void:
 	GameState.level = 6
 	world._try_enter_labyrinth()
 	_check(world.player.global_position.distance_to(world.LAB_LEVELS[0]) < 20, "gate opens onto Terrace 1")
-	_check(world._pads.size() == 9, "5 teleport pads placed (+ cottage and tavern doors and exits)")
+	_check(world._pads.size() == 11, "5 teleport pads placed (+ cottage, tavern and forge doors and exits)")
 	world._use_pad(world._pads[1])
 	_check(world.player.global_position.distance_to(world.LAB_LEVELS[1]) < 20, "pad climbs to Terrace 2")
 	world._use_pad(world._pads[3])
@@ -732,6 +732,7 @@ func _ready() -> void:
 	_check(world.srv_action(4343, vrs, "craft", {"recipe": "Spirit Blade"}, npc_pos["Smith Haldor"]).has("error"), "crafting without the shards is refused")
 	_test_forging(world, vrs, vrec, npc_pos["Smith Haldor"], far)
 	_test_tavern(world, vrs, vrec, far)
+	_test_smithy(world, vrs, vrec, far)
 	_check(world.srv_action(4343, vrs, "cook", {"id": "grilled_trout"}, far).has("error") and world.srv_action(4343, vrs, "buy", {"id": "rug"}, far).has("error"), "cooking needs a fire, buying needs the trader")
 	vrs.add_material("river_trout", 1)
 	vrs.add_material("wild_herb", 1)
@@ -1988,7 +1989,7 @@ func _test_hidden_classes() -> void:
 		if c is NPC:
 			world_npcs += 1
 			npc_names[c.npc_name] = true
-	_check(world_npcs == 13 and npc_names.has("Quartermaster Dain") and npc_names.has("Innkeeper Rook"), "no new NPCs: Dain and Rook carry the rites (%d NPCs in the world)" % world_npcs)
+	_check(world_npcs == 14 and npc_names.has("Quartermaster Dain") and npc_names.has("Innkeeper Rook"), "no new NPCs: Dain and Rook carry the rites (%d NPCs in the world)" % world_npcs)
 	GameState.hidden_stats = {}
 	GameState.quests.erase(H.STILL_QUEST)
 	var line: String = world._dain_talk()
@@ -2805,7 +2806,7 @@ func _test_forging(world: Node, vrs, vrec: Dictionary, anvil: Vector3, far: Vect
 func _test_tavern(world: Node, vrs, vrec: Dictionary, far: Vector3) -> void:
 	print("== Tavern: the Hollow Hearth")
 	var tv: Tavern = world._tavern
-	_check(tv != null and tv.interior.y < -15.0 and Vector2(tv.interior.x, tv.interior.z).distance_to(Vector2(tv.house_pos.x, tv.house_pos.z)) < 0.1, "the tavern's hall sits under its house")
+	_check(tv != null and tv.interior.y < -15.0 and Vector2(tv.interior.x, tv.interior.z).length() + 9.0 < 60.0 and tv.interior.distance_to(PlayerHome.INTERIOR) > 15.0, "the tavern's hall sits in thick rock, clear of the cottage")
 	var pads := 0
 	for pad in world._pads:
 		if (pad["dest"] is Vector3 and pad["dest"] == tv.spawn_inside) or pad["pos"] == tv.exit_pos:
@@ -2873,4 +2874,61 @@ func _test_tavern(world: Node, vrs, vrec: Dictionary, far: Vector3) -> void:
 	r = Tavern.run(Net.get_realm(), GameState, Net.local_holder(), {"op": "meal", "id": "rooks_plate"}, true)
 	_check(not r.has("error") and GameState.money == 35 and GameState.has_buff("tavern_meal"), "offline: Rook's Plate on GameState")
 	GameState.money = gm
+
+
+## Hollowbrook Forge (scripts/life/smithy.gd): Smith Kesra's anvil passes the
+## server's anvil check, and village commissions take a forged piece (the
+## lowest rank that fits, never a limited item) from three smiths a shift.
+func _test_smithy(world: Node, vrs, vrec: Dictionary, far: Vector3) -> void:
+	print("== Smithy: Hollowbrook Forge")
+	var sm: Smithy = world._smithy
+	_check(sm != null and sm.interior.y < -15.0 and sm.interior.distance_to(PlayerHome.INTERIOR) > 14.0 and sm.interior.distance_to(world._tavern.interior) > 20.0, "the forge's workshop sits in the rock, clear of the cottage and the tavern")
+	var kesra: Node3D = null
+	for n in world.get_tree().get_nodes_in_group("npcs"):
+		if n is NPC and n.npc_name == "Smith Kesra":
+			kesra = n
+	_check(kesra != null and kesra.global_position.distance_to(sm.interior + Smithy.KESRA_SPOT) < 0.5, "Smith Kesra works her anvil")
+	vrs.add_material("iron_ore", 3)
+	vrec["money"] = 500
+	_check(world.srv_action(4343, vrs, "craft", {"recipe": "Iron Sword"}, kesra.global_position).has("name"), "Kesra's anvil forges (server anvil check)")
+	_check(sm.nearest(sm.interior + Smithy.BOARD).get("smithy", "") == "board" and sm.nearest(far).is_empty(), "the commission board is an interactable")
+	var a := Smithy.commissions_for(77)
+	_check(a == Smithy.commissions_for(77) and a.size() == 3 and a[0] != a[1] and a[1] != a[2], "three deterministic commissions per shift")
+	# Throwaway realm, fixed clock.
+	const SDIR := "user://realm_test_smithy"
+	var d := DirAccess.open(SDIR)
+	if d != null:
+		for f in d.get_files():
+			DirAccess.remove_absolute(SDIR + "/" + f)
+	var rdb = Net.RealmDBScript.open("smithy", SDIR)
+	var now := 1_800_000_000.0
+	var c0: Dictionary = Smithy.commissions_for(Tavern.shift_index(now))[0]
+	var minr := int(c0["rank"])
+	var smiths := []
+	for k in 4:
+		var rec := Net._new_record(Net.sanitize_character({"name": "Smith%d" % k}), "%032d" % (k + 11), {})
+		var rs = Net.RecordState.new(rec)
+		rs.add_item(Crafting.make_item(c0["recipe"], mini(minr + 2, 5), rec["name"]))
+		rs.add_item(Crafting.make_item(c0["recipe"], minr, rec["name"]))
+		smiths.append(rs)
+	var h := func(k: int) -> String: return Net.RealmDBScript.holder_of_record(smiths[k].rec)
+	var lim := Crafting.make_item(c0["recipe"], 5, "x")
+	lim["limited"] = true
+	var lonely := Net._new_record(Net.sanitize_character({"name": "Lonely"}), "%032d" % 99, {})
+	var lrs = Net.RecordState.new(lonely)
+	lrs.add_item(lim)
+	_check(Smithy.run(rdb, lrs, Net.RealmDBScript.holder_of_record(lonely), {"op": "deliver", "i": 0}, true, now).has("error") and lonely["inventory"].size() == 1, "a limited (bound) piece never fills a commission")
+	_check(Smithy.run(rdb, smiths[0], h.call(0), {"op": "deliver", "i": 0}, false, now).has("error"), "commissions are delivered at the board")
+	var m0 := int(smiths[0].rec["money"])
+	var r: Dictionary = Smithy.run(rdb, smiths[0], h.call(0), {"op": "deliver", "i": 0}, true, now)
+	var left_rank := int(smiths[0].rec["inventory"][0]["rank"])
+	_check(r.get("first", false) and smiths[0].rec["inventory"].size() == 1 and left_rank == mini(minr + 2, 5), "the lowest-ranked fitting piece goes; the better one stays")
+	_check(int(smiths[0].rec["money"]) == m0 + Smithy.reward(c0, minr) + int(round(Smithy.reward(c0, minr) * Smithy.FIRST_BONUS)), "pays the commission plus the first smith's bonus")
+	_check(Smithy.run(rdb, smiths[0], h.call(0), {"op": "deliver", "i": 0}, true, now).has("error"), "one delivery per smith per commission")
+	Smithy.run(rdb, smiths[1], h.call(1), {"op": "deliver", "i": 0}, true, now)
+	Smithy.run(rdb, smiths[2], h.call(2), {"op": "deliver", "i": 0}, true, now)
+	r = Smithy.run(rdb, smiths[3], h.call(3), {"op": "deliver", "i": 0}, true, now)
+	_check(r.has("error") and smiths[3].rec["inventory"].size() == 2 and int(r.get("view", Smithy.view(rdb, h.call(3), smiths[3], now))["commissions"][0]["left"]) == 0, "a fourth smith is turned away and keeps the piece")
+	_check(Smithy.reward(c0, minr + 2) > Smithy.reward(c0, minr), "a higher rank than asked pays more")
+	rdb.close()
 

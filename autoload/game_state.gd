@@ -326,6 +326,20 @@ func add_item(item: Dictionary) -> void:
 	inventory_changed.emit()
 
 
+## Takes the item with `id` out of the pack (unequipping it first).
+func remove_item(id: String) -> bool:
+	for i in inventory.size():
+		if str(inventory[i].get("id", "")) == id:
+			for slot in equipped:
+				if equipped[slot] is Dictionary and str(equipped[slot].get("id", "")) == id:
+					equipped[slot] = null
+			inventory.remove_at(i)
+			stats_changed.emit()
+			inventory_changed.emit()
+			return true
+	return false
+
+
 func equip(item: Dictionary) -> void:
 	equipped[item["kind"]] = item
 	stats_changed.emit()
