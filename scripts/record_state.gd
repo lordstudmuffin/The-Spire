@@ -198,17 +198,17 @@ func unequip(kind: String) -> bool:
 
 func _sync_weapon() -> void:
 	var w = rec["equipped"].get("weapon")
-	rec["weapon_atk"] = float(w["atk"]) if w is Dictionary else 0.0
+	rec["weapon_atk"] = float(w["atk"]) if w is Dictionary and not Durability.is_broken(w) else 0.0
 
 
 func weapon_attack() -> float:
 	var w = rec["equipped"].get("weapon")
-	return float(w["atk"]) if w is Dictionary else 0.0
+	return float(w["atk"]) if w is Dictionary and not Durability.is_broken(w) else 0.0
 
 
 func armor_defense() -> float:
 	var a = rec["equipped"].get("armor")
-	return float(a["def"]) if a is Dictionary else 0.0
+	return float(a["def"]) if a is Dictionary and not Durability.is_broken(a) else 0.0
 
 
 func smithing_xp_to_next() -> int:

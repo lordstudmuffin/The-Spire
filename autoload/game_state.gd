@@ -3,6 +3,8 @@ extends Node
 ## Everything here is plain data so SaveSystem can serialize it as JSON.
 
 signal xp_changed(xp: int, xp_to_next: int)
+## Equipped gear crossed a durability line: state is "low" or "broken".
+signal gear_state(slot: String, state: String)
 signal leveled_up(level: int)
 signal stats_changed
 signal health_changed(hp: float, max_hp: float)
@@ -481,12 +483,25 @@ func place_furniture(slot: int, id: String) -> bool:
 
 # --- Derived stats -------------------------------------------------------
 
+## A broken piece (Durability) adds nothing until it is repaired.
 func weapon_attack() -> float:
-	return equipped["weapon"]["atk"] if equipped["weapon"] != null else 0.0
+	return equipped["weapon"]["atk"] if equipped["weapon"] != null and not Durability.is_broken(equipped["weapon"]) else 0.0
 
 
 func armor_defense() -> float:
-	return equipped["armor"]["def"] if equipped["armor"] != null else 0.0
+	return equipped["armor"]["def"] if equipped["armor"] != null and not Durability.is_broken(equipped["armor"]) else 0.0
+
+
+## Wears equipped gear (Durability.wear). Offline / host announce the
+## "low" and "broken" moments through gear_state; an online client only
+## mirrors the wear (the server sends its own "gear" event).
+func wear_gear(slot: String, amount: float) -> void:
+	var ev := Durability.wear(self, slot, amount)
+	if ev != "" and not Net.remote_client():
+		gear_state.emit(slot, ev)
+		if slot == "armor" and ev == "broken":
+			hp = minf(hp, max_hp())
+			health_changed.emit(hp, max_hp())
 
 
 func max_hp() -> float:
@@ -505,6 +520,7 @@ func take_damage(amount: float) -> void:
 	# Armor soaks half its defense value per hit; every hit does at least 1.
 	var dmg: float = max(amount - armor_defense() * 0.5, 1.0)
 	hp = max(hp - dmg, 0.0)
+	wear_gear("armor", Durability.WEAR_HIT)
 	health_changed.emit(hp, max_hp())
 
 

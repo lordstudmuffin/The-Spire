@@ -16,6 +16,7 @@ const SORTS := ["Rank", "Newest", "Type"]
 
 var _name_l: Label
 var _class_l: Label
+var _prof_line: UITheme.ProfLine
 var _level_l: Label
 var _cells := {}  # key -> value Label
 var _attr_rows := {}  # stat -> {"val": Label, "bar": ProgressBar, "btn": Button}
@@ -120,6 +121,9 @@ func _build_left() -> void:
 		_cells[pair[0]] = val
 		_cells[pair[0] + "_sub"] = sub
 	v.add_child(cells)
+	# Weapon proficiency: notches at each Sword Art's unlock.
+	_prof_line = UITheme.ProfLine.new()
+	v.add_child(_prof_line)
 
 	v.add_child(UITheme.spacer(2))
 	var ah := HBoxContainer.new()
@@ -603,7 +607,12 @@ func _sorted_items() -> Array:
 
 
 func _stat_text(item: Dictionary) -> String:
-	return ("ATK %d" % int(item.get("atk", 0))) if item.get("kind") == "weapon" else ("DEF %d" % int(item.get("def", 0)))
+	var s := ("ATK %d" % int(item.get("atk", 0))) if item.get("kind") == "weapon" else ("DEF %d" % int(item.get("def", 0)))
+	if Durability.is_broken(item):
+		return s + "  ·  BROKEN"
+	if Durability.fraction(item) < Durability.LOW:
+		return s + "  ·  worn"
+	return s
 
 
 ## Fill every widget from GameState. Safe to call often; only text and
@@ -611,6 +620,10 @@ func _stat_text(item: Dictionary) -> String:
 func refresh() -> void:
 	_name_l.text = str(GameState.character.get("name", "")).to_upper()
 	_class_l.text = GameState.class_title().to_upper()
+	var marks: Array = []
+	for sk in Player.SKILLS:
+		marks.append(int(sk.get("prof", 0)))
+	_prof_line.set_value(GameState.sword_prof, GameState.PROF_CAP, marks)
 	_level_l.text = str(GameState.level)
 	_cells["hp"].text = str(int(GameState.max_hp()))
 	_cells["hp_sub"].text = "%d now" % ceili(GameState.hp)
@@ -729,7 +742,7 @@ func _show_detail(idx: int) -> void:
 	rs.bg_color = c
 	rs.border_color = c
 	_detail["kind"].text = str(item.get("kind", "")).to_upper()
-	_detail["stat"].text = _stat_text(item)
+	_detail["stat"].text = "%s  ·  %s" % [("ATK %d" % int(item.get("atk", 0))) if item.get("kind") == "weapon" else ("DEF %d" % int(item.get("def", 0))), Durability.text(item)]
 	var worn: Variant = GameState.equipped.get(item.get("kind"))
 	var mine := int(item.get("atk", 0)) + int(item.get("def", 0))
 	if is_equipped(item):

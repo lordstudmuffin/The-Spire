@@ -75,6 +75,7 @@ static func make_item(recipe_name: String, rank: int, crafter: String) -> Dictio
 		"def": value if r["kind"] == "armor" else 0,
 		"crafted_by": crafter,
 	}
+	Durability.stamp(item)
 	return item
 
 

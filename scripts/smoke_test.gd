@@ -321,6 +321,18 @@ func _ready() -> void:
 	_check(LifeData.buy("heal_crystal", rs) == "" and int(rec["materials"]["heal_crystal"]) == 2 and int(rec["money"]) == 1000 - int(LifeData.CRYSTALS["heal_crystal"]["price"]), "Trader Pell sells Healing Crystals")
 	rec["money"] = col_c
 	rec["materials"].erase("heal_crystal")
+	# Server-side wear: a mob hit wears the record's armor; broken armor soaks nothing.
+	var dur_plate := Crafting.make_item("Hide Armor", 0, "Tester")
+	rec["inventory"].append(dur_plate)
+	rs.equip(dur_plate)
+	var dur_def0 := rs.armor_defense()
+	Net.srv_wear(4242, "armor", Durability.max_for(dur_plate) + 1.0)
+	_check(dur_def0 > 0.0 and rs.armor_defense() == 0.0 and Durability.is_broken(rec["inventory"][rec["inventory"].size() - 1]), "worn-out armor on the record breaks and soaks nothing")
+	rec["money"] = 1000
+	_check(Durability.repair(rs, "armor") == "" and rs.armor_defense() == dur_def0 and int(rec["money"]) < 1000, "the record's armor repairs for Col")
+	rs.unequip("armor")
+	rec["inventory"].pop_back()
+	rec["money"] = col_c
 	rec["hp"] = 10.0
 	_check(LifeData.eat("grilled_trout", rs) and rs.regen_tick(1.0) and rec["hp"] > 10.0 and rec["hp"] <= 12.01, "server regen tick heals from the food buff (hp %.1f)" % rec["hp"])
 	rec["buffs"]["boar_stew"]["until"] = 0.0
@@ -603,6 +615,31 @@ func _ready() -> void:
 	Net.fill_record_defaults(old_rec)
 	_check(int(old_rec["sword_prof"]) == GameState.prof_for_level(5) and GameState.prof_for_level(5) >= 120 and int(Net.record_defaults()["sword_prof"]) == 0, "records from before proficiency are credited by level (new ones start at 0)")
 	GameState.sword_prof = prof0
+	# Durability: forged gear wears with use, breaks to no stats, repairs at an anvil.
+	var dur_keep_eq: Dictionary = GameState.equipped.duplicate()
+	var dur_keep_inv: Array = GameState.inventory.duplicate()
+	var dur_keep_col := GameState.money
+	var dur_blade := Crafting.make_item("Iron Sword", 1, "Tester")
+	_check(Durability.cur(dur_blade) == Durability.max_for(dur_blade) and Durability.max_for(dur_blade) == 110.0, "a forged Rare blade starts at full durability (110)")
+	GameState.inventory.append(dur_blade)
+	GameState.equip(dur_blade.duplicate(true))  # the save round trip leaves two copies
+	var dur_atk := GameState.weapon_attack()
+	GameState.wear_gear("weapon", 10.0)
+	_check(is_equal_approx(Durability.cur(GameState.equipped["weapon"]), 100.0) and is_equal_approx(Durability.cur(dur_blade), 100.0), "wear lands on both the equipped and the inventory copy")
+	var dur_states: Array = []
+	var dur_on := func(_slot, st): dur_states.append(st)
+	GameState.gear_state.connect(dur_on)
+	GameState.wear_gear("weapon", 85.0)
+	GameState.wear_gear("weapon", 50.0)
+	GameState.gear_state.disconnect(dur_on)
+	_check(dur_states == ["low", "broken"] and Durability.is_broken(GameState.equipped["weapon"]) and GameState.weapon_attack() == 0.0 and dur_atk > 0.0, "the blade warns when worn, then breaks and adds no attack")
+	GameState.money = 1000
+	var dur_cost := Durability.repair_cost(GameState.equipped["weapon"], GameState.smithing_level)
+	_check(dur_cost > 0 and Durability.repair(GameState, "weapon") == "" and GameState.money == 1000 - dur_cost and GameState.weapon_attack() == dur_atk and Durability.repair(GameState, "weapon").contains("perfect"), "repairing for %d Col restores the blade" % dur_cost)
+	_check(Durability.repair_cost(dur_blade, 16) < Durability.repair_cost({"kind": "weapon", "rank": 1, "dur": 0.0}, 1) or Durability.repair_cost(dur_blade, 16) == 0, "smithing skill lowers repair prices")
+	GameState.equipped = dur_keep_eq
+	GameState.inventory = dur_keep_inv
+	GameState.money = dur_keep_col
 
 	# Server-side validators against this world, on a fake record (what an
 	# online client's requests run through: world.srv_action).

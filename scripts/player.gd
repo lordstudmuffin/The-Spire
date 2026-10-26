@@ -865,6 +865,7 @@ func _hit_cone(damage: float, range_: float, arc: float, kind := -1) -> int:
 				e.net_hit.rpc_id(1, kind, to.normalized(), _swing_serial)
 			hits += 1
 	if hits > 0 and is_local:
+		GameState.wear_gear("weapon", Durability.WEAR_SWING)
 		var learned := GameState.add_sword_prof(1)
 		if learned != "":
 			var hud := get_tree().get_first_node_in_group("hud")
@@ -946,6 +947,10 @@ func defend(from_pos: Vector3) -> String:
 		_parry_ready_ms = now  # a clean parry can chain into the next one
 		parries += 1
 		last_parry_ms = now
+		if is_local:
+			GameState.wear_gear("weapon", Durability.WEAR_PARRY)
+		elif Net.online and multiplayer.is_server():
+			Net.srv_wear(peer_id, "weapon", Durability.WEAR_PARRY)
 		return "parry"
 	if front and blocking:
 		guard -= GUARD_PER_BLOCK
@@ -1025,12 +1030,10 @@ func net_defended(outcome: String, from_pos: Vector3, guard_left: float, stun: f
 	if outcome == "parry":
 		parries += 1
 		last_parry_ms = Time.get_ticks_msec()
+		GameState.wear_gear("weapon", Durability.WEAR_PARRY)  # mirror of the server's wear
 	defend_fx(outcome, from_pos)
 
 
-## A unique Sword Art (UniqueSkills arts of GameState.unique_skill): a rapid
-## multi-slash combo. Offline the realm holder check runs here; online the
-## server re-checks every hit (Enemy.net_hit). Returns false if refused.
 ## H (or LT + Y on a pad): crush a Healing Crystal from the pack.
 func quick_heal() -> void:
 	var err := LifeData.use_crystal("heal_crystal")
@@ -1047,6 +1050,9 @@ func quick_heal() -> void:
 		w.crystal_effect("heal_crystal")
 
 
+## A unique Sword Art (UniqueSkills arts of GameState.unique_skill): a rapid
+## multi-slash combo. Offline the realm holder check runs here; online the
+## server re-checks every hit (Enemy.net_hit). Returns false if refused.
 func use_unique(i: int) -> bool:
 	var id := GameState.unique_skill
 	var arts := UniqueSkills.arts(id)

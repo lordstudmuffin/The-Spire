@@ -329,6 +329,13 @@ func _ready() -> void:
 							hfx.hearth_glow(pl)
 						else:
 							hfx.class_art_cast(pl, "Hearthwright" if demo == "hearth_flare" else "Stillblade", demo)
+				"heal_crystal", "teleport_crystal":
+					GameState.materials["heal_crystal"] = 3
+					GameState.materials["teleport_crystal"] = 1
+					GameState.inventory_changed.emit()
+					var xfx := VFX.get_for(pl)
+					if xfx:
+						xfx.crystal_burst(pl.global_position + Vector3(0, 1.0, 0), LifeData.item_color(demo), demo == "teleport_crystal")
 				"duel":
 					var du = scene.get("_duels")
 					if du:

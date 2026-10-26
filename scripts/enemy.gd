@@ -598,6 +598,7 @@ func net_hit(kind: int, from_dir: Vector3, swing: int = 0) -> void:
 			_swing_times[key] = [now, swing]
 			if kind < Player.SKILLS.size():
 				Net.srv_add_prof(sender)  # once per swing, basic attacks and Sword Arts
+				Net.srv_wear(sender, "weapon", Durability.WEAR_SWING)
 		if int(_hit_by.get(sender, -1)) == swing and swing != 0:
 			return  # This swing already landed on this mob.
 		_hit_by[sender] = swing

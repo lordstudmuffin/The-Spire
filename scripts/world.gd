@@ -120,6 +120,7 @@ func _ready() -> void:
 	_duels = preload("res://scripts/duels.gd").build(self)
 	_duels.hud = hud
 	GameState.inventory_changed.connect(_track_ore_quest)
+	GameState.gear_state.connect(gear_notice)
 	if Net.remote_client():
 		Net.action_applied.connect(_on_net_action)
 
@@ -967,6 +968,14 @@ func srv_action(peer: int, rs, kind: String, payload: Dictionary, pos: Vector3) 
 			if _srv_npc_near(pos, ["Smith Haldor", "Smith Orla"]) == null:
 				return {"error": "You need an anvil (talk to a smith)."}
 			return Crafting.craft(str(payload.get("recipe", "")), rs)
+		"repair":
+			if _srv_npc_near(pos, ["Smith Haldor", "Smith Orla"]) == null:
+				return {"error": "You need an anvil (talk to a smith)."}
+			var slot := str(payload.get("slot", ""))
+			var rerr := Durability.repair(rs, slot)
+			if rerr == "":
+				rs._sync_weapon()
+			return {"slot": slot} if rerr == "" else {"error": rerr}
 		"buy":
 			if _srv_npc_near(pos, ["Trader Pell"]) == null:
 				return {"error": "Trader Pell is not here."}
@@ -1155,6 +1164,10 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 				hud.life._on_cooked(res)
 		"crystal":
 			crystal_effect(str(res.get("id", "")))
+		"gear":
+			gear_notice(str(res.get("slot", "")), str(res.get("state", "")))
+		"repair":
+			repaired(str(res.get("slot", "")))
 		"buy":
 			Audio.play("coins")
 			var id := str(res.get("id", ""))
@@ -1202,6 +1215,31 @@ func _on_net_action(kind: String, res: Dictionary) -> void:
 				var fx := VFX.get_for(self)
 				if fx:
 					fx.hit(player.global_position + Vector3(0, 1.1, 0), -player.model.global_transform.basis.z, Color(1.0, 0.35, 0.3))
+
+
+## Equipped gear crossed a durability line ("low" / "broken"): offline via
+## GameState.gear_state, online via the server's "gear" event.
+func gear_notice(slot: String, state: String) -> void:
+	var it = GameState.equipped.get(slot)
+	if hud == null or not (it is Dictionary):
+		return
+	if state == "broken":
+		Audio.play("craft_fail")
+		hud.toast("%s broke!" % str(it.get("name", "Gear")), "It adds nothing until a smith repairs it", "Durability", UITheme.ROSE)
+	else:
+		Audio.play("ui_error")
+		hud.toast("%s is wearing out" % str(it.get("name", "Gear")), "%s  ·  repair at an anvil" % Durability.text(it), "Durability", UITheme.GOLD)
+
+
+## A repair went through (offline right away, online on the server's answer).
+func repaired(slot: String) -> void:
+	var it = GameState.equipped.get(slot)
+	Audio.play("anvil")
+	Audio.play("craft_pot")
+	if hud and it is Dictionary:
+		hud.toast("%s repaired" % str(it.get("name", "Gear")), Durability.text(it), "Anvil", UITheme.CYAN)
+		if hud.has_method("refresh_craft"):
+			hud.refresh_craft()
 
 
 ## A crystal was crushed (offline right away, online once the server agreed):
@@ -1921,6 +1959,11 @@ func _build_town() -> void:
 		var pos := Vector3(cos(a) * 28, 0, sin(a) * 28 + 15)
 		var face := atan2(-pos.x, -(pos.z - 15))
 		var scl := WorldProps.HOUSE * (0.92 if kinds[i] == "tavern" else 1.0)
+		if i == 4 or i == 5:
+			# The Hall of Iron stands here instead (below).
+			_rng.randf()
+			_rng.randf()
+			continue
 		WorldProps.house(self, pos, kinds[i], colors[i], face, scl)
 		_rng.randf()  # Keeps the gameplay RNG stream where the old houses left it.
 		_rng.randf()
@@ -1935,6 +1978,11 @@ func _build_town() -> void:
 			hedge_lines.append([front - side * fp.x * 0.5, front - side * 1.3])
 			hedge_lines.append([front + side * 1.3, front + side * fp.x * 0.5])
 	WorldProps.hedges(self, hedge_lines)
+	# Hall of Iron across the north road (after the Black Iron Palace on
+	# the north side of the Town of Beginnings' plaza), with the Monument of
+	# Climbers in front of its east wing, facing the plaza.
+	WorldProps.iron_hall(self, Vector3(0, 0, -12.5))
+	MonumentArt.make(self, Vector3(7.5, 0, -7.2), 0.0)
 	# Town wall with gates north (to the tower), south, and west (Hollowbrook).
 	var hb_dir := Vector2(HOLLOWBROOK.x, HOLLOWBROOK.z) - WorldArt.PLAZA
 	WorldArt.town_wall(self, Vector3(0, 0, 15), 36.0, [
@@ -1945,7 +1993,7 @@ func _build_town() -> void:
 ## gameplay placed (NPCs, ore veins, the gate, villages, the spawn point).
 func _dress_world() -> void:
 	var keep := [[Vector3(0, 0, 6), 4.0], [TOWER_POS + Vector3(0, 0, 14), 8.0], [HOLLOWBROOK, 17.0], [TALVEN, 13.0],
-		[Vector3(-62, 0, -10), 7.0], [Vector3(0, 0, 27), 5.0], [Vector3(17.5, 0, 20), 4.0]]
+		[Vector3(-62, 0, -10), 7.0], [Vector3(0, 0, -12.5), 11.0], [Vector3(0, 0, 27), 5.0], [Vector3(17.5, 0, 20), 4.0]]
 	for n in get_tree().get_nodes_in_group("npcs"):
 		keep.append([n.position, 3.0])
 	for v in _vein_positions:
@@ -1966,7 +2014,7 @@ func _build_field() -> void:
 	else:
 		WorldArt.windmill(self, Vector3(-62, 0, -10), 1.2)
 	WorldProps.fences(self, [
-		[Vector3(-4.5, 0, -10), Vector3(-4.5, 0, -40)], [Vector3(4.5, 0, -22), Vector3(4.5, 0, -50)],
+		[Vector3(-4.5, 0, -17), Vector3(-4.5, 0, -40)], [Vector3(4.5, 0, -22), Vector3(4.5, 0, -50)],
 		[Vector3(-4.5, 0, 40), Vector3(-4.5, 0, 58)], [Vector3(4.5, 0, 44), Vector3(4.5, 0, 60)],
 		[Vector3(-70, 0, -4), Vector3(-56, 0, 2)], [Vector3(-56, 0, 2), Vector3(-50, 0, -10)],
 		[Vector3(-56, 0, 26), Vector3(-64, 0, 36)], [Vector3(-64, 0, 36), Vector3(-60, 0, 48)]])

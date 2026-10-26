@@ -989,3 +989,95 @@ static func shore_rocks(parent: Node3D, center: Vector3, radius: float) -> void:
 	if not fallback.is_empty():
 		var mm := WorldArt.multimesh(parent, WorldArt.rock_mesh(), fallback, [], "ShoreRocks")
 		mm.material_override = WorldArt.mat(Color("8d8578"), 0.03)
+
+
+# --- Hall of Iron -------------------------------------------------------------
+
+## The black-iron hall on the plaza's north side (after the Black Iron Palace
+## of the Town of Beginnings): two dark stone wings with gabled roofs, iron
+## buttresses and tall lit window slits, joined by a pointed iron arch over
+## the north road (clear width 2 * `gap`). `center` is the middle of the arch
+## at ground level; the hall faces +Z (the plaza). Original procedural art.
+static func iron_hall(parent: Node3D, center: Vector3, gap := 5.3, wing_w := 4.2, depth := 7.0, height := 9.0) -> void:
+	var wall := WorldArt.stone_mat(Color("3a3c47"), Color("2c2e38"), "castle_brick_07", 0.24, {
+		"band_period": 1.2, "band_width": 0.07, "brick_length": 2.0})
+	var iron := WorldArt.mat(Color("23252e"), 0.03)
+	var trim := WorldArt.stone_mat(Color("51535f"), Color("434551"), "rock_wall_10", 0.3, {"detail_strength": 0.4})
+	var slit := WorldArt.rune_mat(Color("6fb8ff"), 0.9)
+	var rose_glass := WorldArt.rune_mat(Color("1d3a66"), 0.5)
+	for sx in [-1.0, 1.0]:
+		var cx: float = sx * (gap + wing_w * 0.5)
+		var c := center + Vector3(cx, 0, 0)
+		# Wing body on a plinth course.
+		var body := BoxMesh.new()
+		body.size = Vector3(wing_w, height, depth)
+		WorldArt.mesh_node(parent, body, c + Vector3(0, height * 0.5, 0), wall)
+		var plinth := BoxMesh.new()
+		plinth.size = Vector3(wing_w + 0.5, 0.7, depth + 0.5)
+		WorldArt.mesh_node(parent, plinth, c + Vector3(0, 0.35, 0), trim)
+		var cornice := BoxMesh.new()
+		cornice.size = Vector3(wing_w + 0.4, 0.35, depth + 0.4)
+		WorldArt.mesh_node(parent, cornice, c + Vector3(0, height + 0.17, 0), trim)
+		WorldArt.box_collider(parent, Vector3(wing_w + 0.5, height, depth + 0.5), c + Vector3(0, height * 0.5, 0))
+		# Steep gable roof running front to back, with an iron ridge.
+		var roof := PrismMesh.new()
+		roof.size = Vector3(wing_w + 0.6, 4.2, depth + 0.6)
+		WorldArt.mesh_node(parent, roof, c + Vector3(0, height + 0.35 + 2.1, 0), iron)
+		# Buttresses at the front corners, stepping in toward the top.
+		for bx in [-0.5, 0.5]:
+			var bp := c + Vector3(bx * wing_w, 0, depth * 0.5)
+			var b1 := BoxMesh.new()
+			b1.size = Vector3(0.8, height * 0.62, 1.0)
+			WorldArt.mesh_node(parent, b1, bp + Vector3(0, height * 0.31, 0.3), trim)
+			var b2 := BoxMesh.new()
+			b2.size = Vector3(0.6, height * 0.5, 0.6)
+			WorldArt.mesh_node(parent, b2, bp + Vector3(0, height * 0.87, 0.15), trim)
+			var fin := CylinderMesh.new()
+			fin.top_radius = 0.0
+			fin.bottom_radius = 0.34
+			fin.height = 2.2
+			fin.radial_segments = 4
+			fin.rings = 1
+			WorldArt.mesh_node(parent, fin, bp + Vector3(0, height * 1.12 + 1.1, 0.15), iron, Vector3(0, PI / 4, 0))
+		# Two tall window slits on the front face and a round rose window.
+		for wx in [-0.24, 0.24]:
+			var w := BoxMesh.new()
+			w.size = Vector3(0.42, 3.4, 0.08)
+			WorldArt.mesh_node(parent, w, c + Vector3(wx * wing_w, 3.6, depth * 0.5 + 0.02), slit)
+			var hood := PrismMesh.new()
+			hood.size = Vector3(0.7, 0.45, 0.18)
+			WorldArt.mesh_node(parent, hood, c + Vector3(wx * wing_w, 5.55, depth * 0.5 + 0.06), trim)
+		var rose := CylinderMesh.new()
+		rose.top_radius = 0.55
+		rose.bottom_radius = 0.55
+		rose.height = 0.08
+		rose.radial_segments = 16
+		rose.rings = 1
+		WorldArt.mesh_node(parent, rose, c + Vector3(0, 7.2, depth * 0.5 + 0.02), rose_glass, Vector3(PI / 2, 0, 0))
+		WorldArt.rune_ring(parent, c + Vector3(0, 7.2, depth * 0.5 + 0.07), 0.75, Color("6fb8ff"), 0.08).rotation.x = PI / 2
+		# Side slits along the outer flank.
+		for k in 3:
+			var sw := BoxMesh.new()
+			sw.size = Vector3(0.08, 3.0, 0.38)
+			WorldArt.mesh_node(parent, sw, c + Vector3(sx * (wing_w * 0.5 + 0.02), 3.6, depth * (0.3 - 0.3 * k)), slit)
+	# The arch: a heavy lintel across the road with a pointed gable and the
+	# hall's emblem, carried on iron piers set against the wings.
+	var span := gap * 2.0
+	var lintel := BoxMesh.new()
+	lintel.size = Vector3(span + 0.4, 1.2, 1.6)
+	var ly := height - 0.6
+	WorldArt.mesh_node(parent, lintel, center + Vector3(0, ly, depth * 0.5 - 0.8), wall)
+	var band := BoxMesh.new()
+	band.size = Vector3(span + 0.6, 0.3, 1.8)
+	WorldArt.mesh_node(parent, band, center + Vector3(0, ly - 0.75, depth * 0.5 - 0.8), trim)
+	var gable := PrismMesh.new()
+	gable.size = Vector3(span * 0.62, 2.6, 1.4)
+	WorldArt.mesh_node(parent, gable, center + Vector3(0, height + 1.3, depth * 0.5 - 0.8), wall)
+	var gcap := PrismMesh.new()
+	gcap.size = Vector3(span * 0.66, 2.75, 1.0)
+	WorldArt.mesh_node(parent, gcap, center + Vector3(0, height + 1.42, depth * 0.5 - 1.05), iron)
+	WorldArt.rune_ring(parent, center + Vector3(0, height + 0.9, depth * 0.5 - 0.02), 0.8, Color("6fb8ff"), 0.1).rotation.x = PI / 2
+	for sx in [-1.0, 1.0]:
+		var pier := BoxMesh.new()
+		pier.size = Vector3(0.5, ly - 0.9, 0.8)
+		WorldArt.mesh_node(parent, pier, center + Vector3(sx * (gap - 0.05), (ly - 0.9) * 0.5, depth * 0.5 - 0.4), iron)

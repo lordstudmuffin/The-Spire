@@ -43,7 +43,7 @@ const SNAPSHOT_MIN_INTERVAL_MS := 20000
 const MAX_INVENTORY := 60
 const LEVEL_CAP := 100
 ## Per-kind minimum interval between two accepted action requests of a peer.
-const RATE_ACTION_MS := {"craft": 400, "cook": 400, "eat": 250, "crystal": 500, "buy": 400, "buy_home": 1000, "mine": 700, "herb": 400,
+const RATE_ACTION_MS := {"craft": 400, "cook": 400, "eat": 250, "crystal": 500, "repair": 400, "buy": 400, "buy_home": 1000, "mine": 700, "herb": 400,
 	"cast": 1500, "land": 800, "talk": 400, "store": 150, "place": 300, "rest": 2000, "spend_point": 100, "equip": 150,
 	"unequip": 150, "enter_labyrinth": 1000, "duel": 400}
 const RATE_ACTION_DEFAULT_MS := 250
@@ -1868,6 +1868,21 @@ func srv_add_prof(peer: int) -> void:
 		rec["sword_prof"] = mini(int(rec.get("sword_prof", 0)) + 1, GameState.PROF_CAP)
 
 
+## Server: wear `peer`'s equipped gear; at the "low" / "broken" lines the
+## client gets a "gear" event with the patch.
+func srv_wear(peer: int, slot: String, amount: float) -> void:
+	if not srv_records.has(peer):
+		return
+	var rs = RecordState.new(srv_records[peer])
+	var ev := Durability.wear(rs, slot, amount)
+	if ev != "":
+		if slot == "weapon":
+			rs._sync_weapon()
+		else:
+			rs.hp = minf(float(rs.hp), rs.max_hp())
+		_srv_reply(peer, "gear", {"slot": slot, "state": ev})
+
+
 func srv_sword_prof(peer: int) -> int:
 	return int(srv_records[peer].get("sword_prof", 0)) if srv_records.has(peer) else 0
 
@@ -1927,6 +1942,7 @@ func srv_damage(peer: int, amount: float) -> bool:
 	var rs = RecordState.new(rec)
 	var prev := float(rec["hp"])
 	var died: bool = rs.take_damage(clampf(amount, 0.0, 1000.0))
+	srv_wear(peer, "armor", Durability.WEAR_HIT)
 	HiddenClasses.note(rs, "hurt")  # a hit ends a clean parry streak
 	if died:
 		print("[life] '%s' fell (%.0f damage at %.0f hp); respawned at full health" % [rec["name"], amount, prev])

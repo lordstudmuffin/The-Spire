@@ -632,6 +632,11 @@ func _build_skill_bar(root: Control) -> void:
 		b.set_anchors_preset(Control.PRESET_FULL_RECT)
 		b.modulate.a = 0.0
 		(slot["stack"] as Control).add_child(b)
+		# Locked until One-Handed Sword proficiency reaches the art's "prof".
+		var lock := UITheme.LockOverlay.new()
+		(slot["stack"] as Control).add_child(lock)
+		(slot["stack"] as Control).move_child(lock, 2)  # under the key badge and name
+		slot["lock"] = lock
 		_skill_buttons.append(b)
 		_skill_slots.append(slot)
 	# Unique skill arts (keys 4-6): only shown while the realm lists you as
@@ -1170,6 +1175,13 @@ func _process(delta: float) -> void:
 		(slot["sweep"] as RadialSweep).set_frac(frac)
 		(slot["cd"] as Label).text = "%.1f" % cd if cd > 0.0 else ""
 		(slot["name"] as Label).modulate.a = 0.45 if cd > 0.0 else 1.0
+		if slot.has("lock"):
+			var need := int(Player.SKILLS[i].get("prof", 0))
+			(slot["lock"] as UITheme.LockOverlay).set_state(GameState.sword_prof, need)
+			if GameState.sword_prof < need:
+				(slot["sweep"] as RadialSweep).set_frac(0.0)
+				(slot["cd"] as Label).text = ""
+				(slot["name"] as Label).modulate.a = 0.5
 	if GameState.unique_skill != "" and "unique_cd" in player:
 		var arts := UniqueSkills.arts(GameState.unique_skill)
 		for i in mini(arts.size(), _unique_slots.size()):
@@ -1391,6 +1403,7 @@ func _refresh() -> void:
 	_status.set_hp(GameState.hp, GameState.max_hp())
 	_status.set_xp(GameState.xp, GameState.xp_to_next())
 	_status.set_money_floor(GameState.money, GameState.floor)
+	_status.set_crystals(int(GameState.materials.get("heal_crystal", 0)), int(GameState.materials.get("teleport_crystal", 0)))
 	_refresh_tracker()
 	if _inv_panel.visible:
 		_inventory.refresh()
@@ -1479,6 +1492,36 @@ func _build_craft() -> void:
 		h.add_child(b)
 		row.add_child(h)
 		_craft_box.add_child(row)
+	# Repairs: worn gear comes back to full here, for Col (smithing skill
+	# lowers the price).
+	var worn: Array = []
+	for slot in ["weapon", "armor"]:
+		var it = GameState.equipped.get(slot)
+		if it is Dictionary and Durability.repair_cost(it, GameState.smithing_level) > 0:
+			worn.append(slot)
+	if not worn.is_empty():
+		_craft_box.add_child(UITheme.spacer(4))
+		_craft_box.add_child(UITheme.kicker("Repair"))
+		for slot in worn:
+			var it: Dictionary = GameState.equipped[slot]
+			var cost := Durability.repair_cost(it, GameState.smithing_level)
+			var row := PanelContainer.new()
+			row.theme_type_variation = "CardFlat"
+			var h := HBoxContainer.new()
+			h.add_theme_constant_override("separation", 12)
+			var v := VBoxContainer.new()
+			v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			v.add_child(UITheme.label(str(it.get("name", "")), 16, Crafting.rank_color(int(it.get("rank", 0))), true))
+			v.add_child(UITheme.subtle("%s  ·  %d Col" % [Durability.text(it), cost], 13))
+			h.add_child(v)
+			var b := UITheme.make_button("Repair", "primary" if GameState.money >= cost else "normal")
+			b.custom_minimum_size = Vector2(96, 36)
+			b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			b.disabled = GameState.money < cost
+			b.pressed.connect(func(): _do_repair(slot))
+			h.add_child(b)
+			row.add_child(h)
+			_craft_box.add_child(row)
 	var hint := UITheme.subtle("Ranks: Normal < Rare < Epic < Unique < Legendary < Myth. Higher smithing skill rolls higher.", 12)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD
 	_craft_box.add_child(hint)
@@ -1499,6 +1542,27 @@ func _do_craft(recipe_name: String) -> void:
 	var sub := "Smithing Lv %d" % GameState.smithing_level if item.get("skill_up", false) else ""
 	toast(msg, sub, "Forged" if int(item["rank"]) < 3 else "Masterwork forged!", Crafting.rank_color(int(item["rank"])))
 	_build_craft()
+
+
+func _do_repair(slot: String) -> void:
+	var err := Durability.repair(GameState, slot)
+	if err == "pending":
+		return  # online: the server repairs; the world toasts its answer
+	if err != "":
+		Audio.play("craft_fail")
+		toast(err)
+		return
+	var w := get_tree().current_scene
+	if w and w.has_method("repaired"):
+		w.repaired(slot)
+	else:
+		_build_craft()
+
+
+## Rebuilds the anvil panel when it is open (after a repair or a forge).
+func refresh_craft() -> void:
+	if _craft_panel and _craft_panel.visible:
+		_build_craft()
 
 
 ## Hammer blows on the anvil, then the pot clang; a jingle for Epic and up.
